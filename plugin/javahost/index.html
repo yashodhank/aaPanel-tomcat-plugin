@@ -89,42 +89,30 @@
     background:color-mix(in srgb,var(--accent) 22%,transparent);
     padding:3px 10px;border-radius:999px;white-space:nowrap}
 
-  /* in-plugin body: left section nav + content pane (aaPanel idiom) */
-  .jh-body{display:grid;grid-template-columns:212px minmax(0,1fr);gap:var(--s4);
-    margin-top:var(--s4);align-items:start}
+  /* in-plugin body: top section tabs + content pane (single full-width column) */
+  .jh-body{margin-top:var(--s4);min-width:0}
 
-  /* left vertical section menu */
-  .jh-side{position:sticky;top:var(--s4);align-self:start;min-width:0;
-    background:var(--surface);border:1px solid var(--line);
-    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s2);
-    display:flex;flex-direction:column;gap:2px}
-  .jh-nav{display:flex;flex-direction:column;gap:2px}
-  .jh-nav-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-    color:var(--muted-2);padding:8px 12px 4px}
-  .jh-tab{display:flex;align-items:center;gap:10px;width:100%;
-    padding:9px 12px;border-radius:var(--r-sm);border:1px solid transparent;
+  /* horizontal top tab bar (WAI-ARIA Tabs) */
+  .jh-tabs{background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s1);
+    margin-bottom:var(--s4);overflow-x:auto}
+  .jh-tablist{display:flex;gap:var(--s1);min-width:max-content}
+  .jh-tab{display:inline-flex;align-items:center;gap:8px;
+    padding:9px 14px;border-radius:var(--r-sm);border:1px solid transparent;
     background:transparent;color:var(--muted);font:600 13px var(--font);cursor:pointer;
-    text-align:left;transition:background .12s,color .12s,box-shadow .12s}
+    text-align:left;white-space:nowrap;position:relative;
+    transition:background .12s,color .12s,box-shadow .12s}
   .jh-tab svg{width:16px;height:16px;flex:none}
   .jh-tab:hover{color:var(--text);background:var(--surface-2)}
-  .jh-tab[aria-current="page"]{color:var(--ink);background:var(--surface-2);
-    border-color:var(--line);box-shadow:inset 3px 0 0 var(--accent-d)}
+  .jh-tab[aria-selected="true"]{color:var(--ink);background:var(--surface-2);
+    border-color:var(--line);box-shadow:inset 0 -2px 0 var(--accent-d)}
   .jh-tab:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
 
   .jh-content{min-width:0;max-width:100%}
   .jh-page{display:none;animation:jh-fade .18s ease}
   .jh-page.active{display:block}
+  .jh-page:focus{outline:none}
   @keyframes jh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-
-  /* responsive: collapse sidebar to a horizontal scrolling row */
-  @media (max-width:700px){
-    .jh-body{grid-template-columns:1fr;gap:var(--s3)}
-    .jh-side{position:static;padding:var(--s1);overflow-x:auto}
-    .jh-nav{flex-direction:row;gap:var(--s1);min-width:max-content}
-    .jh-nav-h{display:none}
-    .jh-tab{white-space:nowrap}
-    .jh-tab[aria-current="page"]{box-shadow:inset 0 -3px 0 var(--accent-d)}
-  }
 
   /* =====================================================================
      PRIMITIVES — cards, stat tiles, buttons, forms, badges, table
@@ -274,9 +262,104 @@
   .jh-modal-b .jh-pre{max-height:none;min-height:200px;flex:1}
 
   /* =====================================================================
+     APPLICATION ROWS (rich list) + segmented control + chips + drawer
+     ===================================================================== */
+  .jh-applist{display:flex;flex-direction:column;gap:var(--s2)}
+  .jh-approw{display:flex;align-items:center;gap:var(--s3);min-width:0;
+    padding:var(--s3);border:1px solid var(--line);border-radius:var(--r);
+    background:var(--surface);cursor:pointer;
+    transition:background .12s,box-shadow .12s,border-color .12s}
+  .jh-approw:hover{background:var(--surface-2);box-shadow:var(--sh-1)}
+  .jh-approw:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+  .jh-approw-ic{display:grid;place-items:center;width:38px;height:38px;flex:none;
+    border-radius:var(--r);background:color-mix(in srgb,var(--accent) 18%,transparent);
+    color:var(--accent-d)}
+  .jh-approw-ic svg{width:19px;height:19px}
+  .jh-approw-ic.jar{background:color-mix(in srgb,var(--hi) 22%,transparent);color:var(--hi-d)}
+  .jh-approw-main{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+  .jh-approw-top{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;min-width:0}
+  .jh-approw-name{font-weight:700;letter-spacing:-.01em;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+  .jh-approw-meta{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;min-width:0}
+  .jh-approw-act{display:flex;align-items:center;gap:var(--s2);flex:none;flex-wrap:wrap;
+    justify-content:flex-end}
+  .jh-chip{display:inline-flex;align-items:center;gap:5px;
+    padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;
+    background:var(--surface-2);color:var(--muted);border:1px solid var(--line);
+    white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  .jh-chip svg{width:13px;height:13px;flex:none}
+
+  /* status badge taxonomy */
+  .jh-badge.starting{background:var(--surface-2);color:var(--accent-d);border:1px solid var(--line)}
+  .jh-badge.danger{background:var(--danger-bg);color:var(--danger)}
+
+  /* segmented start/stop/restart control */
+  .jh-seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-sm);
+    overflow:hidden;background:var(--surface);flex:none}
+  .jh-seg button{display:inline-flex;align-items:center;justify-content:center;
+    width:30px;height:30px;border:0;border-right:1px solid var(--line);
+    background:transparent;color:var(--muted);cursor:pointer;
+    transition:background .12s,color .12s}
+  .jh-seg button:last-child{border-right:0}
+  .jh-seg button svg{width:15px;height:15px}
+  .jh-seg button:hover{background:var(--surface-2);color:var(--text)}
+  .jh-seg button:focus-visible{outline:2px solid var(--accent-d);outline-offset:-2px}
+  .jh-seg button[disabled]{opacity:.5;cursor:default}
+  .jh-seg button.busy{position:relative;color:transparent !important}
+  .jh-seg button.busy::after{content:"";position:absolute;width:13px;height:13px;
+    border:2px solid var(--accent-d);border-top-color:transparent;border-radius:50%;
+    animation:jh-spin .6s linear infinite}
+
+  /* small icon-only ghost action (Open / copy) */
+  .jh-iconbtn{display:inline-grid;place-items:center;width:30px;height:30px;flex:none;
+    border:1px solid var(--line);background:var(--surface);border-radius:var(--r-sm);
+    color:var(--muted);cursor:pointer;text-decoration:none;
+    transition:background .12s,color .12s}
+  .jh-iconbtn:hover{background:var(--surface-2);color:var(--text)}
+  .jh-iconbtn:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+  .jh-iconbtn svg{width:15px;height:15px}
+  .jh-iconbtn.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,var(--line))}
+  .jh-iconbtn.danger:hover{background:var(--danger-bg)}
+
+  @media (max-width:640px){
+    .jh-approw{flex-wrap:wrap}
+    .jh-approw-act{width:100%;justify-content:flex-start}
+  }
+
+  /* ---- SLIDE-OVER DETAIL DRAWER ---- */
+  .jh-drawer-ov{position:fixed;inset:0;z-index:1100;display:none;
+    background:rgba(15,32,42,.45);backdrop-filter:blur(2px)}
+  .jh-drawer-ov.open{display:block}
+  .jh-drawer{position:fixed;top:0;right:0;height:100%;width:100%;max-width:520px;
+    background:var(--surface);border-left:1px solid var(--line);box-shadow:var(--sh-3);
+    display:flex;flex-direction:column;
+    transform:translateX(100%);transition:transform .22s ease}
+  .jh-drawer-ov.open .jh-drawer{transform:translateX(0)}
+  @media (prefers-reduced-motion: reduce){.jh-drawer{transition:none}}
+  .jh-drawer-h{display:flex;align-items:flex-start;gap:var(--s3);
+    padding:var(--s4);border-bottom:1px solid var(--line)}
+  .jh-drawer-h .jh-approw-ic{margin-top:2px}
+  .jh-drawer-ht{min-width:0;flex:1}
+  .jh-drawer-ht h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .jh-drawer-ht p{margin:3px 0 0;font-size:12px;color:var(--muted)}
+  .jh-drawer-tabs{display:flex;gap:var(--s1);padding:0 var(--s4);
+    border-bottom:1px solid var(--line);overflow-x:auto;flex:none}
+  .jh-dtab{padding:10px 10px;border:0;border-bottom:2px solid transparent;
+    background:transparent;color:var(--muted);font:600 13px var(--font);cursor:pointer;
+    white-space:nowrap}
+  .jh-dtab:hover{color:var(--text)}
+  .jh-dtab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent-d)}
+  .jh-dtab:focus-visible{outline:2px solid var(--accent-d);outline-offset:-2px}
+  .jh-drawer-b{padding:var(--s4);overflow:auto;flex:1;min-height:0}
+  .jh-dpanel{display:none}
+  .jh-dpanel.active{display:block}
+  .jh-drawer-b .jh-pre{max-height:none;min-height:160px}
+
+  /* =====================================================================
      MODAL DIALOG
      ===================================================================== */
-  .jh-overlay{position:fixed;inset:0;z-index:1000;display:none;
+  .jh-overlay{position:fixed;inset:0;z-index:1200;display:none;
     background:rgba(15,32,42,.45);backdrop-filter:blur(2px);
     padding:var(--s4);overflow-y:auto}
   .jh-overlay.open{display:flex;align-items:flex-start;justify-content:center}
@@ -398,25 +481,23 @@
     <!-- hardening banner (shown only when service_dirs_locked) -->
     <div id="jh-harden" style="margin-top:var(--s4);display:none"></div>
 
-    <!-- ================== IN-PLUGIN BODY: LEFT SECTION NAV + CONTENT ================== -->
+    <!-- ================== TOP SECTION TABS (WAI-ARIA Tabs pattern) ================== -->
     <div class="jh-body">
-      <!-- left vertical section menu (aaPanel-style) -->
-      <aside class="jh-side">
-        <nav class="jh-nav" aria-label="Sections">
-          <span class="jh-nav-h">Sections</span>
-          <button class="jh-tab" data-section="dashboard" aria-current="page" id="tab-dashboard"><svg aria-hidden="true" focusable="false"><use href="#i-grid"/></svg>Dashboard</button>
-          <button class="jh-tab" data-section="apps" id="tab-apps"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
-          <button class="jh-tab" data-section="runtimes" id="tab-runtimes"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
-          <button class="jh-tab" data-section="databases" id="tab-databases"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
-          <button class="jh-tab" data-section="help" id="tab-help"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
-        </nav>
-      </aside>
+      <nav class="jh-tabs" aria-label="Sections">
+        <div class="jh-tablist" role="tablist" aria-label="JavaHost sections">
+          <button class="jh-tab" role="tab" data-section="dashboard" aria-selected="true" aria-controls="page-dashboard" id="tab-dashboard" tabindex="0"><svg aria-hidden="true" focusable="false"><use href="#i-grid"/></svg>Dashboard</button>
+          <button class="jh-tab" role="tab" data-section="apps" aria-selected="false" aria-controls="page-apps" id="tab-apps" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
+          <button class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
+          <button class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
+          <button class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
+        </div>
+      </nav>
 
-      <!-- right content pane -->
+      <!-- content pane (single full-width column) -->
       <div class="jh-content">
 
     <!-- ================== PAGE: DASHBOARD ================== -->
-    <section class="jh-page active" id="page-dashboard" aria-labelledby="tab-dashboard" tabindex="-1">
+    <section class="jh-page active" id="page-dashboard" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="-1">
       <div class="jh-grid" style="margin-bottom:var(--s4)" id="jh-stats" aria-busy="true">
         <div class="jh-skel" aria-hidden="true"><div class="sk sk-ic"></div><div class="sk-b"><div class="sk sk-k"></div><div class="sk sk-v"></div><div class="sk sk-s"></div></div></div>
         <div class="jh-skel" aria-hidden="true"><div class="sk sk-ic"></div><div class="sk-b"><div class="sk sk-k"></div><div class="sk sk-v"></div><div class="sk sk-s"></div></div></div>
@@ -440,7 +521,7 @@
     </section>
 
     <!-- ================== PAGE: APPLICATIONS ================== -->
-    <section class="jh-page" id="page-apps" aria-labelledby="tab-apps" tabindex="-1">
+    <section class="jh-page" id="page-apps" role="tabpanel" aria-labelledby="tab-apps" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Managed applications</h3><p>Tomcat instances and Spring Boot services</p></div>
@@ -457,7 +538,7 @@
     </section>
 
     <!-- ================== PAGE: RUNTIMES ================== -->
-    <section class="jh-page" id="page-runtimes" aria-labelledby="tab-runtimes" tabindex="-1">
+    <section class="jh-page" id="page-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h"><div><h3>Java (Temurin / OpenJDK)</h3><p>Install runtimes via verified Adoptium downloads</p></div></div>
         <div class="jh-rows" id="rt-java"><div class="jh-loading">Loading…</div></div>
@@ -471,7 +552,7 @@
     </section>
 
     <!-- ================== PAGE: DATABASES ================== -->
-    <section class="jh-page" id="page-databases" aria-labelledby="tab-databases" tabindex="-1">
+    <section class="jh-page" id="page-databases" role="tabpanel" aria-labelledby="tab-databases" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h"><div><h3>Supported database engines</h3><p>Reference matrix from the server. Wire an app via its DB&nbsp;env action.</p></div></div>
         <div class="jh-table-wrap">
@@ -489,7 +570,7 @@
     </section>
 
     <!-- ================== PAGE: HELP ================== -->
-    <section class="jh-page" id="page-help" aria-labelledby="tab-help" tabindex="-1">
+    <section class="jh-page" id="page-help" role="tabpanel" aria-labelledby="tab-help" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h"><div><h3>Reverse-proxy hint</h3><p>Include snippet to front a managed app with the panel's web server</p></div></div>
         <div id="help-proxy"><div class="jh-loading">Loading…</div></div>
@@ -502,7 +583,7 @@
     </section>
 
       </div><!-- /.jh-content -->
-    </div><!-- /.jh-body -->
+    </div><!-- /.jh-body (top tabs + content) -->
   </div>
 
   <!-- ================== MODAL HOST (single overlay, content swapped) ================== -->
@@ -514,6 +595,19 @@
       </div>
       <div class="jh-modal-b" id="jh-modal-body"></div>
       <div class="jh-modal-f" id="jh-modal-foot"></div>
+    </div>
+  </div>
+
+  <!-- ================== APP DETAIL DRAWER (slide-over) ================== -->
+  <div class="jh-drawer-ov" id="jh-drawer-ov">
+    <div class="jh-drawer" id="jh-drawer" role="dialog" aria-modal="true" aria-labelledby="jh-drawer-title">
+      <div class="jh-drawer-h">
+        <div class="jh-approw-ic" id="jh-drawer-ic" aria-hidden="true"><svg focusable="false"><use href="#i-box"/></svg></div>
+        <div class="jh-drawer-ht"><h3 id="jh-drawer-title">App</h3><p id="jh-drawer-sub"></p></div>
+        <button class="jh-x" id="jh-drawer-x" aria-label="Close detail panel"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="jh-drawer-tabs" role="tablist" aria-label="App detail sections" id="jh-drawer-tabs"></div>
+      <div class="jh-drawer-b" id="jh-drawer-body"></div>
     </div>
   </div>
 
@@ -613,32 +707,39 @@
   var appMajor = {};     // app -> tomcat major (for WAR version param)
 
   // =====================================================================
-  // SECTION NAV (left vertical menu — aaPanel idiom)
-  //   Robust toggle: each nav item has data-section="X"; each content page
-  //   has id="page-X". For EVERY item we toggle .active on that item's OWN
-  //   page (page-+item.dataset.section), never on the clicked name. The active
-  //   nav item gets aria-current="page". First section is the default.
+  // SECTION TABS (top horizontal tablist — WAI-ARIA Tabs pattern)
+  //   Each tab has role="tab", data-section="X", aria-controls="page-X";
+  //   each content page has id="page-X" role="tabpanel". For EVERY tab we
+  //   toggle .active on that tab's OWN page. The selected tab carries
+  //   aria-selected="true" and roving tabindex=0 (others -1). Arrow/Home/End
+  //   move selection; first section is the default.
   // =====================================================================
   var tabs = Array.prototype.slice.call(document.querySelectorAll('.jh-tab'));
-  function showSection(name){
+  var activeSection = null;
+  function showSection(name, focusTab){
     tabs.forEach(function(item){
       var page = $('page-' + item.dataset.section);            // each item's OWN page
       var on = item.dataset.section === name;
       if(page) page.classList.toggle('active', on);            // .active{display:block} else none
-      if(on) item.setAttribute('aria-current', 'page');        // nav landmark, not tablist
-      else item.removeAttribute('aria-current');
+      item.setAttribute('aria-selected', on ? 'true' : 'false');
+      item.tabIndex = on ? 0 : -1;                             // roving tabindex
+      if(on && focusTab) item.focus();
     });
+    activeSection = name;
+    onSectionChange(name);                                      // (re)wire app polling
   }
   tabs.forEach(function(item, i){
     item.addEventListener('click', function(){ showSection(item.dataset.section); });
-    // arrow-key navigation between sections (accessibility)
+    // arrow-key navigation between tabs (Left/Right/Home/End) per APG
     item.addEventListener('keydown', function(e){
-      var d = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1
-            : (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  ? -1 : 0;
-      if(!d) return;
+      var n = null;
+      if(e.key === 'ArrowRight' || e.key === 'ArrowDown') n = tabs[(i + 1) % tabs.length];
+      else if(e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = tabs[(i - 1 + tabs.length) % tabs.length];
+      else if(e.key === 'Home') n = tabs[0];
+      else if(e.key === 'End') n = tabs[tabs.length - 1];
+      if(!n) return;
       e.preventDefault();
-      var n = tabs[(i + d + tabs.length) % tabs.length];
-      n.focus(); showSection(n.dataset.section);
+      showSection(n.dataset.section, true);
     });
   });
   // default to the first section on load
@@ -813,11 +914,67 @@
   }
 
   // =====================================================================
-  // APPLICATIONS TAB — table + per-row action menu + health pill
+  // APPLICATIONS TAB — rich rows + slide-over detail drawer + health pill
   // =====================================================================
+  // Cache the last app objects + last resolved health port, both keyed by
+  // app name, so the drawer + Open link can use them without re-fetch.
+  var APPS_BY_NAME = {};
+  var HEALTH_PORT = {};      // app -> port discovered by GetHealth
+
+  // map raw service status -> {cls, label} per the agreed taxonomy
+  function statusBadge(status){
+    var s = (status == null ? '' : String(status)).toLowerCase();
+    if(s === 'active') return {cls:'ok', label:'running'};
+    if(s === 'inactive' || s === 'stopped' || s === 'dead') return {cls:'off', label:'stopped'};
+    if(s === 'failed') return {cls:'danger', label:'failed'};
+    if(s === 'activating' || s === 'starting' || s === 'reloading') return {cls:'starting', label:'starting…'};
+    if(s === '') return {cls:'neutral', label:'unknown'};
+    return {cls:'neutral', label:s};
+  }
+  // app type -> {icon, label}. war/tomcat use #i-box; jar uses #i-server.
+  function appType(x){
+    var t = (x.type == null ? '' : String(x.type)).toLowerCase();
+    if(t === 'jar' || t === 'springboot' || t === 'spring-boot') return {icon:'server', label:'Spring Boot JAR', cls:'jar'};
+    if(t === 'war') return {icon:'box', label:'WAR', cls:''};
+    if(t === 'tomcat') return {icon:'box', label:'Tomcat', cls:''};
+    // infer: a jar app has java but no tomcat
+    if(x.java != null && x.tomcat == null) return {icon:'server', label:'Spring Boot JAR', cls:'jar'};
+    return {icon:'box', label:'Tomcat', cls:''};
+  }
+  // runtime chip text — prefer x.runtime, else build from tomcat/java
+  function runtimeLabel(x){
+    if(x.runtime) return String(x.runtime);
+    var parts = [];
+    if(x.tomcat != null && x.tomcat !== '') parts.push('Tomcat ' + x.tomcat);
+    if(x.java != null && x.java !== '') parts.push('Java ' + x.java);
+    return parts.join(' · ');
+  }
+  // resolve the best-known port for an app (live health wins, else x.port)
+  function appPort(x){
+    var name = x && x.app;
+    if(name != null && HEALTH_PORT[name] != null) return HEALTH_PORT[name];
+    return (x && x.port != null && x.port !== '') ? x.port : null;
+  }
+  // build the open-in-browser URL from the panel host + port + context
+  function appUrl(x){
+    var port = appPort(x); if(port == null) return null;
+    var ctx = (x && x.context) ? String(x.context) : '/';
+    if(ctx.charAt(0) !== '/') ctx = '/' + ctx;
+    return 'http://' + location.hostname + ':' + port + ctx;
+  }
+
+  // open-in-browser link + copy URL + copy port affordances for one app
+  function openHtmlFor(x){
+    var url = appUrl(x); if(!url) return '';
+    var ec = esc(x.app), port = appPort(x);
+    return '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="Open '+esc(url)+'" aria-label="Open '+ec+' in a new tab" data-stop="1">'+ic('link')+'</a>'+
+      '<button class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
+      (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" data-stop="1" title="Copy port" aria-label="Copy port for '+ec+'">'+ic('layers')+'</button>':'');
+  }
+
   function renderApps(apps){
     apps = apps || [];
-    appMajor = {};
+    appMajor = {}; APPS_BY_NAME = {};
     var body = $('jh-apps-body');
     if(!apps.length){
       body.innerHTML = '<div class="jh-empty">'+ic('box')+
@@ -834,22 +991,34 @@
     }
     var rows = apps.map(function(x){
       var name = x.app;
+      APPS_BY_NAME[name] = x;
       appMajor[name] = (x.tomcat != null ? x.tomcat : (x.version != null ? x.version : ''));
-      var live = x.status === 'active';
-      var ec = esc(name);
-      return '<tr>'+
-        '<td><div class="app-name">'+ec+'</div></td>'+
-        '<td><span class="jh-badge '+(live?'ok':'off')+'"><span class="jh-dot"></span>'+esc(x.status)+'</span></td>'+
-        '<td><span class="jh-badge neutral" id="hp-'+ec+'"><span class="jh-dot"></span>Checking…</span></td>'+
-        '<td style="text-align:right">'+
-          '<button class="jh-btn ghost sm" data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'">'+ic('refresh')+'</button> '+
+      var ec = esc(name), cid = cssId(name);
+      var sb = statusBadge(x.status), ty = appType(x);
+      var rt = runtimeLabel(x);
+      // chips: runtime + Open link (Open is updated again once health resolves)
+      var chips = '';
+      if(rt) chips += '<span class="jh-chip" title="'+esc(rt)+'">'+ic('layers')+esc(rt)+'</span>';
+      var openHtml = openHtmlFor(x);
+      return '<div class="jh-approw" tabindex="0" role="button" data-row="'+ec+'" aria-label="Open details for '+ec+'">'+
+        '<div class="jh-approw-ic '+ty.cls+'" aria-hidden="true">'+ic(ty.icon)+'</div>'+
+        '<div class="jh-approw-main">'+
+          '<div class="jh-approw-top">'+
+            '<span class="jh-approw-name">'+ec+'</span>'+
+            '<span class="jh-badge '+sb.cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(sb.label)+'</span>'+
+            '<span class="jh-badge neutral" id="hp-'+cid+'"><span class="jh-dot"></span>Checking…</span>'+
+          '</div>'+
+          '<div class="jh-approw-meta">'+(chips || '<span class="jh-chip jh-muted">—</span>')+'<span id="open-'+cid+'" class="jh-approw-meta" style="gap:6px">'+openHtml+'</span></div>'+
+        '</div>'+
+        '<div class="jh-approw-act" data-stop="1">'+
+          '<div class="jh-seg" role="group" aria-label="Lifecycle for '+ec+'">'+
+            '<button data-act="start" data-app="'+ec+'" title="Start" aria-label="Start '+ec+'">'+ic('play')+'</button>'+
+            '<button data-act="stop" data-app="'+ec+'" title="Stop" aria-label="Stop '+ec+'">'+ic('stop')+'</button>'+
+            '<button data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'">'+ic('refresh')+'</button>'+
+          '</div>'+
           '<div class="jh-menu">'+
-            '<button class="jh-btn ghost sm icon" data-menu="'+ec+'" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
-            '<div class="jh-menu-pop" id="menu-'+ec+'" role="menu" aria-label="Actions for '+ec+'">'+
-              '<button role="menuitem" tabindex="-1" data-act="start" data-app="'+ec+'">'+ic('play')+'Start</button>'+
-              '<button role="menuitem" tabindex="-1" data-act="stop" data-app="'+ec+'">'+ic('stop')+'Stop</button>'+
-              '<button role="menuitem" tabindex="-1" data-act="restart" data-app="'+ec+'">'+ic('refresh')+'Restart</button>'+
-              '<hr>'+
+            '<button class="jh-iconbtn" data-menu="'+cid+'" data-app="'+ec+'" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
+            '<div class="jh-menu-pop" id="menu-'+cid+'" role="menu" aria-label="Actions for '+ec+'">'+
               '<button role="menuitem" tabindex="-1" data-logs="'+ec+'">'+ic('doc')+'View logs</button>'+
               '<button role="menuitem" tabindex="-1" data-metrics="'+ec+'">'+ic('cpu')+'Metrics</button>'+
               '<button role="menuitem" tabindex="-1" data-health="'+ec+'">'+ic('heart')+'Check health</button>'+
@@ -859,13 +1028,18 @@
               '<button role="menuitem" tabindex="-1" class="danger" data-delete="'+ec+'">'+ic('trash')+'Delete app</button>'+
             '</div>'+
           '</div>'+
-        '</td></tr>';
+        '</div>'+
+      '</div>';
     }).join('');
-    body.innerHTML = '<div class="jh-table-wrap"><table>'+
-      '<thead><tr><th>Application</th><th>Service</th><th>Health</th><th style="text-align:right">Actions</th></tr></thead>'+
-      '<tbody>'+rows+'</tbody></table></div>';
+    body.innerHTML = '<div class="jh-applist">'+rows+'</div>';
 
     apps.forEach(function(x){ checkHealth(x.app); });
+  }
+
+  // refresh the Open/copy affordances for a row once a port is known
+  function refreshOpen(app){
+    var slot = $('open-' + cssId(app)); if(!slot) return;
+    slot.innerHTML = openHtmlFor(APPS_BY_NAME[app] || {app:app});
   }
 
   // health pill — GetHealth {app} -> {up, code, port}
@@ -873,14 +1047,249 @@
     var elp = $('hp-' + cssId(app)); if(!elp) return;
     setPill(elp, 'neutral', 'Checking…');
     call('GetHealth', {app:app}, function(r){
-      var p = payload(r), elp2 = $('hp-' + cssId(app)); if(!elp2) return;
+      var p = payload(r), cid = cssId(app), elp2 = $('hp-' + cid);
+      if(!failed(r) && p && p.port != null){ HEALTH_PORT[app] = p.port; refreshOpen(app); }
+      if(!elp2) return;
       if(failed(r)){ setPill(elp2, 'off', 'error', errText(p)); return; }
       var up = !!p.up;
       var detail = 'port ' + (p.port != null ? p.port : '?') +
         (p.code != null ? (' · HTTP ' + p.code) : '');
       setPill(elp2, up ? 'ok' : 'off', up ? 'up' : 'down', detail);
+      // mirror health into an open drawer for the same app
+      if(DRAWER.app === app) drawerSetHealth(up, detail);
     });
   }
+
+  // clipboard copy with a non-HTTPS textarea fallback
+  function copyText(text){
+    function ok(){ toast('Copied', 'ok'); }
+    function fb(){
+      try{
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly','');
+        ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove(); ok();
+      }catch(_){ toast('Copy failed', 'err'); }
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(ok, fb);
+    } else fb();
+  }
+
+  // =====================================================================
+  // APP DETAIL DRAWER (slide-over) — Overview / Logs / Metrics / Config / DB
+  //   Focus-trapped, Esc-closable, restores focus to the row, animates from
+  //   the right, works in fullscreen. Mirrors openModal's focus machinery.
+  // =====================================================================
+  var DRAWER = { app:null, returnFocus:null, tab:'overview',
+                 logTimer:null, metTimer:null };
+  var DRAWER_POLL = 4000;
+  var DTABS = [
+    ['overview','Overview'], ['logs','Logs'], ['metrics','Metrics'],
+    ['config','Config'], ['db','Database']
+  ];
+  function drawerFocusables(){
+    return Array.prototype.slice.call($('jh-drawer').querySelectorAll(FOCUSABLE))
+      .filter(function(n){ return n.offsetParent !== null || n === document.activeElement; });
+  }
+  function openDrawer(app, returnFocus){
+    var x = APPS_BY_NAME[app] || {app:app};
+    DRAWER.app = app; DRAWER.tab = 'overview';
+    DRAWER.returnFocus = returnFocus || (document.activeElement !== document.body ? document.activeElement : null);
+    var ty = appType(x), sb = statusBadge(x.status);
+    $('jh-drawer-title').textContent = app;
+    $('jh-drawer-sub').textContent = ty.label + (runtimeLabel(x) ? ' · ' + runtimeLabel(x) : '');
+    var iconUse = $('jh-drawer-ic').querySelector('use');
+    if(iconUse) iconUse.setAttribute('href', '#i-' + ty.icon);
+    $('jh-drawer-ic').classList.toggle('jar', ty.cls === 'jar');
+    // build tablist
+    $('jh-drawer-tabs').innerHTML = DTABS.map(function(t, i){
+      return '<button class="jh-dtab" role="tab" data-dtab="'+t[0]+'" aria-controls="dpanel-'+t[0]+'" '+
+        'aria-selected="'+(i===0?'true':'false')+'" tabindex="'+(i===0?'0':'-1')+'">'+esc(t[1])+'</button>';
+    }).join('');
+    // build empty panels
+    $('jh-drawer-body').innerHTML = DTABS.map(function(t){
+      return '<div class="jh-dpanel'+(t[0]==='overview'?' active':'')+'" id="dpanel-'+t[0]+'" role="tabpanel">'+
+        '<div class="jh-loading">…</div></div>';
+    }).join('');
+    $('jh-drawer-ov').classList.add('open');
+    drawerShowTab('overview');
+    setTimeout(function(){ var f = $('jh-drawer-x'); if(f) f.focus(); }, 30);
+  }
+  function closeDrawer(){
+    if(!$('jh-drawer-ov').classList.contains('open')) return;
+    drawerStopTimers();
+    $('jh-drawer-ov').classList.remove('open');
+    var rf = DRAWER.returnFocus; DRAWER.app = null; DRAWER.returnFocus = null;
+    if(rf && typeof rf.focus === 'function'){ try{ rf.focus(); }catch(_){} }
+  }
+  function drawerStopTimers(){
+    if(DRAWER.logTimer){ clearInterval(DRAWER.logTimer); DRAWER.logTimer = null; }
+    if(DRAWER.metTimer){ clearInterval(DRAWER.metTimer); DRAWER.metTimer = null; }
+  }
+  function drawerShowTab(name){
+    DRAWER.tab = name;
+    Array.prototype.forEach.call($('jh-drawer-tabs').children, function(b){
+      var on = b.dataset.dtab === name;
+      b.setAttribute('aria-selected', on?'true':'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    DTABS.forEach(function(t){
+      var p = $('dpanel-'+t[0]); if(p) p.classList.toggle('active', t[0]===name);
+    });
+    drawerStopTimers();          // only the visible tab polls
+    if(name === 'overview') drawerOverview();
+    else if(name === 'logs') drawerLogs();
+    else if(name === 'metrics') drawerMetrics();
+    else if(name === 'config') drawerConfig();
+    else if(name === 'db') drawerDb();
+  }
+  function kv(k, v, id){
+    return '<div class="jh-kv"><span>'+esc(k)+'</span>'+
+      '<span class="jh-muted"'+(id?' id="'+id+'"':'')+'>'+esc(v==null||v===''?'—':v)+'</span></div>';
+  }
+  function drawerOverview(){
+    var app = DRAWER.app, x = APPS_BY_NAME[app] || {app:app};
+    var p = $('dpanel-overview'); if(!p) return;
+    var url = appUrl(x), ec = esc(app), port = appPort(x);
+    var openRow = url
+      ? '<div class="jh-kv"><span>Open</span><span class="btns">'+
+          '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(url)+'" aria-label="Open '+ec+'">'+ic('link')+'</a>'+
+          '<button class="jh-iconbtn" data-copyurl="'+ec+'" title="Copy URL" aria-label="Copy URL">'+ic('doc')+'</button>'+
+          (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'')+
+        '</span></div>'
+      : '';
+    p.innerHTML = '<div class="jh-rows">'+
+      '<div class="jh-kv"><span>Status</span><span class="jh-badge '+statusBadge(x.status).cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(statusBadge(x.status).label)+'</span></div>'+
+      '<div class="jh-kv"><span>Health</span><span class="jh-badge neutral" id="dw-health"><span class="jh-dot"></span>Checking…</span></div>'+
+      kv('Port', port)+
+      kv('Context', x.context)+
+      kv('Runtime', runtimeLabel(x))+
+      kv('Backend', x.backend)+
+      kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
+      kv('Uptime', x.uptime!=null?x.uptime:'—')+
+      openRow+
+      '<div class="jh-kv"><span>Live CPU</span><span class="jh-muted" id="dw-cpu">—</span></div>'+
+      '<div class="jh-kv"><span>Live memory</span><span class="jh-muted" id="dw-mem">—</span></div>'+
+    '</div>';
+    checkHealth(app);
+    // pull one metrics snapshot for the live CPU/mem fields
+    call('GetMetrics', {app:app}, function(r){
+      if(DRAWER.app !== app || DRAWER.tab !== 'overview') return;
+      var m = payload(r); if(failed(r)) return;
+      var cpu = $('dw-cpu'), mem = $('dw-mem');
+      if(cpu) cpu.textContent = (m.cpu_pct!=null?m.cpu_pct+'%':(m.threads!=null?m.threads+' threads':'—'));
+      if(mem) mem.textContent = (m.rss_mb!=null?m.rss_mb+' MB':'—');
+    });
+  }
+  function drawerSetHealth(up, detail){
+    var n = $('dw-health'); if(!n) return;
+    setPill(n, up?'ok':'off', up?'up':'down', detail);
+  }
+  function drawerLogs(){
+    var app = DRAWER.app, p = $('dpanel-logs'); if(!p) return;
+    if(!p.querySelector('#dw-log')){
+      p.innerHTML = '<div class="jh-spread" style="margin-bottom:var(--s2)">'+
+          '<label for="dw-lines" style="margin:0">Lines</label>'+
+          '<select id="dw-lines" style="width:auto"><option>50</option><option selected>200</option><option>500</option></select>'+
+          '<div class="jh-bar-spacer"></div>'+
+          '<button class="jh-btn ghost sm" data-dwlog-refresh="1">'+ic('refresh')+'Refresh</button>'+
+        '</div><pre class="jh-pre" id="dw-log">Loading…</pre>';
+    }
+    function pull(){
+      if(DRAWER.app !== app || DRAWER.tab !== 'logs') return;
+      var pre = $('dw-log'); if(!pre) return;
+      var lines = ($('dw-lines')&&$('dw-lines').value)||200;
+      call('GetLogs', {app:app, lines:lines}, function(r){
+        if(DRAWER.app !== app) return;
+        var pr = $('dw-log'); if(!pr) return;
+        var d = payload(r);
+        pr.textContent = failed(r) ? ('error: '+errText(d)) : ((d&&d.log!=null)?d.log:errText(d));
+        pr.scrollTop = pr.scrollHeight;
+      });
+    }
+    DRAWER._logPull = pull; pull();
+    DRAWER.logTimer = setInterval(function(){ if(!document.hidden) pull(); }, DRAWER_POLL);
+  }
+  function drawerMetrics(){
+    var app = DRAWER.app, p = $('dpanel-metrics'); if(!p) return;
+    function pull(){
+      if(DRAWER.app !== app || DRAWER.tab !== 'metrics') return;
+      call('GetMetrics', {app:app}, function(r){
+        if(DRAWER.app !== app) return;
+        var box = $('dpanel-metrics'); if(!box) return;
+        var m = payload(r);
+        if(failed(r)){ box.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(m))+'</div></div>'; return; }
+        if(!m.up || m.pid==null){
+          box.innerHTML = '<div class="jh-empty" style="padding:var(--s4)">'+ic('stop')+'<b>Not running</b><div>No live process to report metrics for.</div></div>';
+          return;
+        }
+        box.innerHTML = '<div class="jh-rows">'+
+          kv('PID', m.pid)+ kv('Memory', m.rss_mb!=null?m.rss_mb+' MB':'—')+
+          kv('CPU', m.cpu_pct!=null?m.cpu_pct+'%':'—')+
+          kv('Threads', m.threads)+ kv('Uptime', fmtUptime(m.uptime_s))+
+          '<div class="jh-kv"><span class="jh-muted" style="font-size:12px">auto-refresh · '+esc(nowTime())+'</span></div>'+
+        '</div>';
+      });
+    }
+    pull();
+    DRAWER.metTimer = setInterval(function(){ if(!document.hidden) pull(); }, DRAWER_POLL);
+  }
+  function drawerConfig(){
+    var app = DRAWER.app, x = APPS_BY_NAME[app] || {app:app}, p = $('dpanel-config');
+    if(!p) return;
+    p.innerHTML = '<div class="jh-rows">'+
+      kv('Port', appPort(x))+ kv('Context', x.context)+
+      kv('Runtime', runtimeLabel(x))+ kv('Backend', x.backend)+
+      kv('Profiles', x.profiles)+ kv('Path', x.path||x.dir)+
+      kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
+    '</div>'+
+    '<div class="jh-spread" style="margin-top:var(--s3)">'+
+      '<button class="jh-btn ghost sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Database env</button>'+
+    '</div>';
+  }
+  function drawerDb(){
+    var app = DRAWER.app, p = $('dpanel-db'); if(!p) return;
+    p.innerHTML = '<div class="jh-alert info">'+ic('db')+
+      '<div>Write this app’s database connection environment. Secrets are stored server-side and never echoed back.</div></div>'+
+      '<div class="jh-spread" style="margin-top:var(--s3)">'+
+        '<button class="jh-btn accent sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Configure database env</button>'+
+      '</div>';
+  }
+  // drawer controls: close, tablist arrow-keys, focus trap, Esc
+  $('jh-drawer-x').addEventListener('click', closeDrawer);
+  $('jh-drawer-ov').addEventListener('mousedown', function(e){
+    if(e.target === $('jh-drawer-ov')) closeDrawer();
+  });
+  $('jh-drawer-tabs').addEventListener('keydown', function(e){
+    var items = Array.prototype.slice.call(this.children);
+    var i = items.indexOf(document.activeElement); if(i < 0) return;
+    var n = null;
+    if(e.key==='ArrowRight'||e.key==='ArrowDown') n = items[(i+1)%items.length];
+    else if(e.key==='ArrowLeft'||e.key==='ArrowUp') n = items[(i-1+items.length)%items.length];
+    else if(e.key==='Home') n = items[0];
+    else if(e.key==='End') n = items[items.length-1];
+    if(!n) return;
+    e.preventDefault(); n.focus(); drawerShowTab(n.dataset.dtab);
+  });
+  document.addEventListener('keydown', function(e){
+    if(!$('jh-drawer-ov').classList.contains('open')) return;
+    if($('jh-overlay').classList.contains('open')) return;   // modal on top owns the keys
+    if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeDrawer(); return; }
+    if(e.key === 'Tab'){
+      var nodes = drawerFocusables();
+      if(!nodes.length){ e.preventDefault(); $('jh-drawer-x').focus(); return; }
+      var first = nodes[0], last = nodes[nodes.length-1], a = document.activeElement;
+      if(e.shiftKey && (a===first || !$('jh-drawer').contains(a))){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && (a===last || !$('jh-drawer').contains(a))){ e.preventDefault(); first.focus(); }
+    }
+  });
+  // pause drawer polling while the page is hidden (resume on return)
+  document.addEventListener('visibilitychange', function(){
+    if(!DRAWER.app) return;
+    if(!document.hidden) drawerShowTab(DRAWER.tab);   // restart visible-tab poll
+  });
   function setPill(node, cls, text, title){
     node.className = 'jh-badge ' + cls;
     node.innerHTML = '';
@@ -1504,6 +1913,7 @@
     if(e.key !== 'Escape') return;
     if(!isFullscreen()) return;
     if($('jh-overlay').classList.contains('open')) return;   // modal handles Esc first
+    if($('jh-drawer-ov').classList.contains('open')) return; // drawer handles Esc first
     e.preventDefault();
     setFullscreen(false);
   });
@@ -1526,14 +1936,82 @@
   }
 
   // =====================================================================
+  // APPLICATIONS LIVE REFRESH
+  //   While the Applications section is active, re-fetch GetStatus + health on
+  //   a sane interval. Paused when document.hidden, when the section isn't
+  //   active, or when a modal/drawer is open (destructive flows). Single
+  //   in-flight request; interval cleared on every section change (no leaks).
+  // =====================================================================
+  var APPS = { timer:null, inflight:false };
+  var APPS_INTERVAL = 5000;
+  function appsModalBusy(){
+    return $('jh-overlay').classList.contains('open');   // confirm/dbenv/etc.
+  }
+  function appsTick(){
+    if(document.hidden) return;
+    if(activeSection !== 'apps') return;
+    if(appsModalBusy()) return;        // don't refresh under a destructive modal
+    if(APPS.inflight) return;          // single in-flight at a time
+    APPS.inflight = true;
+    call('GetStatus', {}, function(r){
+      APPS.inflight = false;
+      if(activeSection !== 'apps') return;
+      var d = payload(r);
+      if(failed(r)) return;            // silent; the manual Refresh button surfaces errors
+      STATE = d;
+      renderApps(d.apps);              // also re-runs checkHealth() per row
+    });
+  }
+  function startAppsPoll(){
+    stopAppsPoll();
+    APPS.timer = setInterval(appsTick, APPS_INTERVAL);
+  }
+  function stopAppsPoll(){
+    if(APPS && APPS.timer){ clearInterval(APPS.timer); APPS.timer = null; }
+  }
+  // called by showSection() on every section switch — (re)wire the poll.
+  // Guard: showSection() can fire at load before APPS/startAppsPoll are live;
+  // both are hoisted, but APPS is `undefined` until its var line executes.
+  function onSectionChange(name){
+    if(!APPS) return;                  // not yet initialised (load-time call)
+    stopAppsPoll();                    // clear first so timers never stack
+    if(name === 'apps') startAppsPoll();
+  }
+  // pause/resume apps polling on tab visibility (cheap; tick also guards)
+  document.addEventListener('visibilitychange', function(){
+    if(activeSection !== 'apps') return;
+    if(document.hidden) stopAppsPoll();
+    else startAppsPoll();
+  });
+
+  // =====================================================================
   // EVENT WIRING — one delegated handler for the whole UI
   // =====================================================================
   $('jh-root').addEventListener('click', function(e){
+    // ---- app row: open the detail drawer on row click, but NOT when the
+    // click lands on an interactive control inside it (marked data-stop or a
+    // real button/link). data-stop wrappers cover the action cluster + Open.
+    var row = e.target.closest && e.target.closest('.jh-approw');
+    if(row){
+      var onCtl = e.target.closest('button, a, [data-stop]');
+      if(!onCtl || onCtl === row){ openDrawer(row.dataset.row, row); return; }
+      // else fall through to normal button handling below
+    }
+
     var b = e.target.closest('button, a'); if(!b) return;
     var ds = b.dataset;
     // any activated menu item should dismiss its row menu (focus restore handled
     // by openModal capturing the trigger, or by the action's own refresh)
     if(b.getAttribute('role') === 'menuitem') closeAllMenus();
+
+    // copy-to-clipboard (URL / port)
+    if(ds.copyurl){ var ux = APPS_BY_NAME[ds.copyurl]||{app:ds.copyurl}; var u = appUrl(ux); if(u) copyText(u); else toast('No URL yet','err'); return; }
+    if(ds.copyport){ var px = APPS_BY_NAME[ds.copyport]||{app:ds.copyport}; var pt = appPort(px); if(pt!=null) copyText(String(pt)); else toast('No port yet','err'); return; }
+
+    // drawer tab switch + drawer logs refresh
+    if(ds.dtab){ drawerShowTab(ds.dtab); return; }
+    if(ds.dwlogRefresh){ if(DRAWER._logPull) DRAWER._logPull(); return; }
+    if(b.id === 'jh-drawer-x'){ closeDrawer(); return; }
 
     // header / toolbar
     if(b.id === 'jh-fullscreen'){ toggleFullscreen(); return; }
@@ -1574,7 +2052,7 @@
       busy(b, true);
       call('AppAction', {app:ds.app, action:ds.act}, done(ds.act+' '+ds.app, b)); return;
     }
-    if(ds.repair){ toast('Repairing '+ds.repair+'…'); call('RepairApp', {app:ds.repair}, done('Repair '+ds.repair)); return; }
+    if(ds.repair){ busy(b, true); toast('Repairing '+ds.repair+'…'); call('RepairApp', {app:ds.repair}, done('Repair '+ds.repair, b)); return; }
     if(ds.delete){
       if(!confirm('Delete app "'+ds.delete+'"? This removes its Tomcat instance and files.')) return;
       call('DeleteApp', {app:ds.delete}, done('Delete '+ds.delete)); return;
@@ -1583,6 +2061,15 @@
     if(ds.metrics){ openMetrics(ds.metrics); return; }
     if(ds.health){ checkHealth(ds.health); toast('Re-checking health…'); return; }
     if(ds.dbenv){ openDbEnv(ds.dbenv); return; }
+  });
+
+  // keyboard activation for app rows (role="button"): Enter / Space open drawer
+  $('jh-root').addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    var row = e.target.closest && e.target.closest('.jh-approw');
+    if(!row || row !== e.target) return;      // only when the ROW itself is focused
+    e.preventDefault();
+    openDrawer(row.dataset.row, row);
   });
 
   // =====================================================================

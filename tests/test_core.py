@@ -267,6 +267,118 @@ def test_instance_list_apps(monkeypatch, tmp_path):
     assert names == ["alpha", "beta"]
 
 
+def _stub_list_apps_env(monkeypatch, tmp_path):
+    """Isolate list_apps() from the host: no real systemctl / proc probes."""
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
+    monkeypatch.setattr(instance, "_instance_backend", lambda a: "systemd")
+    monkeypatch.setattr(instance, "_is_enabled", lambda a, b: True)
+    # uptime path only runs for active apps; default keeps it off, but stub anyway
+    monkeypatch.setattr(instance, "metrics", lambda a: {"uptime_s": 42})
+
+
+def _mk_tomcat_instance(tmp_path, name, port, deploy=None):
+    base = tmp_path / name
+    (base / "conf").mkdir(parents=True)
+    (base / "bin").mkdir()
+    (base / "webapps").mkdir()
+    (base / "conf" / "server.xml").write_text(
+        '<Connector port="%d" protocol="HTTP/1.1"/>' % port)
+    (base / "bin" / "setenv.sh").write_text(
+        'export JAVA_HOME="/www/server/javahost/runtimes/jdk-17"\n'
+        'export CATALINA_HOME="/www/server/javahost/tomcat/11"\n')
+    if deploy:
+        (base / "webapps" / deploy).mkdir()
+    return base
+
+
+def test_list_apps_tomcat_instance(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+    _mk_tomcat_instance(tmp_path, "site", 8085, deploy="ROOT")
+    app = instance.list_apps()[0]
+    assert app["app"] == "site"
+    assert app["type"] == "war"            # has a deployed webapp
+    assert app["port"] == 8085
+    assert app["tomcat"] == 11
+    assert app["java"] == 17
+    assert app["runtime"] == "Tomcat 11"
+    assert app["context"] == "/ROOT"
+    assert app["backend"] == "systemd"
+    assert app["enabled"] is True
+    assert app["status"] == "inactive"
+
+
+def test_list_apps_empty_tomcat_is_type_tomcat(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+    _mk_tomcat_instance(tmp_path, "blank", 8086)   # no webapp deployed
+    app = instance.list_apps()[0]
+    assert app["type"] == "tomcat"
+    assert app["context"] is None
+    assert app["port"] == 8086
+    assert app["runtime"] == "Tomcat 11"
+
+
+def test_list_apps_jar_instance(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+    base = tmp_path / "boot"
+    (base / "bin").mkdir(parents=True)
+    (base / "app.jar").write_text("PK\x03\x04")     # marker file is enough
+    (base / "bin" / "app.env").write_text("SERVER_PORT=8090\n")
+    (base / "bin" / "setenv.sh").write_text(
+        'export JAVA_HOME="/www/server/javahost/runtimes/jdk-21"\n')
+    app = instance.list_apps()[0]
+    assert app["type"] == "jar"
+    assert app["port"] == 8090
+    assert app["java"] == 21
+    assert app["runtime"] == "Java 21"
+    assert app["tomcat"] is None
+    assert app["context"] is None
+
+
+def test_list_apps_malformed_dir_still_listed(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+    (tmp_path / "broken").mkdir()                   # empty: no conf, bin, jar
+    apps = instance.list_apps()
+    assert len(apps) == 1
+    app = apps[0]
+    assert app["app"] == "broken"
+    assert app["status"] == "inactive"             # status always present
+    assert app["type"] == "tomcat"                 # no jar, empty webapps
+    assert app["port"] is None
+    assert app["tomcat"] is None and app["java"] is None
+    assert app["runtime"] is None
+
+
+def test_list_apps_one_bad_app_does_not_break_list(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+
+    def boom(name):
+        if name == "bad":
+            raise RuntimeError("kaboom")
+        return "active"
+
+    monkeypatch.setattr(instance.service, "status", boom)
+    (tmp_path / "bad").mkdir()
+    _mk_tomcat_instance(tmp_path, "good", 8087, deploy="ROOT")
+    apps = {a["app"]: a for a in instance.list_apps()}
+    assert set(apps) == {"bad", "good"}
+    assert apps["bad"]["status"] == "unknown"      # swallowed, still listed
+    assert apps["good"]["status"] == "active"
+
+
+def test_list_apps_full_key_set(monkeypatch, tmp_path):
+    _stub_list_apps_env(monkeypatch, tmp_path)
+    _mk_tomcat_instance(tmp_path, "site", 8088, deploy="ROOT")
+    base = tmp_path / "boot"
+    (base / "bin").mkdir(parents=True)
+    (base / "app.jar").write_text("x")
+    (base / "bin" / "app.env").write_text("SERVER_PORT=8091\n")
+    expected = {"app", "type", "status", "runtime", "tomcat", "java",
+                "port", "context", "enabled", "backend", "uptime"}
+    for app in instance.list_apps():
+        assert set(app) == expected
+
+
 # ---- port allocation / conflict (B5) ----
 def test_allocate_port(monkeypatch, tmp_path):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))

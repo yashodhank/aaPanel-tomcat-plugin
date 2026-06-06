@@ -3,6 +3,40 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.11.0] — 2026-06-06
+
+### Changed
+- **Applications redesigned → list + slide-over detail drawer.** Rich rows show
+  type (WAR / Spring Boot JAR / Tomcat), runtime chip (Tomcat 11 · Java 17),
+  status badge, health pill + port, an inline Start/Stop/Restart segmented control,
+  an `Open ↗` link + copy-URL/port, and an overflow menu. Clicking a row opens a
+  focus-trapped, Esc-closable drawer with **Overview / Logs / Metrics / Config /
+  Database** tabs (only the visible tab polls); reduced-motion aware; works in
+  fullscreen. Backed by an enriched `list_apps()` that now returns
+  `{type, runtime, tomcat, java, port, context, enabled, backend, uptime}` in one
+  `GetStatus` round-trip (derived from cheap stat/reads — no `java -version`/`curl`;
+  each app try/except-guarded so one bad instance can't break the list).
+- **Section nav moved from the left sidebar back to top tabs** (full-width content),
+  implemented as a proper WAI-ARIA Tabs pattern (roving tabindex, arrow/Home/End
+  navigation, `role=tab`/`tabpanel`).
+
+### Added
+- **Live updates:** the Applications list + health auto-refresh (~5s) while the
+  section is visible; paused when hidden / off-section / a modal is open; single
+  in-flight; interval cleared on section change. Status taxonomy:
+  running / stopped / failed / starting…
+- **Open-app link + copy:** `http://<host>:<port><context>` opened in a new tab
+  (`rel=noopener`); copy buttons for URL and port (clipboard API + non-HTTPS
+  fallback).
+
+### Fixed
+- **Health pill stuck on "Checking…"**: row id and lookup now both use `cssId()`
+  (was `esc()` on render vs `cssId()` on lookup) — health always resolves.
+- **Empty runtime info**: rows now render real type/runtime/port (was always blank
+  because `list_apps()` only returned `{app, status}`).
+- **Double-fire guard**: row action buttons disable while their call is in flight.
+- Restart deduped to a single control; Delete isolated in a danger group + confirm.
+
 ## [0.10.0] — 2026-06-06
 
 ### Added

@@ -75,12 +75,173 @@ def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = 
     raise RuntimeError("no free port available in range %d-%d" % (lo, hi))
 
 
-def list_apps() -> List[Dict[str, str]]:
-    out = []
+# Full key set every app dict carries, so the UI can render in one round-trip
+# without per-app follow-up calls. Order is also the documented return shape.
+_APP_KEYS = ("app", "type", "status", "runtime", "tomcat", "java", "port",
+             "context", "enabled", "backend", "uptime")
+
+
+def _instance_backend(app: str) -> Optional[str]:
+    """Which service manager owns this app's unit: 'systemd', 'initd', or None.
+
+    Mirrors service._backend() (which is private) by probing for the installed
+    unit/script file — a cheap stat, no subprocess."""
+    name = validate.identifier(app, "app")
+    if os.path.exists(os.path.join(service.SYSTEMD_DIR, "javahost-%s.service" % name)):
+        return "systemd"
+    if os.path.exists(os.path.join(service.INITD_DIR, "javahost-%s" % name)):
+        return "initd"
+    return None
+
+
+def _is_enabled(app: str, backend: Optional[str]) -> Optional[bool]:
+    """Enabled-at-boot state. systemd: `is-enabled`; init.d: any rc?.d/S* link.
+    Returns None when it can't be cheaply determined."""
+    name = validate.identifier(app, "app")
+    if backend == "systemd":
+        rc, out, _ = shell.run(
+            ["systemctl", "is-enabled", "javahost-%s.service" % name], check=False)
+        return out.strip() in ("enabled", "enabled-runtime", "static", "alias")
+    if backend == "initd":
+        script = "javahost-%s" % name
+        try:
+            for d in os.listdir("/etc"):
+                if not d.startswith("rc") or not d.endswith(".d"):
+                    continue
+                rcd = os.path.join("/etc", d)
+                if os.path.isdir(rcd):
+                    for link in os.listdir(rcd):
+                        if link.startswith("S") and link.endswith(script):
+                            return True
+        except OSError:
+            return None
+        return False
+    return None
+
+
+def _instance_type(base: str) -> str:
+    """Classify an instance from its on-disk layout (cheap stats only):
+      jar    -> executable/Spring Boot JAR service (app.jar present)
+      war    -> Tomcat instance with a deployed app under webapps/
+      tomcat -> Tomcat instance with no deployed app yet (empty webapps/)"""
+    if os.path.isfile(os.path.join(base, "app.jar")):
+        return "jar"
+    webapps = os.path.join(base, "webapps")
+    try:
+        deployed = [e for e in os.listdir(webapps)
+                    if not e.startswith(".")] if os.path.isdir(webapps) else []
+    except OSError:
+        deployed = []
+    if deployed:
+        return "war"
+    return "tomcat"
+
+
+def _tomcat_major(catalina_home: str) -> Optional[int]:
+    """Major Tomcat line from CATALINA_HOME (installer lays it out as
+    .../tomcat/<major>). Falls back to the first integer in the path."""
+    if not catalina_home:
+        return None
+    base = os.path.basename(catalina_home.rstrip("/"))
+    if base.isdigit():
+        return int(base)
+    m = re.search(r"(\d+)", catalina_home)
+    return int(m.group(1)) if m else None
+
+
+def _java_major_from_home(java_home: str) -> Optional[int]:
+    """Java major parsed cheaply from the JAVA_HOME path (e.g. jdk-21, jdk17,
+    jdk8). Avoids spawning `java -version` for every app on every status poll.
+    Treats a leading 1.x (legacy 1.8) as major 8."""
+    if not java_home:
+        return None
+    m = re.search(r"(?:jdk|java|jre)[/_-]?(\d+)", java_home, re.I)
+    if not m:
+        m = re.search(r"(\d+)", os.path.basename(java_home.rstrip("/")))
+    if not m:
+        return None
+    major = int(m.group(1))
+    return 8 if major == 1 else major
+
+
+def _read_context(base: str) -> Optional[str]:
+    """Deployed servlet context for a Tomcat instance. ROOT -> '/ROOT', any
+    other single webapp -> '/<name>'. None for jar/empty instances."""
+    webapps = os.path.join(base, "webapps")
+    try:
+        entries = sorted(e for e in os.listdir(webapps)
+                         if not e.startswith(".")) if os.path.isdir(webapps) else []
+    except OSError:
+        return None
+    # prefer an exploded dir / WAR named ROOT, else the first entry
+    names = [os.path.splitext(e)[0] for e in entries]
+    if not names:
+        return None
+    if "ROOT" in names:
+        return "/ROOT"
+    return "/" + names[0]
+
+
+def _app_info(name: str) -> Dict:
+    """Best-effort rich record for a single instance. Never raises: any field
+    that can't be cheaply determined is None, but status is always present."""
+    info = {k: None for k in _APP_KEYS}
+    info["app"] = name
+    try:
+        info["status"] = service.status(name)
+    except Exception:
+        info["status"] = "unknown"
+    try:
+        base = base_path(name)
+        itype = _instance_type(base)
+        info["type"] = itype
+        env = _read_setenv(base)
+        info["port"] = _read_port(base)
+        backend = _instance_backend(name)
+        info["backend"] = backend
+        info["enabled"] = _is_enabled(name, backend)
+        if itype == "jar":
+            jmaj = _java_major_from_home(env.get("JAVA_HOME", ""))
+            info["java"] = jmaj
+            info["runtime"] = ("Java %d" % jmaj) if jmaj else None
+            # jar apps have no servlet context
+        else:
+            tmaj = _tomcat_major(env.get("CATALINA_HOME", ""))
+            info["tomcat"] = tmaj
+            info["java"] = _java_major_from_home(env.get("JAVA_HOME", ""))
+            info["runtime"] = ("Tomcat %d" % tmaj) if tmaj else None
+            info["context"] = _read_context(base)
+        if info["status"] == "active":
+            try:
+                m = metrics(name)
+                info["uptime"] = m.get("uptime_s")
+            except Exception:
+                info["uptime"] = None
+    except Exception:
+        # keep the app listed with whatever we already have (status at minimum)
+        pass
+    return info
+
+
+def list_apps() -> List[Dict]:
+    """Rich per-app records for the panel — one round-trip, all fields best-effort.
+
+    Each record carries the full _APP_KEYS set; backward-compatible because it
+    still includes {app, status}. A single malformed instance dir never breaks
+    the list (each app is wrapped in try/except)."""
+    out: List[Dict] = []
     if os.path.isdir(INSTANCE_ROOT):
         for name in sorted(os.listdir(INSTANCE_ROOT)):
-            if os.path.isdir(os.path.join(INSTANCE_ROOT, name)):
-                out.append({"app": name, "status": service.status(name)})
+            if not os.path.isdir(os.path.join(INSTANCE_ROOT, name)):
+                continue
+            try:
+                out.append(_app_info(name))
+            except Exception:
+                # absolute last resort: list it with a minimal valid record
+                rec = {k: None for k in _APP_KEYS}
+                rec["app"] = name
+                rec["status"] = "unknown"
+                out.append(rec)
     return out
 
 
