@@ -254,6 +254,14 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def GetHealthAll(self, get=None):
+        """Batched health for all apps in one round-trip (avoids the per-app
+        GetHealth N+1 on each UI poll). -> {"health": {app: {up, code, port}}}."""
+        try:
+            return panel.ok({"health": instance.health_all()})
+        except Exception as e:
+            return panel.err(str(e))
+
     def GetMetrics(self, get):
         """Lightweight JVM/process metrics (pid, RSS MB, threads, uptime) from /proc."""
         try:

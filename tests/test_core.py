@@ -273,7 +273,8 @@ def _stub_list_apps_env(monkeypatch, tmp_path):
     monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
     monkeypatch.setattr(instance, "_instance_backend", lambda a: "systemd")
     monkeypatch.setattr(instance, "_is_enabled", lambda a, b: True)
-    # uptime path only runs for active apps; default keeps it off, but stub anyway
+    # list_apps no longer parses /proc for uptime (it stays None in the list);
+    # stub metrics anyway so any stray call can't touch the host.
     monkeypatch.setattr(instance, "metrics", lambda a: {"uptime_s": 42})
 
 
@@ -452,6 +453,53 @@ def test_health_no_port(monkeypatch, tmp_path):
     (tmp_path / "dead").mkdir()
     h = instance.health("dead")
     assert h["up"] is False and h["port"] is None
+
+
+# ---- is-enabled: filesystem symlink check (no systemctl subprocess) ----
+def test_is_enabled_systemd_true_when_wants_symlink(monkeypatch, tmp_path):
+    """An enabled systemd unit has a symlink under multi-user.target.wants/.
+    Detected by stat, never by spawning systemctl."""
+    sysd = tmp_path / "systemd"
+    wants = sysd / "multi-user.target.wants"
+    wants.mkdir(parents=True)
+    unit = sysd / "javahost-site.service"
+    unit.write_text("[Unit]\n")
+    (wants / "javahost-site.service").symlink_to(unit)
+    # blow up if anything tries to spawn a subprocess
+    monkeypatch.setattr(instance.shell, "run",
+                        lambda *a, **k: pytest.fail("subprocess spawned"))
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(sysd))
+    assert instance._is_enabled("site", "systemd") is True
+
+
+def test_is_enabled_systemd_false_when_no_symlink(monkeypatch, tmp_path):
+    sysd = tmp_path / "systemd"
+    (sysd / "multi-user.target.wants").mkdir(parents=True)
+    monkeypatch.setattr(instance.shell, "run",
+                        lambda *a, **k: pytest.fail("subprocess spawned"))
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(sysd))
+    assert instance._is_enabled("ghost", "systemd") is False
+
+
+# ---- batched health (eliminates the per-app GetHealth N+1) ----
+def test_health_all_shape_and_tolerates_bad_app(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "ok").mkdir()
+    (tmp_path / "boom").mkdir()
+    (tmp_path / "afile").write_text("not a dir")  # ignored: not an instance dir
+
+    def fake_health(app, timeout=2.0):
+        if app == "boom":
+            raise RuntimeError("kaboom")
+        return {"app": app, "up": True, "code": 200, "port": 8080}
+
+    monkeypatch.setattr(instance, "health", fake_health)
+    res = instance.health_all()
+    assert set(res) == {"ok", "boom"}
+    assert res["ok"] == {"up": True, "code": 200, "port": 8080}
+    assert res["boom"] == {"up": False, "code": None, "port": None}
+    for v in res.values():
+        assert set(v) == {"up", "code", "port"}
 
 
 # ---- system-hardening safe handling ----

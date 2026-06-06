@@ -408,6 +408,17 @@
   @keyframes jh-slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
   @keyframes jh-slideout{to{opacity:0;transform:translateX(20px)}}
 
+  /* persistent session-expiry banner (shown once when the panel session dies) */
+  .jh-sessionbar{position:fixed;top:0;left:0;right:0;z-index:3000;
+    display:flex;gap:10px;align-items:center;justify-content:center;
+    padding:12px 16px;background:var(--danger-bg);color:var(--danger);
+    border-bottom:1px solid color-mix(in srgb,var(--danger) 45%,transparent);
+    box-shadow:var(--sh-2);font-size:13.5px;font-weight:600;
+    animation:jh-slidedown .2s ease}
+  .jh-sessionbar svg{width:18px;height:18px;flex:none}
+  .jh-sessionbar .jh-btn{margin-left:6px}
+  @keyframes jh-slidedown{from{opacity:0;transform:translateY(-100%)}to{opacity:1;transform:none}}
+
   /* multi-engine DB guidance cards (Help tab) */
   .jh-dbcards{display:grid;gap:var(--s3);
     grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:var(--s2)}
@@ -676,17 +687,52 @@
   // CORE HELPERS — AJAX, envelope unwrap, escaping, DOM
   // =====================================================================
 
+  // A non-JSON / login-redirect response means the panel session expired:
+  // a 302 to the login page returns the login HTML (not the JSON envelope).
+  // Heuristics: HTML body (starts with '<' after trim), or a fetch that was
+  // redirected / whose final URL points at the login/entrance path.
+  var LOGIN_RE = /\/(login|entrance|safe)/i;
+  function looksLikeLoginHtml(text){
+    if(typeof text !== 'string') return false;
+    var t = text.replace(/^﻿/, '').trim();
+    if(t.charAt(0) !== '<') return false;                  // not HTML at all
+    return /<!doctype|<html|name=["']?username|id=["']?username|<form/i.test(t) || true;
+  }
+
   // Panel plugin convention. jQuery $.post if available, else Fetch.
   function call(method, data, cb){
     var url = '/plugin?action=a&name=javahost&s=' + method;
     if (window.$ && $.post){
-      $.post(url, data || {}, function(r){ cb(typeof r === 'string' ? JSON.parse(r) : r); })
-        .fail(function(e){ cb({status:false, msg:String(e && e.statusText || e)}); });
+      $.post(url, data || {}, function(r){
+        if(typeof r === 'string'){
+          var s = r.replace(/^﻿/, '');
+          if(looksLikeLoginHtml(s)){ sessionExpired(); return; }
+          var parsed;
+          try { parsed = JSON.parse(s); }
+          catch(_){ sessionExpired(); return; }            // non-JSON => session gone
+          cb(parsed); return;
+        }
+        cb(r);
+      }).fail(function(e){
+        // a 302 -> login page surfaces here in some setups (parsererror w/ HTML)
+        var body = e && (e.responseText != null ? e.responseText : '');
+        if(looksLikeLoginHtml(body)){ sessionExpired(); return; }
+        cb({status:false, msg:String(e && e.statusText || e)});
+      });
     } else {
       fetch(url, {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:new URLSearchParams(data || {})})
-        .then(function(x){ return x.json(); }).then(cb)
+        .then(function(x){
+          // followed a redirect to the login/entrance page => session expired
+          if(x.redirected && LOGIN_RE.test(x.url || '')){ sessionExpired(); return null; }
+          return x.text().then(function(text){
+            if(looksLikeLoginHtml(text)){ sessionExpired(); return null; }
+            try { return JSON.parse(text.replace(/^﻿/, '')); }
+            catch(_){ sessionExpired(); return null; }      // non-JSON => session gone
+          });
+        })
+        .then(function(r){ if(r !== null) cb(r); })
         .catch(function(e){ cb({status:false, msg:String(e)}); });
     }
   }
@@ -746,6 +792,45 @@
       else toast(label + ' completed', 'ok');
       refresh();
     };
+  }
+
+  // =====================================================================
+  // SESSION EXPIRY — a POST that 302s to login returns HTML, not JSON.
+  //   Handle it once: kill every auto-poll (so we stop hammering a dead
+  //   session) and raise a persistent role="alert" banner with a Reload
+  //   action. Guarded so repeated failed calls don't spam the user.
+  // =====================================================================
+  var SESSION_DEAD = false;
+  function stopAllPolls(){
+    // each guards against an uninitialised timer; all are hoisted declarations
+    try { stopAppsPoll(); }  catch(_){}
+    try { stopTasksPoll(); } catch(_){}
+    try { stopLogsAuto(); }  catch(_){}
+    if(typeof DRAWER === 'object' && DRAWER){
+      if(DRAWER.logTimer){ clearInterval(DRAWER.logTimer); DRAWER.logTimer = null; }
+      if(DRAWER.metTimer){ clearInterval(DRAWER.metTimer); DRAWER.metTimer = null; }
+    }
+    if(typeof JOBLOG === 'object' && JOBLOG && JOBLOG.timer){ clearInterval(JOBLOG.timer); JOBLOG.timer = null; }
+    if(typeof METRICS === 'object' && METRICS && METRICS.timer){ clearInterval(METRICS.timer); METRICS.timer = null; }
+  }
+  function sessionExpired(){
+    if(SESSION_DEAD) return;              // fire exactly once
+    SESSION_DEAD = true;
+    stopAllPolls();
+    var bar = document.createElement('div');
+    bar.className = 'jh-sessionbar';
+    bar.id = 'jh-sessionbar';
+    bar.setAttribute('role', 'alert');
+    bar.setAttribute('tabindex', '-1');
+    bar.innerHTML = ic('warn') +
+      '<span>Session expired — reload the panel to continue.</span>' +
+      '<button type="button" class="jh-btn accent sm" id="jh-session-reload">' + ic('refresh') + 'Reload</button>';
+    var host = $('jh-root') || document.body;
+    host.appendChild(bar);
+    var rb = $('jh-session-reload');
+    if(rb) rb.addEventListener('click', function(){ location.reload(); });
+    // move focus to the alert so AT/keyboard users land on it
+    try { bar.focus(); } catch(_){}
   }
 
   // =====================================================================
@@ -1210,7 +1295,8 @@
     }).join('');
     body.innerHTML = '<div class="jh-applist">'+rows+'</div>';
 
-    apps.forEach(function(x){ checkHealth(x.app); });
+    // batched health (one call); falls back to per-app GetHealth on old backends
+    refreshHealthAll(apps);
   }
 
   // refresh the Open/copy affordances for a row once a port is known
@@ -1234,6 +1320,36 @@
       setPill(elp2, up ? 'ok' : 'off', up ? 'up' : 'down', detail);
       // mirror health into an open drawer for the same app
       if(DRAWER.app === app) drawerSetHealth(up, detail);
+    });
+  }
+
+  // batched health — one GetHealthAll for every visible app pill, instead of
+  // N per-app GetHealth calls per poll. Falls back to the per-app loop when the
+  // backend doesn't implement it (older builds). Routed through call(), so it
+  // inherits session-expiry handling.
+  function refreshHealthAll(apps){
+    apps = apps || (STATE.apps || []);
+    if(!apps.length) return;
+    call('GetHealthAll', {}, function(r){
+      // unknown method / failure on older backends -> per-app fallback
+      var p = payload(r);
+      if(failed(r) || !p || typeof p.health !== 'object' || p.health === null){
+        apps.forEach(function(x){ checkHealth(x.app); });
+        return;
+      }
+      var health = p.health;
+      apps.forEach(function(x){
+        var app = x.app, cid = cssId(app), elp = $('hp-' + cid);
+        if(!elp) return;
+        var h = health[app];
+        if(h == null){ setPill(elp, 'off', 'error', 'no health data'); return; }
+        if(h.port != null){ HEALTH_PORT[app] = h.port; refreshOpen(app); }
+        var up = !!h.up;
+        var detail = 'port ' + (h.port != null ? h.port : '?') +
+          (h.code != null ? (' · HTTP ' + h.code) : '');
+        setPill(elp, up ? 'ok' : 'off', up ? 'up' : 'down', detail);
+        if(DRAWER.app === app) drawerSetHealth(up, detail);
+      });
     });
   }
 
@@ -2140,7 +2256,7 @@
       var d = payload(r);
       if(failed(r)) return;            // silent; the manual Refresh button surfaces errors
       STATE = d;
-      renderApps(d.apps);              // also re-runs checkHealth() per row
+      renderApps(d.apps);              // also re-runs batched health (refreshHealthAll)
     });
   }
   function startAppsPoll(){

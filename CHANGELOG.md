@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.12.3] — 2026-06-06
+
+### Performance
+- **`GetStatus` was ~1–2s for 8 apps** (UI auto-refreshes every 5s). `list_apps()`
+  no longer spawns `systemctl is-enabled` per app (now a filesystem `*.wants`
+  symlink stat) nor parses `/proc` metrics per app (uptime is fetched on demand by
+  the Metrics drawer). Should drop to <0.2s.
+- **Batched health:** new `GetHealthAll` returns `{app:{up,code,port}}` in one call;
+  the UI now does one health round-trip per poll instead of N (was one `GetHealth`
+  per app).
+
+### Fixed
+- **Session-expiry handling:** an expired panel session makes `/plugin` POSTs return
+  a 302→login (HTML, not JSON). The UI now detects the non-JSON/redirect response,
+  stops all auto-polls, and shows a persistent "Session expired — reload" alert
+  instead of silently failing.
+
 ## [0.12.2] — 2026-06-06
 
 ### Security

@@ -95,13 +95,25 @@ def _instance_backend(app: str) -> Optional[str]:
 
 
 def _is_enabled(app: str, backend: Optional[str]) -> Optional[bool]:
-    """Enabled-at-boot state. systemd: `is-enabled`; init.d: any rc?.d/S* link.
-    Returns None when it can't be cheaply determined."""
+    """Enabled-at-boot state. systemd: a *.wants symlink to the unit; init.d:
+    any rc?.d/S* link. Returns None when it can't be cheaply determined.
+
+    The systemd check is a filesystem stat (no `systemctl is-enabled`
+    subprocess): an enabled unit has a symlink in some target's `*.wants`
+    directory, canonically multi-user.target.wants/javahost-<app>.service."""
     name = validate.identifier(app, "app")
     if backend == "systemd":
-        rc, out, _ = shell.run(
-            ["systemctl", "is-enabled", "javahost-%s.service" % name], check=False)
-        return out.strip() in ("enabled", "enabled-runtime", "static", "alias")
+        unit = "javahost-%s.service" % name
+        try:
+            for d in os.listdir(service.SYSTEMD_DIR):
+                if not d.endswith(".wants"):
+                    continue
+                link = os.path.join(service.SYSTEMD_DIR, d, unit)
+                if os.path.islink(link) or os.path.exists(link):
+                    return True
+        except OSError:
+            return None
+        return False
     if backend == "initd":
         script = "javahost-%s" % name
         try:
@@ -219,12 +231,10 @@ def _app_info(name: str) -> Dict:
             info["domain"] = _proxy.read_domain(name)
         except Exception:
             info["domain"] = None
-        if info["status"] == "active":
-            try:
-                m = metrics(name)
-                info["uptime"] = m.get("uptime_s")
-            except Exception:
-                info["uptime"] = None
+        # uptime intentionally left None here: parsing /proc per active app on
+        # every 5s status poll is too heavy. The per-app Metrics drawer fetches
+        # uptime on demand via GetMetrics. Key is kept (contract) with value None.
+        info["uptime"] = None
     except Exception:
         # keep the app listed with whatever we already have (status at minimum)
         pass
@@ -376,6 +386,27 @@ def health(app: str, timeout: float = 3.0) -> Dict:
     except Exception:
         up = False
     return {"app": app, "up": up, "code": code, "port": port}
+
+
+def health_all(timeout: float = 2.0) -> Dict[str, Dict]:
+    """Batched health for every managed instance — one round-trip for the UI,
+    eliminating the N+1 (one GetHealth per app per poll). Returns
+    {app: {"up": bool, "code": int|None, "port": int|None}}.
+
+    Each app's probe is wrapped in try/except: a failing app yields
+    {"up": False, "code": None, "port": None}. Never raises."""
+    out: Dict[str, Dict] = {}
+    if os.path.isdir(INSTANCE_ROOT):
+        for name in sorted(os.listdir(INSTANCE_ROOT)):
+            if not os.path.isdir(os.path.join(INSTANCE_ROOT, name)):
+                continue
+            try:
+                h = health(name, timeout=timeout)
+                out[name] = {"up": h.get("up", False),
+                             "code": h.get("code"), "port": h.get("port")}
+            except Exception:
+                out[name] = {"up": False, "code": None, "port": None}
+    return out
 
 
 def _resolve_pid(app: str) -> Optional[int]:
