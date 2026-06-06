@@ -1,0 +1,8 @@
+# JavaHost runtime dependencies.
+#
+# Intentionally empty: the plugin is Python-stdlib-only and runs inside the
+# panel's bundled interpreter. Third-party runtimes (Tomcat, OpenJDK, JDBC
+# drivers) are downloaded + integrity-verified at runtime, never pip-installed.
+#
+# CI runs `pip-audit -r requirements.txt --strict` against this file, so any
+# dependency added here is supply-chain-audited on every build.

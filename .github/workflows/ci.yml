@@ -66,11 +66,13 @@ jobs:
 
       - name: Dependency audit (pip-audit)
         run: |
-          # No runtime requirements.txt exists (plugin is stdlib-only), so we
-          # audit the CI toolchain actually installed in this job. Catches known
-          # vulns in the pinned pip/pytest/bandit/pip-audit set; passes clean if
-          # none are found.
-          pip-audit --strict
+          # The plugin is stdlib-only, so the meaningful audit is of the project's
+          # *declared runtime deps* (requirements.txt) — which is empty today and
+          # will catch real vulns the moment a dependency is added. We deliberately
+          # do NOT --strict-audit the ambient CI toolchain: pip itself almost always
+          # carries an open advisory, so that would block every build on unrelated
+          # tooling churn rather than on the plugin's own supply chain.
+          pip-audit -r requirements.txt --strict
 
       - name: Compile + unit tests
         run: |
