@@ -476,16 +476,7 @@
       </div>
       <div class="jh-card">
         <div class="jh-card-h"><div><h3>Documentation</h3><p>Operational guides shipped with the plugin</p></div></div>
-        <div class="jh-rows">
-          <div class="jh-kv">
-            <span><svg aria-hidden="true" focusable="false" style="width:15px;height:15px;vertical-align:-2px;color:var(--muted)"><use href="#i-doc"/></svg> System hardening &amp; service directories</span>
-            <a class="jh-btn ghost sm" href="docs/system-hardening.md" target="_blank" rel="noopener"><svg aria-hidden="true" focusable="false"><use href="#i-link"/></svg>Open</a>
-          </div>
-          <div class="jh-kv">
-            <span><svg aria-hidden="true" focusable="false" style="width:15px;height:15px;vertical-align:-2px;color:var(--muted)"><use href="#i-doc"/></svg> Single vs. multi-instance mode</span>
-            <a class="jh-btn ghost sm" href="docs/single-vs-multi-mode.md" target="_blank" rel="noopener"><svg aria-hidden="true" focusable="false"><use href="#i-link"/></svg>Open</a>
-          </div>
-        </div>
+        <div class="jh-rows" id="help-docs"></div>
         <div class="jh-hint">Per-app Tomcat instances on the chosen major; downloads are verified; services run under systemd (with init.d fallback).</div>
       </div>
     </section>
@@ -1349,8 +1340,15 @@
   // range + default port badges, recommended driver in <code>, guidance text.
   function dbGuideCard(e){
     var label = e.label || e.engine || 'Database';
-    var vers = e.versions || [];
-    var range = vers.length ? (vers.length > 1 ? (vers[0] + '–' + vers[vers.length - 1]) : String(vers[0])) : '';
+    // `versions` may be a string range ("9.4–18", from GetProxyHint) or an array
+    // (from GetDbSupport). Normalize both safely — never call .map on a string.
+    var v = e.versions, range = '', list = '';
+    if (Array.isArray(v)) {
+      range = v.length ? (v.length > 1 ? (String(v[0]) + '–' + String(v[v.length-1])) : String(v[0])) : '';
+      list = v.map(String).join(', ');
+    } else if (typeof v === 'string') {
+      range = v;
+    }
     var port = (e.default_port != null && e.default_port !== '') ? String(e.default_port) : '—';
     var drv = e.driver || e.driver_class || '';
     return '<div class="jh-dbcard">'+
@@ -1360,7 +1358,7 @@
         '<span class="jh-badge neutral">port '+esc(port)+'</span>'+
       '</div>'+
       '<dl>'+
-        (vers.length ? '<dt>Versions</dt><dd>'+esc(vers.map(String).join(', '))+'</dd>' : '')+
+        (list ? '<dt>Versions</dt><dd>'+esc(list)+'</dd>' : '')+
         '<dt>Default port</dt><dd>'+esc(port)+'</dd>'+
         '<dt>Driver</dt><dd>'+(drv ? '<code>'+esc(drv)+'</code>' : '<span class="jh-muted">—</span>')+'</dd>'+
       '</dl>'+
@@ -1390,6 +1388,70 @@
       box.innerHTML = html || '<div class="jh-muted">No hint available.</div>';
     });
   }
+
+  // ---- Help: bundled docs, rendered on the fly (no 404 file links) ----
+  var HELP_DOCS = [
+    ['user-guide', 'User guide'],
+    ['system-hardening', 'System hardening & service directories'],
+    ['single-vs-multi-mode', 'Single vs. multi-host mode'],
+    ['databases-java-apps', 'Connecting Java apps to databases'],
+    ['troubleshooting', 'Troubleshooting']
+  ];
+  function renderHelpDocs(){
+    var box = $('help-docs'); if(!box) return;
+    box.innerHTML = HELP_DOCS.map(function(d){
+      return '<div class="jh-kv"><span>'+ic('doc')+' '+esc(d[1])+'</span>'+
+        '<button class="jh-btn ghost sm jh-doc" data-doc="'+esc(d[0])+'" data-title="'+esc(d[1])+'">'+
+        ic('doc')+'View</button></div>';
+    }).join('');
+  }
+  // minimal, XSS-safe Markdown → HTML (escape first, then limited transforms)
+  function mdToHtml(md){
+    function inline(t){
+      return t.replace(/`([^`]+)`/g, '<code>$1</code>')
+              .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+              .replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, txt, href){
+                return /^https?:\/\//.test(href)
+                  ? '<a href="'+href+'" target="_blank" rel="noopener">'+txt+'</a>' : txt; });
+    }
+    var s = esc(md).replace(/```([\s\S]*?)```/g, function(_, c){ return ' PRE '+c+' PRE '; });
+    var lines = s.split('\n'), out = [], inList = false, inPre = false, pre = [];
+    function closeList(){ if(inList){ out.push('</ul>'); inList = false; } }
+    for(var i=0;i<lines.length;i++){
+      var ln = lines[i];
+      if(ln.indexOf(' PRE ') !== -1){
+        var parts = ln.split(' PRE ');
+        if(!inPre){ closeList(); inPre = true; pre = [parts[1]||'']; }
+        else { pre.push(parts[0]||''); out.push('<pre class="jh-pre">'+pre.join('\n')+'</pre>'); inPre = false; }
+        continue;
+      }
+      if(inPre){ pre.push(ln); continue; }
+      var h = ln.match(/^(#{1,4})\s+(.*)$/);
+      if(h){ closeList(); var lv = h[1].length; out.push('<h'+lv+'>'+inline(h[2])+'</h'+lv+'>'); continue; }
+      var li = ln.match(/^\s*[-*]\s+(.*)$/);
+      if(li){ if(!inList){ out.push('<ul>'); inList = true; } out.push('<li>'+inline(li[1])+'</li>'); continue; }
+      if(ln.trim() === ''){ closeList(); continue; }
+      closeList(); out.push('<p>'+inline(ln)+'</p>');
+    }
+    closeList();
+    return out.join('\n');
+  }
+  function viewDoc(name, title){
+    openModal({ title: title || 'Document', large: true,
+      body: '<div class="jh-doc-body jh-muted">Loading…</div>' });
+    call('GetDoc', { name: name }, function(r){
+      var p = payload(r), b = document.querySelector('#jh-modal-body .jh-doc-body');
+      if(!b) return;
+      b.className = 'jh-doc-body';
+      if(failed(r)){ b.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
+      b.innerHTML = mdToHtml(p.content || '');
+    });
+  }
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.jh-doc');
+    if(btn){ viewDoc(btn.dataset.doc, btn.dataset.title); }
+  });
+  renderHelpDocs();
 
   // =====================================================================
   // STATUS REFRESH

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.1] — 2026-06-06
+
+### Fixed
+- Help section threw `TypeError: vers.map is not a function` — `dbGuideCard` assumed
+  `versions` was an array but `GetProxyHint` sends a string range; now handles both.
+- Help doc links 404'd (panel doesn't serve the repo `docs/`). Docs are now **bundled
+  into the plugin** (`plugin/javahost/docs/`) and **rendered on-the-fly** in a modal via
+  a new `GetDoc` endpoint (allowlisted + path-traversal-guarded) with a minimal,
+  XSS-safe Markdown renderer. Help lists 5 guides (user-guide, system-hardening,
+  single-vs-multi-mode, databases-java-apps, troubleshooting).
+
 ## [0.9.0] — 2026-06-06
 
 ### Added

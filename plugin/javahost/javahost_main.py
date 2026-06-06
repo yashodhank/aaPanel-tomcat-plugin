@@ -286,6 +286,26 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    # docs bundled with the plugin, served on-the-fly to the Help viewer
+    _DOCS_DIR = os.path.join(_HERE, "docs")
+    _ALLOWED_DOCS = ("user-guide", "system-hardening", "single-vs-multi-mode",
+                     "databases-java-apps", "troubleshooting")
+
+    def GetDoc(self, get):
+        """Return a bundled doc's markdown for in-UI rendering (no 404 file links)."""
+        try:
+            name = panel.attr(get, "name", "")
+            if name not in self._ALLOWED_DOCS:
+                return panel.err("unknown document: %r" % name)
+            path = os.path.realpath(os.path.join(self._DOCS_DIR, name + ".md"))
+            root = os.path.realpath(self._DOCS_DIR)
+            if not (path == root or path.startswith(root + os.sep)) or not os.path.isfile(path):
+                return panel.err("document not found: %s" % name)
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return panel.ok({"name": name, "content": f.read()})
+        except Exception as e:
+            return panel.err(str(e))
+
     def GetProxyHint(self, get=None):
         dbs = []
         for name in ("postgresql", "mysql", "mariadb", "mongodb"):
