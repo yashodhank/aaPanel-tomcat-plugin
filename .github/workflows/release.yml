@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 3.0.1)'
+        description: 'Version to release (e.g., 0.1.0)'
         required: true
         type: string
 
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Determine version
         id: version
@@ -30,75 +33,39 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update info.json version
+      - name: Test before release
         run: |
-          python3 -c "
-          import json
-          with open('info.json') as f:
-              info = json.load(f)
-          info['versions'] = '${{ steps.version.outputs.version }}'
-          info['date'] = '$(date +%Y-%m-%d)'
-          with open('info.json', 'w') as f:
-              json.dump(info, f, indent='\t', ensure_ascii=False)
-          "
-          echo "Updated info.json to v${{ steps.version.outputs.version }}"
-          git diff info.json
+          pip install pytest -q
+          find plugin/javahost -name '*.py' -print0 | xargs -0 python3 -m py_compile
+          python3 -m pytest -q tests/
 
-      - name: Generate release notes
-        id: notes
+      - name: Sync info.json version
         run: |
-          # Get changes since last tag
-          last_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$last_tag" ]; then
-            range="${last_tag}..HEAD"
-          else
-            range="HEAD"
-          fi
+          python3 - <<'PY'
+          import json, datetime, os
+          p = "plugin/javahost/info.json"
+          info = json.load(open(p))
+          info["versions"] = "${{ steps.version.outputs.version }}"
+          info["date"] = datetime.date.today().isoformat()
+          json.dump(info, open(p, "w"), indent='\t', ensure_ascii=False)
+          PY
 
-          echo "## Changes in v${{ steps.version.outputs.version }}" > /tmp/release-notes.md
-          echo "" >> /tmp/release-notes.md
-          echo "### Commits" >> /tmp/release-notes.md
-          echo '```' >> /tmp/release-notes.md
-          git log --oneline $range >> /tmp/release-notes.md
-          echo '```' >> /tmp/release-notes.md
-          echo "" >> /tmp/release-notes.md
-          echo "### Files Changed" >> /tmp/release-notes.md
-          if [ -n "$last_tag" ]; then
-            echo '```' >> /tmp/release-notes.md
-            git diff --stat $range >> /tmp/release-notes.md
-            echo '```' >> /tmp/release-notes.md
-          fi
-          cat /tmp/release-notes.md
-
-      - name: Create distributable ZIP
+      - name: Build ZIP + checksum
         run: |
-          zip -r aaPanel-tomcat-plugin-v${{ steps.version.outputs.version }}.zip \
-            info.json install.sh tomcat2_main.py index.html icon.png tomcat_install.sh \
-            -x "*.pyc" "__pycache__/*" "*.bak*" ".git/*"
-          sha256sum aaPanel-tomcat-plugin-v${{ steps.version.outputs.version }}.zip > aaPanel-tomcat-plugin-v${{ steps.version.outputs.version }}.zip.sha256
-          ls -lh aaPanel-tomcat-plugin*
+          V=${{ steps.version.outputs.version }}
+          ( cd plugin && zip -r "../javahost-v${V}.zip" javahost -x '*/__pycache__/*' '*.pyc' )
+          sha256sum "javahost-v${V}.zip" > "javahost-v${V}.zip.sha256"
+          ls -lh javahost-v${V}.zip*
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }} — Tomcat 10.1 & 11 Support
-          body_path: /tmp/release-notes.md
+          name: JavaHost v${{ steps.version.outputs.version }}
           files: |
-            aaPanel-tomcat-plugin-v${{ steps.version.outputs.version }}.zip
-            aaPanel-tomcat-plugin-v${{ steps.version.outputs.version }}.zip.sha256
+            javahost-v${{ steps.version.outputs.version }}.zip
+            javahost-v${{ steps.version.outputs.version }}.zip.sha256
           prerelease: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Commit version bump
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add info.json
-          git diff --quiet && git diff --staged --quiet || (
-            git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip ci]"
-            git push origin main
-          )
