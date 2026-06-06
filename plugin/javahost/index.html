@@ -68,21 +68,42 @@
     background:color-mix(in srgb,var(--accent) 22%,transparent);
     padding:3px 10px;border-radius:999px;white-space:nowrap}
 
-  /* nav tabs */
-  .jh-nav{display:flex;gap:var(--s1);margin:var(--s4) 0;flex-wrap:wrap}
-  .jh-tab{display:inline-flex;align-items:center;gap:7px;
-    padding:9px 14px;border-radius:var(--r);border:1px solid transparent;
+  /* in-plugin body: left section nav + content pane (aaPanel idiom) */
+  .jh-body{display:grid;grid-template-columns:212px 1fr;gap:var(--s4);
+    margin-top:var(--s4);align-items:start}
+
+  /* left vertical section menu */
+  .jh-side{position:sticky;top:var(--s4);align-self:start;
+    background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s2);
+    display:flex;flex-direction:column;gap:2px}
+  .jh-nav{display:flex;flex-direction:column;gap:2px}
+  .jh-nav-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted-2);padding:8px 12px 4px}
+  .jh-tab{display:flex;align-items:center;gap:10px;width:100%;
+    padding:9px 12px;border-radius:var(--r-sm);border:1px solid transparent;
     background:transparent;color:var(--muted);font:600 13px var(--font);cursor:pointer;
-    transition:background .12s,color .12s,box-shadow .12s}
+    text-align:left;transition:background .12s,color .12s,box-shadow .12s}
   .jh-tab svg{width:16px;height:16px;flex:none}
-  .jh-tab:hover{color:var(--text);background:var(--surface)}
-  .jh-tab[aria-selected="true"]{color:var(--ink);background:var(--surface);
-    border-color:var(--line);box-shadow:var(--sh-1)}
+  .jh-tab:hover{color:var(--text);background:var(--surface-2)}
+  .jh-tab[aria-current="page"]{color:var(--ink);background:var(--surface-2);
+    border-color:var(--line);box-shadow:inset 3px 0 0 var(--accent-d)}
   .jh-tab:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
 
+  .jh-content{min-width:0}
   .jh-page{display:none;animation:jh-fade .18s ease}
   .jh-page.active{display:block}
   @keyframes jh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* responsive: collapse sidebar to a horizontal scrolling row */
+  @media (max-width:700px){
+    .jh-body{grid-template-columns:1fr;gap:var(--s3)}
+    .jh-side{position:static;padding:var(--s1);overflow-x:auto}
+    .jh-nav{flex-direction:row;gap:var(--s1);min-width:max-content}
+    .jh-nav-h{display:none}
+    .jh-tab{white-space:nowrap}
+    .jh-tab[aria-current="page"]{box-shadow:inset 0 -3px 0 var(--accent-d)}
+  }
 
   /* =====================================================================
      PRIMITIVES — cards, stat tiles, buttons, forms, badges, table
@@ -313,17 +334,25 @@
       </button>
     </header>
 
-    <!-- ================== NAV TABS ================== -->
-    <nav class="jh-nav" role="tablist" aria-label="Sections">
-      <button class="jh-tab" role="tab" data-tab="dashboard" aria-selected="true" id="tab-dashboard" aria-controls="page-dashboard"><svg><use href="#i-grid"/></svg>Dashboard</button>
-      <button class="jh-tab" role="tab" data-tab="apps" aria-selected="false" id="tab-apps" aria-controls="page-apps"><svg><use href="#i-box"/></svg>Applications</button>
-      <button class="jh-tab" role="tab" data-tab="runtimes" aria-selected="false" id="tab-runtimes" aria-controls="page-runtimes"><svg><use href="#i-layers"/></svg>Runtimes</button>
-      <button class="jh-tab" role="tab" data-tab="databases" aria-selected="false" id="tab-databases" aria-controls="page-databases"><svg><use href="#i-db"/></svg>Databases</button>
-      <button class="jh-tab" role="tab" data-tab="help" aria-selected="false" id="tab-help" aria-controls="page-help"><svg><use href="#i-help"/></svg>Help</button>
-    </nav>
-
     <!-- hardening banner (shown only when service_dirs_locked) -->
-    <div id="jh-harden" style="margin-bottom:var(--s4);display:none"></div>
+    <div id="jh-harden" style="margin-top:var(--s4);display:none"></div>
+
+    <!-- ================== IN-PLUGIN BODY: LEFT SECTION NAV + CONTENT ================== -->
+    <div class="jh-body">
+      <!-- left vertical section menu (aaPanel-style) -->
+      <aside class="jh-side">
+        <nav class="jh-nav" role="tablist" aria-label="Sections">
+          <span class="jh-nav-h">Sections</span>
+          <button class="jh-tab" role="tab" data-section="dashboard" aria-current="page" id="tab-dashboard" aria-controls="page-dashboard"><svg><use href="#i-grid"/></svg>Dashboard</button>
+          <button class="jh-tab" role="tab" data-section="apps" id="tab-apps" aria-controls="page-apps"><svg><use href="#i-box"/></svg>Applications</button>
+          <button class="jh-tab" role="tab" data-section="runtimes" id="tab-runtimes" aria-controls="page-runtimes"><svg><use href="#i-layers"/></svg>Runtimes</button>
+          <button class="jh-tab" role="tab" data-section="databases" id="tab-databases" aria-controls="page-databases"><svg><use href="#i-db"/></svg>Databases</button>
+          <button class="jh-tab" role="tab" data-section="help" id="tab-help" aria-controls="page-help"><svg><use href="#i-help"/></svg>Help</button>
+        </nav>
+      </aside>
+
+      <!-- right content pane -->
+      <div class="jh-content">
 
     <!-- ================== PAGE: DASHBOARD ================== -->
     <section class="jh-page active" id="page-dashboard" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="0">
@@ -416,6 +445,9 @@
         <div class="jh-hint">Per-app Tomcat instances on the chosen major; downloads are verified; services run under systemd (with init.d fallback).</div>
       </div>
     </section>
+
+      </div><!-- /.jh-content -->
+    </div><!-- /.jh-body -->
   </div>
 
   <!-- ================== MODAL HOST (single overlay, content swapped) ================== -->
@@ -511,27 +543,36 @@
   var appMajor = {};     // app -> tomcat major (for WAR version param)
 
   // =====================================================================
-  // NAV TABS
+  // SECTION NAV (left vertical menu — aaPanel idiom)
+  //   Robust toggle: each nav item has data-section="X"; each content page
+  //   has id="page-X". For EVERY item we toggle .active on that item's OWN
+  //   page (page-+item.dataset.section), never on the clicked name. The active
+  //   nav item gets aria-current="page". First section is the default.
   // =====================================================================
   var tabs = Array.prototype.slice.call(document.querySelectorAll('.jh-tab'));
-  function showTab(name){
-    tabs.forEach(function(t){
-      var on = t.dataset.tab === name;
-      t.setAttribute('aria-selected', on ? 'true' : 'false');
-      $('page-' + name).classList.toggle('active', on);
+  function showSection(name){
+    tabs.forEach(function(item){
+      var page = $('page-' + item.dataset.section);            // each item's OWN page
+      var on = item.dataset.section === name;
+      if(page) page.classList.toggle('active', on);            // .active{display:block} else none
+      if(on) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
     });
   }
-  tabs.forEach(function(t, i){
-    t.addEventListener('click', function(){ showTab(t.dataset.tab); });
-    // arrow-key navigation between tabs (accessibility)
-    t.addEventListener('keydown', function(e){
-      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+  tabs.forEach(function(item, i){
+    item.addEventListener('click', function(){ showSection(item.dataset.section); });
+    // arrow-key navigation between sections (accessibility)
+    item.addEventListener('keydown', function(e){
+      var d = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1
+            : (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  ? -1 : 0;
       if(!d) return;
       e.preventDefault();
       var n = tabs[(i + d + tabs.length) % tabs.length];
-      n.focus(); showTab(n.dataset.tab);
+      n.focus(); showSection(n.dataset.section);
     });
   });
+  // default to the first section on load
+  if(tabs.length) showSection(tabs[0].dataset.section);
 
   // =====================================================================
   // MODAL DIALOG (single host, content swapped per-use)
@@ -623,9 +664,11 @@
     if(d.service_dirs_locked){
       hb.style.display = '';
       hb.innerHTML = '<div class="jh-alert danger">'+ic('warn')+
-        '<div><b>System hardening is active.</b> '+
+        '<div style="flex:1"><b>System hardening is active.</b> '+
         esc(d.hardening_hint || 'Service directories are immutable; JavaHost cannot register services until hardening is lifted.')+
-        ' See <code>docs/system-hardening.md</code>.</div></div>';
+        ' See <code>docs/system-hardening.md</code>.'+
+        '<div style="margin-top:var(--s2)"><button class="jh-btn danger sm" id="jh-allow-services">'+ic('wrench')+'Allow services</button></div>'+
+        '</div></div>';
     } else { hb.style.display = 'none'; hb.innerHTML = ''; }
   }
   function emptyInline(title, sub){
@@ -1096,6 +1139,11 @@
     if(b.id === 'jh-open-create' || b.id === 'jh-empty-create'){ openCreate(); return; }
     if(b.id === 'jh-open-jar'){ openJar(); return; }
     if(b.id === 'jh-open-war'){ openWar(null); return; }
+    if(b.id === 'jh-allow-services'){
+      if(!confirm('Lift hardening on service directories so JavaHost can register services?')) return;
+      busy(b, true); toast('Allowing services…');
+      call('AllowServices', {}, done('Allow services', b)); return;
+    }
 
     // runtimes — Java
     if(ds.jdk){

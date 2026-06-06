@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 from . import templating, service, installer, registry
 from ..runtime import java, jvm_opts
-from ..util import fs, validate
+from ..util import fs, validate, shell
 
 INSTANCE_ROOT = "/www/server/javahost/instances"
 _SUBDIRS = ("conf", "webapps", "logs", "work", "temp", "bin")
@@ -136,8 +136,11 @@ def create(app: str, major: str, port: int, memory_mb: int,
 
 
 def create_jar(app: str, jar_src: str, java_major: int, port=None,
-               memory_mb: int = 512, user: str = "www") -> Dict:
-    """Run an executable / Spring Boot fat-JAR as a `java -jar` service."""
+               memory_mb: int = 512, user: str = "www", profiles: str = "") -> Dict:
+    """Run an executable / Spring Boot fat-JAR as a `java -jar` service.
+
+    `profiles`: optional Spring profiles (SPRING_PROFILES_ACTIVE), e.g. "prod,metrics".
+    """
     from ..runtime import java, jvm_opts
     from ..deploy import jar as jarmod
     app = validate.identifier(app, "app")
@@ -159,13 +162,21 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
     # app.env carries SERVER_PORT (Spring Boot honors it) — also the port marker for health()
     from ..util import fs as _fs
+    env_lines = ["SERVER_PORT=%d" % port]
+    if profiles:
+        # validate: comma-separated profile identifiers only
+        prof = ",".join(p for p in re.split(r"[,\s]+", profiles.strip()) if p)
+        if prof and not re.match(r"^[A-Za-z0-9_,-]+$", prof):
+            raise ValueError("invalid spring profiles: %r" % profiles)
+        if prof:
+            env_lines.append("SPRING_PROFILES_ACTIVE=%s" % prof)
     _fs.atomic_write(os.path.join(base, "bin", "app.env"),
-                     "SERVER_PORT=%d\n" % port, mode=0o640)
+                     "\n".join(env_lines) + "\n", mode=0o640)
     shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
     service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
     service.enable_start(app)
     return {"app": app, "type": "jar", "port": port, "java": java_major,
-            "springboot": jarmod.detect_springboot(jar_src),
+            "springboot": jarmod.detect_springboot(jar_src), "profiles": profiles or "",
             "status": service.status(app), "warnings": warns}
 
 
@@ -187,6 +198,57 @@ def health(app: str, timeout: float = 3.0) -> Dict:
     except Exception:
         up = False
     return {"app": app, "up": up, "code": code, "port": port}
+
+
+def _resolve_pid(app: str) -> Optional[int]:
+    """Find the running PID for an app: systemd MainPID, else a pid file."""
+    unit = "javahost-%s.service" % validate.identifier(app, "app")
+    rc, out, _ = shell.run(["systemctl", "show", "-p", "MainPID", "--value", unit], check=False)
+    try:
+        pid = int(out.strip())
+        if pid > 0:
+            return pid
+    except (TypeError, ValueError):
+        pass
+    base = base_path(app)
+    for f in (os.path.join(base, "temp", "tomcat.pid"), os.path.join(base, "app.pid")):
+        if os.path.isfile(f):
+            try:
+                pid = int(open(f).read().strip())
+                if pid > 0 and os.path.isdir("/proc/%d" % pid):
+                    return pid
+            except (ValueError, OSError):
+                continue
+    return None
+
+
+def metrics(app: str) -> Dict:
+    """Lightweight JVM/process metrics from /proc (no psutil dependency)."""
+    app = validate.identifier(app, "app")
+    pid = _resolve_pid(app)
+    out = {"app": app, "pid": pid, "up": pid is not None,
+           "rss_mb": None, "threads": None, "uptime_s": None}
+    if not pid:
+        return out
+    try:
+        with open("/proc/%d/status" % pid) as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    out["rss_mb"] = round(int(line.split()[1]) / 1024.0, 1)
+                elif line.startswith("Threads:"):
+                    out["threads"] = int(line.split()[1])
+    except OSError:
+        return {**out, "up": False, "pid": None}
+    try:  # uptime: system_uptime - process_start_time
+        hz = os.sysconf("SC_CLK_TCK")
+        with open("/proc/%d/stat" % pid) as f:
+            starttime = int(f.read().split()[21])
+        with open("/proc/uptime") as f:
+            sys_up = float(f.read().split()[0])
+        out["uptime_s"] = int(sys_up - (starttime / hz))
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
 
 
 def delete(app: str, *, purge: bool = True) -> Dict:

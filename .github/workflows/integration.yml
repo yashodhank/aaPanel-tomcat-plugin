@@ -1,0 +1,120 @@
+name: Integration (real Tomcat chain)
+
+# OPT-IN ONLY. This job downloads a real Tomcat distribution (+ verifies it) and
+# drives catalina.sh service-less, so it is slow and network-dependent. It must
+# NOT run on every push. Triggers:
+#   - workflow_dispatch: manual, on demand.
+#   - schedule: once a week, to catch upstream (Apache/Adoptium) drift.
+on:
+  workflow_dispatch:
+    inputs:
+      tomcat_major:
+        description: "Tomcat major line to exercise"
+        required: false
+        default: "11"
+  schedule:
+    # 06:17 UTC every Monday — off the top of the hour to dodge cron congestion.
+    - cron: "17 6 * * 1"
+
+# Cancel an in-flight run if a newer one starts on the same ref.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-tomcat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Tomcat major to exercise (manual input wins, else the weekly default).
+      TC_MAJOR: ${{ github.event.inputs.tomcat_major || '11' }}
+      # Point the plugin core imports at the in-repo source tree.
+      JAVAHOST_PLUGIN_DIR: ${{ github.workspace }}/plugin/javahost
+      # Reuse the existing service-less smoke harness in "direct" mode: run the
+      # Tomcat engine as the current (runner) user, NOT www — smoke_noservice.py
+      # treats user root/"" as DIRECT (no `su`). The runner's default user IS
+      # root-capable via sudo but `whoami` is `runner`; we set it to root so the
+      # harness takes the no-su path and never tries to `su www` (no such user).
+      JAVAHOST_E2E_USER: root
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Provide a JDK up front so the plugin resolves it (java.detect scans PATH)
+      # instead of downloading Temurin itself — faster and more deterministic.
+      # Tomcat 11 needs Java 17+; Temurin 17 satisfies 9/10/11.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install test tooling (pinned)
+        # Match ci.yml's supply-chain discipline: pin the tools we add.
+        run: |
+          python -m pip install --upgrade "pip==24.3.1"
+          pip install "pytest==8.3.4"
+
+      - name: Create plugin data root
+        # The plugin hardcodes its data root at /www/server/javahost
+        # (installer.HOME_ROOT, instance.INSTANCE_ROOT, java.JDK_ROOT,
+        # installer.KEYRING_DIR) — these are module constants and are NOT
+        # env-overridable, so we create the tree and chown it to the runner
+        # user. The runner is root-capable via passwordless sudo.
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /www/server/javahost
+          sudo chown -R "$USER" /www/server/javahost
+          ls -ld /www/server/javahost
+
+      - name: Install Tomcat ${{ env.TC_MAJOR }} via the plugin installer
+        # Real verified download (sha512 + GPG when gpg is present) with an
+        # automatic fallback to archive.apache.org if the dlcdn mirror is flaky.
+        run: |
+          set -euo pipefail
+          python3 tests/e2e/install_tomcat.py "$TC_MAJOR"
+        env:
+          JAVAHOST_E2E_TOMCAT: ${{ env.TC_MAJOR }}
+
+      - name: Service-less E2E (deploy WAR, run catalina.sh, HTTP health)
+        # Drives the real chain: allocate_port -> scaffold -> render
+        # server.xml/web.xml -> deploy a tiny WAR -> catalina.sh start ->
+        # poll http://127.0.0.1:<port>/ for the marker -> stop -> teardown.
+        run: |
+          set -euo pipefail
+          python3 tests/e2e/smoke_noservice.py
+        env:
+          JAVAHOST_E2E_TOMCAT: ${{ env.TC_MAJOR }}
+          JAVAHOST_E2E_USER: root
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/e2e-logs
+          # Surviving instance logs (the harness tears down on success, so these
+          # only exist when something went wrong before teardown).
+          if [ -d /www/server/javahost/instances ]; then
+            cp -r /www/server/javahost/instances/*/logs /tmp/e2e-logs/ 2>/dev/null || true
+          fi
+          # Tomcat home conf for context (which patch/version was installed).
+          if [ -f "/www/server/javahost/tomcat/${TC_MAJOR}/.javahost-version" ]; then
+            cp "/www/server/javahost/tomcat/${TC_MAJOR}/.javahost-version" \
+               /tmp/e2e-logs/installed-version.txt 2>/dev/null || true
+          fi
+          ls -lR /tmp/e2e-logs || true
+
+      - name: Upload logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-tomcat-${{ env.TC_MAJOR }}
+          path: /tmp/e2e-logs
+          if-no-files-found: ignore
+          retention-days: 14

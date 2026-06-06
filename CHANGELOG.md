@@ -3,6 +3,29 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.7.0] — 2026-06-06
+
+### Added
+- **Spring Boot / JVM app metrics**: `GetMetrics` endpoint + `instance.metrics()` —
+  pid, RSS MB, thread count, uptime from `/proc` (no psutil dependency); pid
+  resolved via systemd MainPID or pid-file.
+- **Spring profiles** for executable-JAR apps: `CreateJarApp` accepts `profiles`
+  (written as `SPRING_PROFILES_ACTIVE` in the app env, validated).
+- **Opt-in CI integration job** (`.github/workflows/integration.yml`, manual +
+  weekly): installs Tomcat (verified), deploys a WAR, starts it service-less on a
+  GitHub runner, and asserts HTTP health — the green systemd-less E2E in CI.
+
+### Changed
+- **UI reworked to aaPanel's left-sidebar idiom** (vertical section menu inside the
+  plugin pane) while keeping the modern style/colors, cards, modals, toasts, health
+  pills; `AllowServices` button wired into the hardening banner.
+
+### Fixed
+- **Section navigation** only showed the last tab (Help) — toggled `page-<clicked>`
+  on every iteration instead of each page's own id. Now each section switches.
+- **Plugin icon** registered at the correct `BTPanel/static/img/soft_ico` path
+  (served HTTP 200); `install.sh` handles both panel layouts.
+
 ## [0.6.0] — 2026-06-06
 
 ### Added

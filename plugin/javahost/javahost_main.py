@@ -170,6 +170,13 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def GetMetrics(self, get):
+        """Lightweight JVM/process metrics (pid, RSS MB, threads, uptime) from /proc."""
+        try:
+            return panel.ok(instance.metrics(panel.attr(get, "app")))
+        except Exception as e:
+            return panel.err(str(e))
+
     def AllowServices(self, get=None):
         """One-click: register JavaHost in aaPanel System Hardening's process
         allowlist (append-only, reversible). Registers — never bypasses."""
@@ -190,6 +197,7 @@ class javahost_main(object):
                 java_major=panel.attr(get, "java", 17),
                 port=panel.attr(get, "port", None),
                 memory_mb=panel.attr(get, "memory", 512),
+                profiles=panel.attr(get, "profiles", ""),
             )
             panel.log("CreateJarApp", "%(app)s jar port=%(port)s springboot=%(springboot)s" % res)
             return panel.ok(res)

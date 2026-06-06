@@ -410,6 +410,31 @@ def test_verify_ok_when_active(monkeypatch):
     svc._verify_systemd_started("x")  # must not raise
 
 
+# ---- app metrics / pid resolution ----
+def test_resolve_pid_from_systemd(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(instance.shell, "run",
+                        lambda argv, **k: (0, "4321\n", "") if "MainPID" in argv else (0, "", ""))
+    assert instance._resolve_pid("app1") == 4321
+
+
+def test_metrics_down_when_no_pid(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(instance, "_resolve_pid", lambda a: None)
+    m = instance.metrics("dead")
+    assert m["up"] is False and m["pid"] is None
+
+
+def test_metrics_reads_proc(monkeypatch, tmp_path):
+    import os as _os
+    if not _os.path.isdir("/proc"):
+        pytest.skip("needs /proc (Linux)")
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(instance, "_resolve_pid", lambda a: _os.getpid())
+    m = instance.metrics("self")
+    assert m["up"] and m["rss_mb"] and m["threads"] >= 1
+
+
 # ---- syssafe allowlist merge (auto-whitelist) ----
 def test_syssafe_merge_appends_missing():
     from core.compat import syssafe
