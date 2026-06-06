@@ -32,7 +32,7 @@ are **downloaded and integrity-verified at runtime**, not bundled.
 | Security | manager/examples/docs removed by default, AJP off, shutdown port disabled, runs as `www`, configs `0640`/secrets `0600` |
 | Deploy | zip-slip-safe WAR extraction; `javax`→`jakarta` namespace detection & warnings for Tomcat 10/11 |
 | Proxy | plugin-owned Nginx vhost generator (never edits other plugins' configs) |
-| PostgreSQL 17 | JDBC URL templates + secret-safe `app.env` (no creds in WAR or logs) |
+| Databases | **PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0)** — connection-URL builder, JVM→driver matrix, secret-safe `app.env` (no creds in WAR or logs) |
 | Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall |
 
 ## Compatibility

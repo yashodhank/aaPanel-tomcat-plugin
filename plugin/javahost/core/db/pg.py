@@ -1,59 +1,49 @@
 # coding: utf-8
-"""
-PostgreSQL 17 Java-app deployment guidance (not a DB manager).
-
-Provides a JDBC connection-string template and an app env-file generator that
-keeps credentials OUT of the WAR/source and out of logs (secret-safe pattern).
-The env file is written 0640 root:www and referenced by systemd EnvironmentFile.
-"""
+"""PostgreSQL connection helper — supports any server version 9.4 .. 18."""
 from __future__ import annotations
 
-import os
-from typing import Dict
+from typing import Dict, Optional
 
-from ..util import fs, validate
-
-# Current PostgreSQL JDBC driver coordinates (update as releases land).
-JDBC_DRIVER = "org.postgresql.Driver"
-JDBC_MAVEN = "org.postgresql:postgresql:42.7.4"
+from . import _base
+from ..util import validate
 
 
-def jdbc_url(host: str, port: int, db: str, *, ssl: bool = True) -> str:
-    port = validate.port(port)
-    # host/db are not shell-bound; keep them simple to avoid URL injection.
-    host = "".join(c for c in str(host) if c.isalnum() or c in ".-_")
-    db = validate.identifier(db, "database")
-    base = "jdbc:postgresql://%s:%d/%s" % (host, port, db)
-    return base + ("?sslmode=require" if ssl else "")
+class PostgresEngine(_base.Engine):
+    name = "postgresql"
+    label = "PostgreSQL"
+    default_port = 5432
+    prefixes = ("postgresql", "postgres", "pg")
+    driver_class = "org.postgresql.Driver"
+    driver_modern = "org.postgresql:postgresql:42.7.4"   # Java 8+, PG 8.2 .. latest
+    driver_legacy = "org.postgresql:postgresql:42.2.29"  # ancient JVMs (Java 6/7)
+    detect_cmds = (("pg_config", "--version"), ("psql", "--version"))
+    versions = ["9.4", "9.5", "9.6", "10", "11", "12", "13", "14", "15", "16", "17", "18"]
+
+    def build_url(self, host, port, db, *, ssl=True, params=None):
+        db = validate.identifier(db, "database")
+        query = (["sslmode=require"] if ssl else []) + \
+                ["%s=%s" % (k, v) for k, v in _base.safe_params(params)]
+        url = "jdbc:postgresql://%s:%d/%s" % (_base.safe_host(host), port, db)
+        return url + ("?" + "&".join(query) if query else "")
 
 
-def render_env(app: str, *, host: str, port: int, db: str, user: str,
-               password: str, ssl: bool = True) -> Dict[str, str]:
-    """Return the env mapping for an app (NOT written here; see write_env)."""
-    return {
-        "DB_URL": jdbc_url(host, port, db, ssl=ssl),
-        "DB_USER": user,
-        "DB_PASSWORD": password,   # value never logged by the plugin
-        "DB_DRIVER": JDBC_DRIVER,
-    }
+ENGINE = PostgresEngine()
 
-
-def write_env(catalina_base: str, mapping: Dict[str, str]) -> str:
-    """Write CATALINA_BASE/bin/app.env (0640). Values are shell-quoted."""
-    lines = []
-    for k, v in mapping.items():
-        safe = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "")
-        lines.append('%s="%s"' % (k, safe))
-    path = os.path.join(catalina_base, "bin", "app.env")
-    fs.atomic_write(path, "\n".join(lines) + "\n", mode=0o640)
-    return path
-
-
-def guidance() -> str:
-    return (
-        "PostgreSQL 17 + Tomcat: place the JDBC driver (%s) in the app or in "
-        "CATALINA_HOME/lib; read credentials from environment (DB_URL/DB_USER/"
-        "DB_PASSWORD) via the generated app.env — never hardcode them in the WAR "
-        "or source. JavaHost stores them 0640 and injects via systemd "
-        "EnvironmentFile so they stay out of process listings and logs." % JDBC_MAVEN
-    )
+# --- backward-compatible module API ---
+def supported(): return ENGINE.supported()
+def normalize_version(v): return ENGINE.normalize(v)
+def recommend_driver(java_major=17): return ENGINE.recommend_driver(java_major)
+def detect_local(): return ENGINE.detect_local()
+def guidance(version=None, java_major=17): return ENGINE.guidance(version, java_major)
+def jdbc_url(host, port, db, *, ssl=True, version=None, params=None):
+    if version is not None:
+        ENGINE.normalize(version)
+    return ENGINE.build_url(host, validate.port(port), db, ssl=ssl, params=params)
+def render_env(app=None, *, host, port, db, user, password, ssl=True,
+               version=None, java_major=17) -> Dict[str, str]:
+    return ENGINE.render_env(host=host, port=port, db=db, user=user,
+                             password=password, ssl=ssl, version=version, java_major=java_major)
+def write_env(catalina_base, mapping): return _base.write_app_env(catalina_base, mapping)
+JDBC_DRIVER = PostgresEngine.driver_class
+PG_DEFAULT_PORT = PostgresEngine.default_port
+PG_VERSIONS = PostgresEngine.versions

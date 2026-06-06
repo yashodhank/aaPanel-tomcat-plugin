@@ -27,7 +27,7 @@ from core.util import validate                  # noqa: E402
 from core.runtime import java, jvm_opts         # noqa: E402
 from core.tomcat import registry, installer, service  # noqa: E402
 from core.deploy import war, proxy              # noqa: E402
-from core.db import pg                          # noqa: E402
+from core.db import engines as dbengines        # noqa: E402
 
 INSTANCE_ROOT = "/www/server/javahost/instances"
 
@@ -138,21 +138,32 @@ class javahost_main(object):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             base = os.path.join(INSTANCE_ROOT, app)
-            mapping = pg.render_env(
-                app,
+            engine = dbengines.get(panel.attr(get, "db_engine", "postgresql"))
+            mapping = engine.render_env(
                 host=panel.attr(get, "db_host", "127.0.0.1"),
-                port=panel.attr(get, "db_port", 5432),
+                port=panel.attr(get, "db_port", None),  # defaults to engine port
                 db=panel.attr(get, "db_name"),
                 user=panel.attr(get, "db_user"),
                 password=panel.attr(get, "db_password", ""),
+                version=panel.attr(get, "db_version"),  # optional; any supported version
             )
-            pg.write_env(base, mapping)
-            return panel.ok({"app": app, "env": "written (secrets not echoed)"})
+            dbengines.write_app_env(base, mapping)
+            return panel.ok({"app": app, "engine": engine.name,
+                             "env": "written (secrets not echoed)",
+                             "driver": mapping["DB_DRIVER_MAVEN"]})
         except Exception as e:
             return panel.err(str(e))
 
-    def GetProxyHint(self, get):
-        return panel.ok({"include": proxy.include_hint(), "pg": pg.guidance()})
+    def GetDbSupport(self, get=None):
+        """All supported DB engines, version ranges, drivers, and local detection."""
+        try:
+            return panel.ok({"engines": dbengines.support_matrix()})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetProxyHint(self, get=None):
+        eng = dbengines.get("postgresql")
+        return panel.ok({"include": proxy.include_hint(), "db": eng.guidance()})
 
     # ---- helpers ----
     def _list_apps(self):

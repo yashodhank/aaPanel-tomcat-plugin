@@ -10,6 +10,7 @@ from core.util import validate
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening
 from core.deploy import war
+from core.db import pg, mysql, mongo, engines as dbengines
 
 
 # ---- validate ----
@@ -148,6 +149,105 @@ def test_war_safe_extract_ok(tmp_path):
     out = tmp_path / "out"
     war.safe_extract(str(war_path), str(out))
     assert (out / "WEB-INF" / "web.xml").exists()
+
+
+# ---- PostgreSQL (all versions) ----
+@pytest.mark.parametrize("raw,canon", [
+    ("17", "17"), ("17.2", "17"), ("pg16", "16"), ("postgresql-15", "15"),
+    ("9.6", "9.6"), ("PG 18", "18"), ("10", "10"),
+])
+def test_pg_normalize(raw, canon):
+    assert pg.normalize_version(raw) == canon
+
+
+def test_pg_normalize_rejects_unsupported():
+    for bad in ("8.1", "7", "99", "", None, "rm"):
+        with pytest.raises(ValueError):
+            pg.normalize_version(bad)
+
+
+def test_pg_supported_range():
+    s = pg.supported()
+    assert "9.4" in s and "17" in s and "18" in s
+    assert "12" in s and "13" in s and "16" in s
+
+
+def test_pg_driver_matrix():
+    assert "42.7" in pg.recommend_driver(17)
+    assert "42.7" in pg.recommend_driver(21)
+    assert "42.2" in pg.recommend_driver(7)  # legacy JVM
+
+
+def test_pg_jdbc_url():
+    u = pg.jdbc_url("db.example.com", 5432, "appdb", version="16")
+    assert u == "jdbc:postgresql://db.example.com:5432/appdb?sslmode=require"
+    u2 = pg.jdbc_url("127.0.0.1", 5433, "x", ssl=False, params={"currentSchema": "app"})
+    assert u2 == "jdbc:postgresql://127.0.0.1:5433/x?currentSchema=app"
+
+
+def test_pg_jdbc_url_rejects_injection():
+    with pytest.raises(ValueError):
+        pg.jdbc_url("h", 5432, "db", params={"x": "a;DROP"})
+    with pytest.raises(ValueError):
+        pg.jdbc_url("h", 5432, "../etc")
+
+
+def test_pg_env_no_secret_in_keys_and_driver_present():
+    m = pg.render_env("app", host="h", port=5432, db="d", user="u",
+                      password="s3cr3t", version="17", java_major=21)
+    assert m["DB_URL"].startswith("jdbc:postgresql://")
+    assert "42.7" in m["DB_DRIVER_MAVEN"]
+    assert m["DB_PASSWORD"] == "s3cr3t"  # value carried, but written 0640 by write_env
+
+
+# ---- MySQL / MariaDB ----
+def test_mysql_url_and_driver():
+    u = mysql.MYSQL.build_url("db", 3306, "appdb")
+    assert u == "jdbc:mysql://db:3306/appdb?sslMode=REQUIRED"
+    assert "mysql-connector-j:9" in mysql.MYSQL.recommend_driver(17)
+    assert mysql.MYSQL.normalize("8.0.39") == "8.0"
+    assert mysql.MYSQL.normalize("mysql-8.4") == "8.4"
+    assert "5.7" in mysql.MYSQL.supported() and "9.1" in mysql.MYSQL.supported()
+
+
+def test_mariadb_url_and_driver():
+    u = mariadb_url = mysql.MARIADB.build_url("h", 3306, "d", ssl=False)
+    assert u == "jdbc:mariadb://h:3306/d"
+    assert "mariadb-java-client:3" in mysql.MARIADB.recommend_driver(21)
+    assert mysql.MARIADB.normalize("11.4") == "11.4"
+    assert mysql.MARIADB.normalize("10.11.8") == "10.11"
+    with pytest.raises(ValueError):
+        mysql.MARIADB.normalize("7.0")
+
+
+# ---- MongoDB ----
+def test_mongo_uri_and_env():
+    u = mongo.ENGINE.build_url("h", 27017, "appdb")
+    assert u == "mongodb://h:27017/appdb?tls=true"
+    m = mongo.ENGINE.render_env(host="h", port=None, db="appdb", user="u",
+                                password="s3cretZZ", version="7.0", java_major=21)
+    assert m["DB_URL"].startswith("mongodb://h:27017/")
+    assert "mongodb-driver-sync:5" in m["DB_DRIVER_MAVEN"]
+    assert m["DB_PASSWORD"] == "s3cretZZ"  # carried separately
+    assert "s3cretZZ" not in m["DB_URL"]   # never embedded in the URI
+    assert mongo.ENGINE.normalize("6.0.13") == "6.0"
+
+
+# ---- engine registry ----
+def test_engine_registry():
+    assert dbengines.get("postgres").name == "postgresql"
+    assert dbengines.get("MariaDB").name == "mariadb"
+    assert dbengines.get("mongo").name == "mongodb"
+    with pytest.raises(ValueError):
+        dbengines.get("oracle")
+    names = {e["engine"] for e in dbengines.support_matrix()}
+    assert names == {"postgresql", "mysql", "mariadb", "mongodb"}
+
+
+def test_engine_default_port_used():
+    # port omitted -> engine default
+    m = mysql.MYSQL.render_env(host="h", port=None, db="d", user="u", password="x")
+    assert ":3306/" in m["DB_URL"]
 
 
 def test_namespace_warning(tmp_path):

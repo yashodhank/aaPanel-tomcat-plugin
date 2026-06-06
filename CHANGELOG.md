@@ -24,7 +24,10 @@ source is present in any commit (see `docs/audit/`).
   shutdown port disabled, runs as `www`, locked-down config permissions.
 - Zip-slip-safe WAR deployment; `javax`→`jakarta` namespace detection/warnings.
 - Plugin-owned Nginx reverse-proxy vhost generator.
-- PostgreSQL 17 JDBC guidance + secret-safe `app.env` pattern.
+- **Multi-database connectivity helpers** (all practical versions): PostgreSQL
+  (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0) — connection-
+  URL builder, JVM→driver matrix, local-server detection, and a secret-safe
+  `app.env` (0640, no credentials in the URL/WAR/logs). See `docs/databases-java-apps.md`.
 - Idempotent install with atomic staging + rollback, disk precheck, and
   managed-marker uninstall.
 - Offline unit test suite (pytest) and CI (lint + tests + signed-zip artifact).
