@@ -12,6 +12,8 @@ import os
 import re
 import shutil
 import socket
+import urllib.error
+import urllib.request
 from typing import Dict, List, Optional
 
 from . import templating, service, installer, registry
@@ -133,6 +135,60 @@ def create(app: str, major: str, port: int, memory_mb: int,
             "status": service.status(app), "warnings": warns}
 
 
+def create_jar(app: str, jar_src: str, java_major: int, port=None,
+               memory_mb: int = 512, user: str = "www") -> Dict:
+    """Run an executable / Spring Boot fat-JAR as a `java -jar` service."""
+    from ..runtime import java, jvm_opts
+    from ..deploy import jar as jarmod
+    app = validate.identifier(app, "app")
+    java_major = validate.java_major(java_major)
+    memory_mb = validate.memory_mb(memory_mb)
+    if not jar_src or not os.path.isfile(jar_src):
+        raise FileNotFoundError("jar not found: %r" % jar_src)
+    if not jarmod.is_executable_jar(jar_src):
+        raise RuntimeError("not an executable jar (no Main-Class in MANIFEST): %s" % jar_src)
+    if exists(app):
+        raise RuntimeError("app already exists: %s" % app)
+    java_home = java.resolve(java_major, prefer=java_major) or java.install_temurin(java_major)
+    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+    base = base_path(app)
+    for sub in ("bin", "logs"):
+        fs.ensure_dir(os.path.join(base, sub))
+    fs.mark_managed(base)
+    shutil.copyfile(jar_src, os.path.join(base, "app.jar"))
+    opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
+    # app.env carries SERVER_PORT (Spring Boot honors it) — also the port marker for health()
+    from ..util import fs as _fs
+    _fs.atomic_write(os.path.join(base, "bin", "app.env"),
+                     "SERVER_PORT=%d\n" % port, mode=0o640)
+    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+    service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
+    service.enable_start(app)
+    return {"app": app, "type": "jar", "port": port, "java": java_major,
+            "springboot": jarmod.detect_springboot(jar_src),
+            "status": service.status(app), "warnings": warns}
+
+
+def health(app: str, timeout: float = 3.0) -> Dict:
+    """Probe the app's HTTP port on loopback. Returns {app, up, code, port}."""
+    app = validate.identifier(app, "app")
+    port = _read_port(base_path(app))
+    if not port:
+        return {"app": app, "up": False, "code": None, "port": None}
+    code = None
+    up = False
+    try:
+        resp = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=timeout)  # noqa: S310 (loopback)
+        code = resp.getcode()
+        up = 200 <= code < 500  # any HTTP response means the app is listening
+    except urllib.error.HTTPError as e:
+        code = e.code
+        up = True  # it answered, just not 2xx
+    except Exception:
+        up = False
+    return {"app": app, "up": up, "code": code, "port": port}
+
+
 def delete(app: str, *, purge: bool = True) -> Dict:
     app = validate.identifier(app, "app")
     service.remove_unit(app)
@@ -213,10 +269,18 @@ def _read_setenv(base: str) -> Dict[str, str]:
 
 
 def _read_port(base: str) -> Optional[int]:
+    # Tomcat instance: port lives in conf/server.xml
     sx = os.path.join(base, "conf", "server.xml")
     if os.path.isfile(sx):
         with open(sx, errors="replace") as f:
             m = re.search(r'Connector\s+port="(\d+)"', f.read())
+            if m:
+                return int(m.group(1))
+    # JAR app: port lives in bin/app.env as SERVER_PORT
+    env = os.path.join(base, "bin", "app.env")
+    if os.path.isfile(env):
+        with open(env, errors="replace") as f:
+            m = re.search(r'^SERVER_PORT=(\d+)', f.read(), re.M)
             if m:
                 return int(m.group(1))
     return None

@@ -44,12 +44,22 @@ class javahost_main(object):
                         "min_java": registry.get_line(major).min_java,
                         "namespace": registry.get_line(major).namespace,
                     }
+            # Detect locked service dirs (e.g. aaPanel System Hardening chattr +i)
+            # so the UI can warn before a CreateApp fails.
+            sysd_locked = service.have_systemd() and not service._can_write(service.SYSTEMD_DIR)
+            initd_locked = not service._can_write(service.INITD_DIR)
+            hardening_locked = sysd_locked and initd_locked
             return panel.ok({
                 "java": jdks,
                 "tomcat": tomcats,
                 "apps": instance.list_apps(),
                 "systemd": service.have_systemd(),
                 "supported_tomcat": sorted(registry.LINES),
+                "service_dirs_locked": hardening_locked,
+                "hardening_hint": (
+                    "Service directories are immutable (likely aaPanel 'System "
+                    "Hardening'). Disable it (or lift chattr +i on /etc/systemd/system) "
+                    "so JavaHost can register Tomcat/JAR services." if hardening_locked else ""),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -141,6 +151,27 @@ class javahost_main(object):
             app = validate.identifier(panel.attr(get, "app"), "app")
             lines = panel.attr(get, "lines", 200)
             return panel.ok({"app": app, "log": instance.tail_log(app, int(lines))})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetHealth(self, get):
+        try:
+            return panel.ok(instance.health(panel.attr(get, "app")))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def CreateJarApp(self, get):
+        """Run an executable / Spring Boot fat-JAR (staged at `jar`) as a service."""
+        try:
+            res = instance.create_jar(
+                app=panel.attr(get, "app"),
+                jar_src=panel.attr(get, "jar") or panel.attr(get, "tmp"),
+                java_major=panel.attr(get, "java", 17),
+                port=panel.attr(get, "port", None),
+                memory_mb=panel.attr(get, "memory", 512),
+            )
+            panel.log("CreateJarApp", "%(app)s jar port=%(port)s springboot=%(springboot)s" % res)
+            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 

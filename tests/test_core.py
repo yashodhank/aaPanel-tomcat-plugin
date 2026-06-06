@@ -9,7 +9,7 @@ import pytest
 from core.util import validate
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
-from core.deploy import war
+from core.deploy import war, jar
 from core.db import pg, mysql, mongo, engines as dbengines
 
 
@@ -299,6 +299,46 @@ def test_migration_jar_name():
 def test_migrate_missing_war(tmp_path):
     with pytest.raises(FileNotFoundError):
         war.migrate(str(tmp_path / "nope.war"), str(tmp_path / "out.war"), "/x")
+
+
+# ---- executable / Spring Boot JAR detection ----
+def _make_jar(tmp_path, name, main_class=None, extra=None):
+    p = tmp_path / name
+    with zipfile.ZipFile(p, "w") as z:
+        mf = "Manifest-Version: 1.0\n"
+        if main_class:
+            mf += "Main-Class: %s\n" % main_class
+        z.writestr("META-INF/MANIFEST.MF", mf)
+        for e in (extra or []):
+            z.writestr(e, "x")
+    return str(p)
+
+
+def test_jar_executable_and_springboot(tmp_path):
+    boot = _make_jar(tmp_path, "boot.jar",
+                     main_class="org.springframework.boot.loader.JarLauncher",
+                     extra=["BOOT-INF/classes/App.class"])
+    plain = _make_jar(tmp_path, "plain.jar", main_class="com.example.Main")
+    lib = _make_jar(tmp_path, "lib.jar")  # no Main-Class
+    assert jar.is_executable_jar(boot) and jar.detect_springboot(boot)
+    assert jar.is_executable_jar(plain) and not jar.detect_springboot(plain)
+    assert not jar.is_executable_jar(lib)
+    assert jar.manifest_main_class(plain) == "com.example.Main"
+
+
+def test_read_port_jar_app(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "japp" / "bin"
+    base.mkdir(parents=True)
+    (base / "app.env").write_text("SERVER_PORT=8090\nFOO=bar\n")
+    assert instance._read_port(str(tmp_path / "japp")) == 8090
+
+
+def test_health_no_port(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "dead").mkdir()
+    h = instance.health("dead")
+    assert h["up"] is False and h["port"] is None
 
 
 # ---- engine registry ----

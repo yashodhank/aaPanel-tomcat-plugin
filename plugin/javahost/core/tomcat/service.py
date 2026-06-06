@@ -82,6 +82,27 @@ def install_unit(app: str, java_home: str, catalina_home: str, catalina_base: st
         % (SYSTEMD_DIR, INITD_DIR))
 
 
+def install_jar_unit(app: str, java_home: str, app_dir: str, port: int,
+                     java_opts: str = "", user: str = "www") -> str:
+    """Install a service that runs an executable JAR (`java -jar`). Same locked-dir
+    resilience and per-app backend model as install_unit()."""
+    ctx = {"app": app, "user": user, "group": user, "java_home": java_home,
+           "app_dir": app_dir, "port": str(port), "java_opts": java_opts}
+    if have_systemd() and _can_write(SYSTEMD_DIR):
+        path = _unit_path(app)
+        fs.atomic_write(path, templating.render_file("systemd-jar.service.tmpl", ctx), mode=0o644)
+        shell.run(["systemctl", "daemon-reload"])
+        return path
+    if _can_write(INITD_DIR):
+        path = _script_path(app)
+        fs.atomic_write(path, templating.render_file("initd-jar.sh.tmpl", ctx), mode=0o755)
+        return path
+    raise RuntimeError(
+        "cannot install a service: both %s and %s are not writable "
+        "(likely immutable via chattr +i — e.g. aaPanel 'System Hardening'). "
+        "Disable system hardening / lift the lock, then retry." % (SYSTEMD_DIR, INITD_DIR))
+
+
 def enable_start(app: str) -> None:
     if _backend(app) == "systemd":
         shell.run(["systemctl", "enable", "--now", "javahost-%s.service" % app])

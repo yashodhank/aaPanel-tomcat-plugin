@@ -15,8 +15,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install test deps
-        run: pip install pytest
+      - name: Install CI tooling (pinned)
+        # Pin every CI tool: an unpinned `pip install` is a supply-chain risk,
+        # which is doubly inappropriate for a plugin whose pitch is mandatory
+        # integrity verification. Bump these deliberately, never implicitly.
+        run: |
+          python -m pip install --upgrade "pip==24.3.1"
+          pip install \
+            "pytest==8.3.4" \
+            "bandit==1.8.0" \
+            "pip-audit==2.7.3"
 
       - name: Validate plugin structure
         run: |
@@ -42,10 +50,27 @@ jobs:
             echo 'ERROR: proprietary-derived file tracked'; exit 1; fi
           echo "  ✓ clean"
 
-      - name: Lint shell
+      - name: Lint shell (blocking)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck -S warning plugin/javahost/*.sh || true
+          # Blocking: shellcheck warnings now fail the build (was `|| true`).
+          shellcheck -S warning plugin/javahost/*.sh
+
+      - name: Security scan (bandit)
+        run: |
+          # Recursive SAST over the plugin source only; the test tree is
+          # excluded. -ll/-ii gate findings at MEDIUM severity + MEDIUM
+          # confidence so the build fails on real issues but not low-severity
+          # noise. Skipped checks are documented with justification in ./.bandit.
+          bandit -c .bandit -r plugin/javahost --exclude tests -ll -ii
+
+      - name: Dependency audit (pip-audit)
+        run: |
+          # No runtime requirements.txt exists (plugin is stdlib-only), so we
+          # audit the CI toolchain actually installed in this job. Catches known
+          # vulns in the pinned pip/pytest/bandit/pip-audit set; passes clean if
+          # none are found.
+          pip-audit --strict
 
       - name: Compile + unit tests
         run: |

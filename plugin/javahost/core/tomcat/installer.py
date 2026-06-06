@@ -13,6 +13,7 @@ and the rollback gap (audit §8).
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 from . import registry, hardening
@@ -123,10 +124,15 @@ def uninstall(major: str) -> None:
 
 
 def _keyring(major: str, keys_url: str) -> Optional[str]:
-    """Build a GPG keyring from Apache KEYS for this major. Returns path or None
-    (None makes the verifier skip the signature step but still require sha512)."""
+    """Build a GPG keyring from Apache KEYS for this major. Returns path or None.
+
+    None makes the verifier skip the *signature* step but SHA-512 stays mandatory
+    (fetch_verified always requires a checksum). The skip is logged explicitly —
+    never silent — so a downgrade to checksum-only is visible. A present-but-bad
+    signature still hard-fails in download.verify_gpg (not here)."""
     gpg = shell.which("gpg")
     if not gpg:
+        sys.stderr.write("[javahost] gpg not installed; using SHA-512-only verification\n")
         return None
     keys = os.path.join(KEYRING_DIR, "tomcat-%s-KEYS" % major)
     keyring = os.path.join(KEYRING_DIR, "tomcat-%s.gpg" % major)
@@ -134,5 +140,7 @@ def _keyring(major: str, keys_url: str) -> Optional[str]:
         download._http_get(keys_url, keys)
         shell.run([gpg, "--no-default-keyring", "--keyring", keyring, "--import", keys])
         return keyring
-    except Exception:
+    except Exception as e:
+        sys.stderr.write("[javahost] WARNING: could not build Apache KEYS keyring "
+                         "(%s); proceeding with SHA-512-only verification\n" % e)
         return None

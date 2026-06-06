@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-06-06
+
+### Added
+- **Spring Boot / executable-JAR apps**: `core/deploy/jar.py` (Main-Class +
+  Spring Boot fat-jar detection), `instance.create_jar()`, systemd + init.d jar
+  service templates, and `CreateJarApp` endpoint — runs `java -jar` as a service
+  with `SERVER_PORT`.
+- **Health endpoint**: `instance.health()` + `GetHealth` endpoint (loopback HTTP
+  probe; UI shows a green/red badge per app).
+- **WAR upload + Jakarta-migrate UI** and a **Spring Boot JAR** card (file inputs
+  wired to `UploadWar`/`MigrateWar`/`CreateJarApp`).
+- **System-hardening awareness**: `GetStatus` now reports `service_dirs_locked` +
+  a hint; the dashboard shows a banner; new `docs/system-hardening.md` documents
+  how to run JavaHost when aaPanel System Hardening is enabled.
+- **CI security gates**: bandit (medium+, blocking, with a documented `.bandit`),
+  pip-audit, and shellcheck made blocking; all CI tool versions pinned.
+
+### Changed
+- `installer._keyring` logs explicitly when GPG verification is downgraded to
+  SHA-512-only (gpg absent / KEYS import failed) — never a silent skip; SHA-512
+  remains mandatory and a present-but-bad signature still hard-fails.
+
 ## [0.3.0] — 2026-06-06
 
 ### Added

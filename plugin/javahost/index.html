@@ -101,6 +101,30 @@
       <div class="muted" style="margin-top:6px">A dedicated Tomcat instance is created per app on the chosen major.</div>
     </div>
 
+    <!-- Spring Boot / executable fat-JAR app — sibling to the Tomcat create form -->
+    <div class="card" style="margin-top:12px">
+      <h3>Spring Boot / executable JAR app</h3>
+      <div class="formrow">
+        <div class="field"><label for="jh-jar-name">Name</label>
+          <input id="jh-jar-name" placeholder="myservice" autocomplete="off"></div>
+        <div class="field"><label for="jh-jar-java">Java major</label>
+          <select id="jh-jar-java"><option value="17">Java 17</option><option value="21">Java 21</option><option value="11">Java 11</option><option value="8">Java 8</option></select></div>
+        <div class="field"><label for="jh-jar-port">Port</label>
+          <input id="jh-jar-port" type="number" value="8080" min="1" max="65535" style="width:90px"></div>
+        <div class="field"><label for="jh-jar-mem">Memory (MB)</label>
+          <input id="jh-jar-mem" type="number" value="512" min="64" step="64" style="width:100px"></div>
+      </div>
+      <div class="formrow" style="margin-top:8px">
+        <div class="field" style="min-width:240px"><label for="jh-jar-file">Fat JAR file</label>
+          <input id="jh-jar-file" type="file" accept=".jar"></div>
+        <div class="field"><label>&nbsp;</label>
+          <button id="jh-jar-create" class="accent">Deploy Spring Boot JAR</button></div>
+      </div>
+      <div class="muted" style="margin-top:6px">
+        Runs an executable fat-jar as a managed service (no Tomcat). The file is uploaded via the panel file API and staged server-side; the staged path is passed to <code>CreateJarApp</code>.
+      </div>
+    </div>
+
     <!-- App table: status badge + per-app actions -->
     <div class="card" style="margin-top:12px">
       <h3>Managed Apps</h3>
@@ -123,6 +147,27 @@
           </div>
         </div>
         <pre id="jh-logs-pre">…</pre>
+      </div>
+
+      <!-- WAR-deploy panel: toggled by the per-app "Deploy WAR" button -->
+      <div id="jh-warpanel" class="panel hide">
+        <div class="formrow" style="justify-content:space-between">
+          <strong id="jh-war-title">Deploy WAR</strong>
+          <button class="ghost sm" id="jh-war-close">Close</button>
+        </div>
+        <div class="formrow" style="margin-top:8px">
+          <div class="field" style="min-width:260px"><label for="jh-war-file">WAR file</label>
+            <input id="jh-war-file" type="file" accept=".war"></div>
+          <div class="field"><label>&nbsp;</label>
+            <button id="jh-war-deploy" class="accent">Deploy WAR</button></div>
+          <div class="field"><label>&nbsp;</label>
+            <button id="jh-war-migrate" class="ghost">Migrate javax&rarr;jakarta &amp; deploy</button></div>
+        </div>
+        <div class="muted" style="margin-top:6px">
+          The WAR is uploaded via the panel file API and staged server-side; the staged path is passed to <code>UploadWar</code> / <code>MigrateWar</code>. Use Migrate for a javax.* WAR deployed onto Tomcat 10/11.
+        </div>
+        <!-- Returned warnings (e.g. namespace) rendered here in warn style -->
+        <div id="jh-war-result"></div>
       </div>
 
       <!-- DB-env panel: toggled by the per-app "DB env" button -->
@@ -210,6 +255,9 @@
   // ---- tiny DOM helper ----
   function $id(id){return document.getElementById(id);}
 
+  // ---- per-app tomcat major cache (filled by renderApps from GetStatus) ----
+  var appVersions = {};
+
   // ---- global status / error line ----
   function msg(t,bad){
     $id('jh-msg').innerHTML =
@@ -258,7 +306,18 @@
       '<div class="row"><span>systemd</span><span class="badge '+(d.systemd?'ok':'neutral')+'">'+
       (d.systemd?'available':'init.d fallback')+'</span></div>'+
       '<div class="row"><span>Java runtimes</span><span class="badge neutral">'+keys.length+'</span></div>'+
-      '<div class="row"><span>Managed apps</span><span class="badge neutral">'+((d.apps||[]).length)+'</span></div>';
+      '<div class="row"><span>Managed apps</span><span class="badge neutral">'+((d.apps||[]).length)+'</span></div>'+
+      '<div class="row"><span>Service dirs</span><span class="badge '+(d.service_dirs_locked?'off':'ok')+'">'+
+      (d.service_dirs_locked?'locked (hardening)':'writable')+'</span></div>';
+
+    // -- System Hardening banner: services can't be installed while locked --
+    if (d.service_dirs_locked) {
+      $id('jh-msg').innerHTML =
+        '<div class="warn" style="background:#fdecec;border-color:#e7a">&#9888; '+
+        esc(d.hardening_hint || 'aaPanel System Hardening locks /etc/systemd/system & /etc/init.d — '+
+            'disable it (or lift chattr +i) to create/manage apps. See docs/system-hardening.md.')+
+        '</div>';
+    }
 
     // -- populate Create-App version dropdown from INSTALLED tomcats --
     var sel = $id('jh-new-ver'), prev = sel.value, opts='';
@@ -281,19 +340,147 @@
     var html='';
     apps.forEach(function(x){
       var name = esc(x.app), live = (x.status==='active');
+      // cache the app's tomcat major so the WAR panel can pass `version`
+      appVersions[x.app] = (x.tomcat!=null ? x.tomcat : (x.version!=null ? x.version : ''));
       html += '<tr><td><strong>'+name+'</strong></td>'+
-        '<td><span class="badge '+(live?'ok':'off')+'">'+esc(x.status)+'</span></td>'+
+        '<td><span class="badge '+(live?'ok':'off')+'">'+esc(x.status)+'</span> '+
+            '<span class="badge neutral" id="jh-health-'+name+'" title="health">health: ?</span></td>'+
         '<td><div class="btns">'+
           '<button class="ghost sm" data-app-action="start"   data-app="'+name+'">Start</button>'+
           '<button class="ghost sm" data-app-action="stop"    data-app="'+name+'">Stop</button>'+
           '<button class="ghost sm" data-app-action="restart" data-app="'+name+'">Restart</button>'+
+          '<button class="ghost sm" data-app-health="'+name+'">Check health</button>'+
           '<button class="ghost sm" data-app-repair="'+name+'">Repair</button>'+
+          '<button class="ghost sm" data-app-war="'+name+'">Deploy WAR</button>'+
           '<button class="ghost sm" data-app-logs="'+name+'">Logs</button>'+
           '<button class="ghost sm" data-app-db="'+name+'">DB env</button>'+
           '<button class="sm" data-app-delete="'+name+'" style="border-color:#c0392b;background:#c0392b">Delete</button>'+
         '</div></td></tr>';
     });
     $id('jh-app-rows').innerHTML = html;
+    // auto-refresh health for every app once the list is (re)rendered
+    apps.forEach(function(x){ checkHealth(x.app); });
+  }
+
+  // ===================================================================
+  // HEALTH INDICATOR (per app) — GetHealth {app} -> {app,up,code,port}
+  // ===================================================================
+  function setHealthBadge(app, cls, text, title){
+    var el = $id('jh-health-' + app);   // id built from raw app name; element is keyed by it
+    if(!el) return;
+    el.className = 'badge ' + cls;
+    el.textContent = text;              // textContent = safe
+    if(title!=null){ el.title = title; }
+  }
+  function checkHealth(app){
+    setHealthBadge(app, 'neutral', 'health: …');
+    call('GetHealth',{app:app},function(r){
+      var p = payload(r);
+      if(failed(r)){
+        setHealthBadge(app, 'off', 'health: error',
+          (typeof p==='string'?p:JSON.stringify(p)));
+        return;
+      }
+      var up = !!p.up;
+      var detail = 'port '+(p.port!=null?p.port:'?')+
+                   (p.code!=null?(' · HTTP '+p.code):'');
+      setHealthBadge(app, up?'ok':'off', up?'up':'down', detail);
+    });
+  }
+
+  // ===================================================================
+  // WAR DEPLOY PANEL (per app) — uploads via panel file API, then
+  // UploadWar {app,version,tmp} / MigrateWar {app,version,war}
+  // ===================================================================
+  var warApp = null, warVersion = '';
+  function openWarPanel(app){
+    warApp = app;
+    // best-effort: find the app's tomcat major from the last status payload
+    warVersion = (appVersions[app] != null) ? String(appVersions[app]) : '';
+    $id('jh-war-title').textContent = 'Deploy WAR — ' + app;   // textContent = safe
+    $id('jh-war-result').innerHTML = '';
+    $id('jh-war-file').value = '';
+    $id('jh-warpanel').classList.remove('hide');
+    $id('jh-warpanel').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  function warResult(html, bad){
+    $id('jh-war-result').innerHTML =
+      '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+html+'</div>';
+  }
+  // Stage a File via the panel's standard upload API, then call back with the
+  // server-side staged path. Falls back to a pasted path if no file chosen.
+  function stageUpload(fileInput, cb){
+    var f = fileInput && fileInput.files && fileInput.files[0];
+    if(!f){
+      var pasted = prompt('No file selected. Paste a server-side path to the WAR/JAR (already on the host):', '');
+      if(pasted){ cb(pasted, null); } else { cb(null, 'no file or path provided'); }
+      return;
+    }
+    var fd = new FormData();
+    // aaPanel file API: /files?action=upload — fields f_path/f_name/blob (chunk).
+    fd.append('f_path', '/tmp');
+    fd.append('f_name', f.name);
+    fd.append('f_size', f.size);
+    fd.append('f_start', 0);
+    fd.append('blob', f, f.name);
+    fetch('/files?action=upload', {method:'POST', body:fd})
+      .then(function(x){ return x.json(); })
+      .then(function(r){
+        // staged path: prefer a path the API returns, else the conventional /tmp/<name>
+        var p = (r && (r.path || (r.msg && r.msg.path))) || ('/tmp/' + f.name);
+        cb(p, null);
+      })
+      .catch(function(e){ cb(null, String(e)); });
+  }
+  function deployWar(migrate){
+    if(!warApp){ msg('Open the WAR panel for an app first', true); return; }
+    if(!warVersion){ msg('Could not resolve the app’s Tomcat version', true); return; }
+    var app = warApp, ver = warVersion;
+    warResult('Uploading WAR for '+esc(app)+'…');
+    stageUpload($id('jh-war-file'), function(tmp, err){
+      if(err || !tmp){ warResult('Upload failed: '+esc(err||'no staged path'), true); return; }
+      var method = migrate ? 'MigrateWar' : 'UploadWar';
+      var data = migrate ? {app:app, version:ver, war:tmp}
+                         : {app:app, version:ver, tmp:tmp};
+      warResult((migrate?'Migrating &amp; deploying':'Deploying')+' WAR … ('+esc(tmp)+')');
+      call(method, data, function(r){
+        var p = payload(r);
+        if(failed(r)){
+          warResult((migrate?'Migrate':'Deploy')+' failed: '+
+                    esc(typeof p==='string'?p:JSON.stringify(p)), true);
+          return;
+        }
+        var out = (migrate?'Migrated &amp; deployed':'Deployed')+' to '+esc(p.app||app)+'.';
+        if(p.warning){ out += '<br><strong>Warning:</strong> '+esc(p.warning); }
+        warResult(out, false);
+        msg((migrate?'WAR migrated+deployed to ':'WAR deployed to ')+esc(p.app||app));
+        refresh();
+      });
+    });
+  }
+
+  // ===================================================================
+  // SPRING BOOT / EXECUTABLE FAT-JAR APP — CreateJarApp
+  // {app, jar:<staged path>, java:<major>, port, memory}
+  // ===================================================================
+  function createJarApp(){
+    var name = $id('jh-jar-name').value.trim(),
+        java = $id('jh-jar-java').value,
+        port = $id('jh-jar-port').value,
+        mem  = $id('jh-jar-mem').value;
+    if(!name){ msg('Enter a JAR app name', true); return; }
+    msg('Uploading JAR for '+name+'…');
+    stageUpload($id('jh-jar-file'), function(jar, err){
+      if(err || !jar){ msg('JAR upload failed: '+(err||'no staged path'), true); return; }
+      msg('Creating Spring Boot app '+name+'…');
+      call('CreateJarApp',{app:name, jar:jar, java:java, port:port, memory:mem},function(r){
+        var p = payload(r);
+        if(failed(r)){ msg('Create JAR app failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
+        msg('Created '+esc(p.app||name)+' (Java '+esc(p.java||java)+', port '+esc(p.port||port)+')');
+        $id('jh-jar-name').value=''; $id('jh-jar-file').value='';
+        refresh();
+      });
+    });
   }
 
   // ===================================================================
@@ -510,6 +697,16 @@
     }
     if(ds.appLogs){ openLogs(ds.appLogs); return; }
     if(ds.appDb){ openDbPanel(ds.appDb); return; }
+    if(ds.appHealth){ checkHealth(ds.appHealth); return; }
+    if(ds.appWar){ openWarPanel(ds.appWar); return; }
+
+    // -- WAR-deploy panel controls --
+    if(b.id==='jh-war-deploy'){ deployWar(false); return; }
+    if(b.id==='jh-war-migrate'){ deployWar(true); return; }
+    if(b.id==='jh-war-close'){ $id('jh-warpanel').classList.add('hide'); warApp=null; return; }
+
+    // -- Spring Boot / executable JAR app --
+    if(b.id==='jh-jar-create'){ createJarApp(); return; }
 
     // -- Logs panel controls --
     if(b.id==='jh-logs-refresh'){ loadLogs(); return; }

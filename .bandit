@@ -1,0 +1,44 @@
+# Bandit configuration for the javahost plugin.
+#
+# CI invokes bandit with `-r plugin/javahost -ll -ii` (report MEDIUM+ severity,
+# MEDIUM+ confidence) so the build only fails on substantive findings, not on
+# stylistic low-severity noise. This file documents the (few) checks we skip and
+# why, so the suppressions are auditable rather than silent.
+#
+# Excluded paths: the test tree only (kept out of the recursive scan in CI via
+# --exclude, mirrored here for local `bandit -r .` runs).
+exclude_dirs:
+  - tests
+  - .git
+  - __pycache__
+
+# Skipped checks, each with explicit justification. Everything NOT listed here
+# still fails the build at MEDIUM+ severity / MEDIUM+ confidence -- so a future
+# shell=True, weak hash, hardcoded secret, real injection, etc. will break CI.
+#
+#   B404 (import subprocess) / B603 (subprocess without shell=True)
+#       LOW severity. core/util/shell.py uses subprocess deliberately WITHOUT a
+#       shell, always with argv lists; shell=True is banned project-wide. This
+#       IS the safe pattern. Below the MEDIUM gate already; skipped so local
+#       full runs (`bandit -r .`) stay quiet too.
+#
+#   B108 (hardcoded_tmp_directory)
+#       False positives. The three flagged sites are defensive guards of the
+#       form `tmp.startswith("/tmp")` evaluated before a recursive delete
+#       (java.py:138, installer.py:111, javahost_main.py:196) -- string
+#       comparisons, not temp-file creation. Real temp paths are created via
+#       tempfile.mkstemp/mkdtemp (see core/util/fs.py), which bandit accepts.
+#
+#   B310 (urllib urlopen, unrestricted scheme)
+#       Accepted, documented risk. urlopen is reached only with URLs composed
+#       from the plugin's own version registry (https Apache/Adoptium endpoints,
+#       see download.py:31, java.py:113, registry.py:55), never user input, and
+#       every downloaded artifact is verified fail-closed by SHA-256/512 + GPG
+#       before use. Each call site already carries an inline `# noqa: S310`
+#       rationale. The integrity guarantee lives in download.fetch_verified, not
+#       in the fetch transport.
+skips:
+  - B404
+  - B603
+  - B108
+  - B310
