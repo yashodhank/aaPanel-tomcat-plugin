@@ -451,12 +451,31 @@ def _resolve_pid(app: str) -> Optional[int]:
 
 def metrics(app: str) -> Dict:
     """Lightweight JVM/process metrics from /proc (no psutil dependency)."""
+    import time
     app = validate.identifier(app, "app")
     pid = _resolve_pid(app)
     out = {"app": app, "pid": pid, "up": pid is not None,
-           "rss_mb": None, "threads": None, "uptime_s": None}
+           "rss_mb": None, "threads": None, "uptime_s": None, "cpu_pct": None}
     if not pid:
         return out
+    # CPU%: sample utime+stime (clock ticks) over a short interval. Can exceed
+    # 100% on multi-core (sum across threads). On-demand only — never the 5s poll.
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+
+        def _jiffies():
+            with open("/proc/%d/stat" % pid) as f:
+                parts = f.read().split()
+            return int(parts[13]) + int(parts[14])  # utime + stime
+
+        j0 = _jiffies()
+        t0 = time.time()
+        time.sleep(0.12)
+        j1 = _jiffies()
+        dt = max(time.time() - t0, 1e-6)
+        out["cpu_pct"] = round((j1 - j0) / hz / dt * 100.0, 1)
+    except Exception:  # noqa: BLE001 (process may exit mid-sample)
+        out["cpu_pct"] = None
     try:
         with open("/proc/%d/status" % pid) as f:
             for line in f:

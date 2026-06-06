@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.16.2] — 2026-06-06
+
+### Fixed (detail drawer correctness)
+- **"Live CPU" showed the thread count, not CPU.** `metrics()` never returned a
+  CPU figure, so the drawer's "Live CPU" fell back to `<n> threads`. `metrics()`
+  now samples `/proc/<pid>/stat` over a short interval to report a real `cpu_pct`;
+  the drawer shows CPU %, plus separate **Threads** and a populated **Uptime** row.
+- **Site & SSL alarmed on HTTP-only apps.** A site with no SSL configured showed a
+  red "HTTPS unreachable" / "no redirect", as if broken. It now shows neutral
+  **"HTTP only" / "not enabled"**; "no redirect" / "unreachable" are flagged as
+  errors *only when HTTPS is actually enabled*.
+- **`GetSiteStatus` wasted a 3s timeout** probing `https://` on HTTP-only sites
+  (nothing listens on :443). The HTTPS probe is now skipped unless the site has a
+  cert/SSL — the call dropped from ~3s to ~0.1s.
+- The drawer Overview now surfaces the **"runtime missing"** state, and the Metrics
+  modal gained a **CPU** row.
+
 ## [0.16.1] — 2026-06-06
 
 ### Fixed

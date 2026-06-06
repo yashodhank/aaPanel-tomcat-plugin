@@ -122,8 +122,11 @@ def _probe_https(domain: str) -> Dict:
     return res
 
 
-def _site_probe(domain: str) -> Dict:
-    return {"http": _probe_http(domain), "https": _probe_https(domain)}
+def _site_probe(domain: str, do_https: bool = True) -> Dict:
+    # Only probe HTTPS when the site actually has SSL — otherwise https:// just
+    # hangs to the full timeout on a non-existent :443 (3s wasted per call).
+    return {"http": _probe_http(domain),
+            "https": _probe_https(domain) if do_https else {"reachable": False, "code": None}}
 
 
 def probe(app: str, probe_site: bool = True) -> Dict:
@@ -166,7 +169,9 @@ def probe(app: str, probe_site: bool = True) -> Dict:
             out["cert"] = None
         if probe_site:
             try:
-                out["site"] = _site_probe(domain)
+                cert = out["cert"]
+                has_ssl = bool(out["ssl_marker"] or (cert and cert.get("exists")))
+                out["site"] = _site_probe(domain, do_https=has_ssl)
             except Exception:
                 out["site"] = None
     return out

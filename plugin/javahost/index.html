@@ -2020,13 +2020,15 @@
       kv('Port', port)+
       kv('Context', x.context)+
       kv('Runtime', runtimeLabel(x))+
+      (x.runtime_ok===false ? '<div class="jh-kv"><span>Runtime status</span><span class="jh-badge danger" title="The pinned JDK is missing — running on an already-started JVM; will NOT survive a restart. Reinstall the runtime or repoint the app."><span class="jh-dot"></span>runtime missing</span></div>' : '')+
       kv('Backend', x.backend)+
       kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
-      kv('Uptime', x.uptime!=null?x.uptime:'—')+
+      '<div class="jh-kv"><span>Uptime</span><span class="jh-muted" id="dw-uptime">—</span></div>'+
       openRow+
       sslRow+
       '<div class="jh-kv"><span>Live CPU</span><span class="jh-muted" id="dw-cpu">—</span></div>'+
       '<div class="jh-kv"><span>Live memory</span><span class="jh-muted" id="dw-mem">—</span></div>'+
+      '<div class="jh-kv"><span>Threads</span><span class="jh-muted" id="dw-threads">—</span></div>'+
     '</div>'+ siteBlock +
     (hasDomain ? '' : '<div class="jh-alert info" style="margin-top:var(--s3)">'+ic('info')+'<div>No reverse-proxy site — set one up to expose this app and enable HTTPS.</div></div>');
     checkHealth(app);
@@ -2035,9 +2037,11 @@
     call('GetMetrics', {app:app}, function(r){
       if(DRAWER.app !== app || DRAWER.tab !== 'overview') return;
       var m = payload(r); if(failed(r)) return;
-      var cpu = $('dw-cpu'), mem = $('dw-mem');
-      if(cpu) cpu.textContent = (m.cpu_pct!=null?m.cpu_pct+'%':(m.threads!=null?m.threads+' threads':'—'));
-      if(mem) mem.textContent = (m.rss_mb!=null?m.rss_mb+' MB':'—');
+      var cpu = $('dw-cpu'), mem = $('dw-mem'), up = $('dw-uptime'), th = $('dw-threads');
+      if(cpu) cpu.textContent = (m.cpu_pct!=null ? m.cpu_pct+'%' : '—');   // CPU%, never threads
+      if(mem) mem.textContent = (m.rss_mb!=null ? m.rss_mb+' MB' : '—');
+      if(up)  up.textContent  = (m.uptime_s!=null ? fmtUptime(m.uptime_s) : '—');
+      if(th)  th.textContent  = (m.threads!=null ? String(m.threads) : '—');
     });
   }
   function drawerSetHealth(up, detail){
@@ -2087,26 +2091,34 @@
         '<span class="jh-muted" style="overflow-wrap:anywhere">'+esc(domBare)+'</span></span></div>';
 
       var site = p && p.site;
-      // HTTP -> HTTPS redirect
       var http = site && site.http;
-      if(http && http.code != null){
-        var red = !!http.redirects_to_https;
-        html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span>'+
-          (red ? pillSpan('ok', 'redirects', 'HTTP '+http.code+' redirects to HTTPS')
-               : pillSpan('neutral', 'no redirect', 'HTTP '+http.code))+'</div>';
-      } else {
-        html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span><span class="jh-muted">—</span></div>';
-      }
-      // HTTPS reachable + code
       var https = site && site.https;
-      if(https){
-        var reach = !!https.reachable;
-        var codeTxt = (https.code != null ? ('HTTP '+https.code) : 'no response');
+      if(!sslOn){
+        // HTTPS is NOT enabled for this site — HTTP-only is a valid state, not an
+        // error. Show neutral "off" pills, never red "unreachable"/"no redirect".
+        html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span>'+
+          pillSpan('neutral', 'HTTP only', 'HTTPS is not enabled for this site')+'</div>';
         html += '<div class="jh-kv"><span>HTTPS</span>'+
-          (reach ? pillSpan('ok', codeTxt, 'HTTPS reachable')
-                 : pillSpan('off', 'unreachable', codeTxt))+'</div>';
+          pillSpan('neutral', 'not enabled', 'Toggle HTTPS to provision a Let’s Encrypt certificate')+'</div>';
       } else {
-        html += '<div class="jh-kv"><span>HTTPS</span><span class="jh-muted">—</span></div>';
+        // HTTPS IS enabled — now a missing redirect / unreachable HTTPS is a real problem.
+        if(http && http.code != null){
+          var red = !!http.redirects_to_https;
+          html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span>'+
+            (red ? pillSpan('ok', 'redirects', 'HTTP '+http.code+' redirects to HTTPS')
+                 : pillSpan('danger', 'no redirect', 'HTTPS is on but HTTP does not redirect (HTTP '+http.code+')'))+'</div>';
+        } else {
+          html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span><span class="jh-muted">—</span></div>';
+        }
+        if(https){
+          var reach = !!https.reachable;
+          var codeTxt = (https.code != null ? ('HTTP '+https.code) : 'no response');
+          html += '<div class="jh-kv"><span>HTTPS</span>'+
+            (reach ? pillSpan('ok', codeTxt, 'HTTPS reachable')
+                   : pillSpan('off', 'unreachable', codeTxt))+'</div>';
+        } else {
+          html += '<div class="jh-kv"><span>HTTPS</span><span class="jh-muted">—</span></div>';
+        }
       }
       // cert validity + days-to-expiry (warn <14d, error if expired/missing-with-ssl-on)
       var cert = p && p.cert, certCls = 'neutral', certTxt = '—', certTitle = '';
@@ -2579,6 +2591,7 @@
     return '<div class="jh-kv"><span>Status</span>'+
         '<span class="jh-badge ok" id="m-status"><span class="jh-dot"></span>up</span></div>'+
       kv('PID', '—', 'm-pid')+
+      kv('CPU', '—', 'm-cpu')+
       kv('Memory', '—', 'm-mem')+
       kv('Threads', '—', 'm-thr')+
       kv('Uptime', '—', 'm-up')+
@@ -2619,6 +2632,7 @@
         });
       }
       setText('m-pid', pid);
+      setText('m-cpu', p.cpu_pct != null ? p.cpu_pct + '%' : '—');
       setText('m-mem', p.rss_mb != null ? p.rss_mb + ' MB' : '—');
       setText('m-thr', p.threads != null ? p.threads : '—');
       setText('m-up', fmtUptime(p.uptime_s));
