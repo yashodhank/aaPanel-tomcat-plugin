@@ -229,11 +229,14 @@ class javahost_main(object):
     # ---- apps ----
     def CreateApp(self, get):
         try:
+            jv = panel.attr(get, "java", None)
+            prefer_java = int(jv) if jv is not None and str(jv) not in ("", "None", "0") else None
             res = instance.create(
                 app=panel.attr(get, "app"),
                 major=panel.attr(get, "version"),
                 port=panel.attr(get, "port", 8080),
                 memory_mb=panel.attr(get, "memory", 512),
+                prefer_java=prefer_java,
             )
             panel.log("CreateApp", "%(app)s tomcat=%(tomcat)s port=%(port)s" % res)
             return panel.ok(res)

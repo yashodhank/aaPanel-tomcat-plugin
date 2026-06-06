@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.13.2] — 2026-06-06
+
+### Fixed
+- **Apps defaulted to the newest JDK (e.g. Java 21) regardless of Tomcat.**
+  `instance.create()` resolved the JVM with no preference, and `java.resolve()`
+  returns the highest installed JDK ≥ the Tomcat minimum — so every app created
+  without an explicit JDK landed on 21. Now, when no JDK is requested, the default
+  is the **Tomcat line's baseline** (`min_java`: 9→8, 10.1→11, 11→17), giving
+  era-appropriate runtimes.
+
+### Added
+- **`CreateApp` accepts a `java` parameter** to pin the JDK per app (the deploy
+  matrix already pinned via `prefer_java`; the panel endpoint now exposes it too).
+
 ## [0.13.1] — 2026-06-06
 
 ### Fixed

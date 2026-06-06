@@ -303,6 +303,11 @@ def create(app: str, major: str, port: int, memory_mb: int,
     # allocate_port honors a requested port (and rejects conflicts) or picks a free one
     port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
     home = installer.home_path(major)
+    # Default the JDK to the Tomcat line's baseline (min_java) instead of the
+    # newest installed — otherwise every app silently lands on the highest JDK
+    # (e.g. 21) regardless of Tomcat. Callers can still pin any JDK via prefer_java.
+    if prefer_java in (None, "", 0, "0"):
+        prefer_java = registry.get_line(major).min_java
     java_home = installer.ensure_java(major, prefer=prefer_java)
     major_java = java.probe(java_home) or registry.get_line(major).min_java
     base = base_path(app)
