@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.3.0] — 2026-06-06
+
+### Added
+- `UploadWar` + `MigrateWar` endpoints. `war.migrate()` runs the Apache Tomcat
+  Migration Tool for Jakarta EE (verified download, SHA-512 fail-closed) to convert
+  `javax.*` WARs for Tomcat 10/11.
+- Port allocation + conflict detection (`instance.allocate_port`/`port_in_use`/
+  `used_ports`) — closes compatibility-matrix item B5; `CreateApp` now rejects a
+  taken port or auto-picks a free one.
+- End-to-end smoke harnesses (`tests/e2e/`): full systemd chain + a service-less
+  variant for hardened hosts. Validated on Ubuntu 24.04 — Tomcat 11 serves a
+  deployed app on the auto-allocated loopback port.
+
+### Fixed (found by real-host E2E)
+- Service install detects immutable/locked service dirs (e.g. aaPanel "System
+  Hardening" `chattr +i`) and raises a clear, actionable error instead of EPERM;
+  per-app systemd/init.d backend resolution keeps fallback consistent.
+- Installer makes shared `CATALINA_HOME` group/other `r-X` so the `www` run-user
+  can execute `catalina.sh` (Apache tar ships `bin/*.sh` as 0750).
+- Each per-app `CATALINA_BASE` now gets the default `conf/web.xml` (DefaultServlet
+  + welcome-files) and is chowned to the run user — fixes a `/` → 404 on deploy.
+
 ## [0.2.0] — 2026-06-06
 
 ### Added
