@@ -76,10 +76,34 @@ CLASSFILE_MAJOR = {8: 52, 11: 55, 17: 61, 21: 65}
 
 # --- JSP / Java sources -----------------------------------------------------
 
-HELLO_JSP = """<%@ page contentType="text/plain; charset=UTF-8" %><%
-out.print("JAVAHOST_OK");
-out.print(" tomcat=" + application.getServerInfo());
-out.print(" java=" + System.getProperty("java.version"));
+HELLO_JSP = """<%@ page contentType="text/plain; charset=UTF-8" import="java.lang.management.*" %><%
+// FIRST line stays the machine-readable marker (deploy_matrix/matrix_full/tests grep it).
+out.println("JAVAHOST_OK tomcat=" + application.getServerInfo()
+            + " java=" + System.getProperty("java.version"));
+// --- secret-safe "served by" block (same aligned label : value style as dbcheck) ---
+out.println("--- served by ---");
+out.println("servlet        : " + application.getServerInfo()
+            + " (Servlet " + application.getMajorVersion() + "." + application.getMinorVersion() + ")");
+out.println("java           : " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
+out.println("jvm            : " + System.getProperty("java.vm.name") + " " + System.getProperty("java.vm.version"));
+out.println("os             : " + System.getProperty("os.name") + " " + System.getProperty("os.version") + " " + System.getProperty("os.arch"));
+StringBuilder __args = new StringBuilder();
+try {
+    java.util.regex.Pattern __redact = java.util.regex.Pattern.compile("(?i)(pass|secret|token|key|pwd|credential)");
+    for (String __a : ManagementFactory.getRuntimeMXBean().getInputArguments()) {
+        if (__a == null || __redact.matcher(__a).find()) continue;   // drop secret-bearing JVM args
+        if (__args.length() > 0) __args.append(" ");
+        __args.append(__a);
+    }
+} catch (Throwable __ig) {}
+out.println("jvm args       : " + __args.toString());
+String __ctx = request.getContextPath(); if (__ctx == null || __ctx.isEmpty()) __ctx = "/";
+out.println("context path   : " + __ctx);
+out.println("request scheme : " + request.getScheme());
+out.println("request host   : " + request.getServerName() + ":" + request.getServerPort());
+out.println("safe sysprops  : file.encoding=" + System.getProperty("file.encoding")
+            + " user.timezone=" + System.getProperty("user.timezone")
+            + " java.io.tmpdir=" + System.getProperty("java.io.tmpdir"));
 %>
 """
 

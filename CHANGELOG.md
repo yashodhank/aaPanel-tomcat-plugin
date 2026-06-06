@@ -3,6 +3,52 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.14.0] — 2026-06-06
+
+Outcome of a full 3-dimension code review (UI / backend / tests-docs).
+
+### Security
+- **init.d JAR services no longer shell-source `app.env`** — `. app.env` expanded
+  `$(...)`/backticks in values, so a DB password could execute as root on init.d
+  hosts. The script now loads vars line-by-line without re-evaluation.
+
+### Added
+- **Async app lifecycle:** `StartAppAction{app,action}` runs start/stop/restart/
+  repair as background jobs (non-blocking, pollable) — the UI no longer freezes on
+  slow systemd operations. Sync `AppAction` kept.
+- **SSL / site-status detection:** `GetSiteStatus{app}` reports app health, the
+  configured domain, cert presence/validity/expiry (`openssl x509 -enddate`), and
+  real HTTP→HTTPS-redirect + HTTPS reachability. Surfaced in the drawer's new
+  **Site & SSL** block (cert days-to-expiry warns <14d / errors when expired).
+- **`hello.war` dev-info page:** every demo WAR now prints a secret-safe stack
+  trace (servlet/Tomcat, Java vendor+version, JVM, OS, filtered JVM args, context,
+  request scheme/host, allowlisted sysprops) after the `JAVAHOST_OK` marker.
+
+### Changed
+- **De-hardcoded the reverse-proxy domain** (was `5d.bisotech.in` baked into shipped
+  code): the suffix is now the `site_suffix` plugin config (empty by default;
+  `GetStatus` exposes it; the UI prompts for a domain when unset). No vendor FQDN
+  ships in the OSS plugin.
+
+### Fixed
+- aaPanel native-SSL/site calls now check the API's returned status instead of
+  assuming success, so the **certbot fallback actually runs** when native fails
+  (and the nginx-include is always ensured).
+- `ssl.enable` always falls back to certbot when native doesn't place a cert;
+  certbot errors are surfaced (rate-limit/DNS/challenge) instead of swallowed.
+- UI: `looksLikeLoginHtml` no longer treats *any* HTML as session-expiry;
+  delete/lifecycle actions are guarded against double-fire and the 5s poll no
+  longer wipes in-flight busy state; dead code removed (`metricRow`, stray
+  `data-app`); doc viewer got a Close button; dashboard `aria-busy` cleared.
+- `ensure_include` matches the nginx `http{}` block safely and rolls back on a
+  failed `nginx -t`; `GetProxyHint` is now exception-safe; jobs are pruned.
+
+### Docs / CI
+- Documented per-site HTTPS (`SetSiteSSL`) across the docs + skill + README;
+  fixed the stale `testbed.md` fixture table (`app.jar`/`boot.jar`); CI gained an
+  offline `matrix_full --dry-run` drift check + a `matrix_plan` test; clean-room
+  guard now also rejects `tomcat2_main*.pyc`.
+
 ## [0.13.2] — 2026-06-06
 
 ### Fixed

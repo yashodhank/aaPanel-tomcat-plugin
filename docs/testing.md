@@ -23,16 +23,21 @@ repository root:
 make samples
 ```
 
-This runs `tests/fixtures/make_samples.py` and writes five artifacts to
-`tests/fixtures/out/`:
+This runs `tests/fixtures/make_samples.py --all` and writes four artifacts to
+`tests/fixtures/out/` (the DB probe artifacts are added separately by
+`make samples-db`, see below):
 
 | Artifact | Shape | What it exercises |
 |----------|-------|-------------------|
 | `hello.war` | `jakarta.*` WAR | baseline WAR deploy on Tomcat 10/11; prints `JAVAHOST_OK` |
 | `legacy.war` | `javax.*` WAR | namespace warning + the `javax`→`jakarta` migrate path |
-| `app.jar` | executable fat JAR | service-less JAR app; reads a Spring-style profile |
-| `boot.jar` | Spring Boot fat JAR | Spring Boot auto-detection + profile pass-through |
-| `dbcheck.war` | WAR with a JDBC probe | reads `app.env`, connects, prints `DB_OK` |
+| `app.jar` | executable fat JAR | service-less JAR app (`com.sun.net.httpserver`) |
+| `boot.jar` | Spring Boot-shaped JAR | Spring Boot auto-detection (detection-only) |
+
+`app.jar` needs `javac` on the box; without it the JAR is skipped with a warning
+and the run still succeeds. To add the DB probe artifacts run `make samples-db`,
+which builds `dbcheck.war` (WAR + JDBC/Mongo probe → `DB_OK`) and `dbapp.jar`
+(executable JAR + DB probe) per engine.
 
 Copy these to a path the panel file API can reach (e.g. your home dir on the
 host) so the UI upload dialogs can pick them up.
@@ -169,6 +174,30 @@ generated Nginx **include snippet** (it targets a local upstream like
 `127.0.0.1:<port>`) into the site's Nginx config to publish a managed app on a
 domain. JavaHost owns only its own vhost and never edits other plugins' configs.
 
+Create the managed site itself with **`SetSite{app, domain?}`** (remove with
+**`RemoveSite{app}`**). With no `domain`, JavaHost uses the `<app>.<suffix>`
+convention — where the suffix comes from the plugin config key **`site_suffix`**
+(in `/www/server/javahost/config.json`), which is **empty by default**, so with no
+suffix configured you must pass an explicit `domain` (no FQDN is ever guessed).
+
+### Per-site HTTPS
+
+Once a site exists, enable Let's Encrypt TLS for it with
+**`SetSiteSSL{app, enable, email?}`**:
+
+1. `SetSiteSSL{app: hello, enable: 1, email: you@example.com}` — issues a cert
+   (aaPanel-native ACME first, **certbot `--webroot` fallback**) and rewrites the
+   vhost so `:443` terminates TLS while `:80` serves the ACME challenge and
+   301-redirects to https. Verify: `curl -s https://<domain>/ | grep JAVAHOST_OK`,
+   and the `hello.war` "served by" block should now report `request scheme : https`.
+2. `SetSiteSSL{app: hello, enable: 0}` — reverts to plain HTTP. The **cert is kept
+   on disk** so re-enabling is instant.
+
+Behind the scenes a certbot **deploy hook**
+(`/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh`) is installed so nginx
+reloads automatically after each renewal, and the on/off state is recorded per
+instance at `<base>/bin/site.ssl`.
+
 ---
 
 ## 7. Cleanup
@@ -188,6 +217,11 @@ The same deploy paths run unattended via the in-repo end-to-end harness:
 make samples       # tests/fixtures/make_samples.py --all
 make test-deploy   # tests/e2e/deploy_matrix.py
 ```
+
+> **Manual on-box harness:** `tests/e2e/smoke.py` is a quick single-deploy smoke
+> test you run by hand on a panel host (`python3 tests/e2e/smoke.py`); it has **no
+> `make` target** by design — it is the minimal "is the plugin wired up at all?"
+> check, distinct from the `make test-deploy` / `make matrix` campaigns.
 
 `make test-deploy` exercises the WAR/JAR/migrate matrix service-less (no DB). The
 opt-in CI workflow `.github/workflows/deploy-matrix.yml` runs the same harness on

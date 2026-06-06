@@ -245,6 +245,34 @@ The generated proxy targets a **local** upstream (e.g. `127.0.0.1:<port>`);
 JavaHost owns only its own vhost and never edits other plugins' configs. Paste the
 include into the site's Nginx config to publish the app on a domain.
 
+JavaHost can also create the managed site for you with **`SetSite{app, domain?}`**
+(remove with **`RemoveSite{app}`**). With no `domain`, it uses the
+`<app>.<suffix>` convention, where the suffix is the plugin config key
+**`site_suffix`** (in `/www/server/javahost/config.json`). `site_suffix` is
+**empty by default** — so unless you set one, you supply an explicit domain and no
+FQDN is ever guessed.
+
+### Per-site HTTPS (Let's Encrypt)
+
+Once a reverse-proxy site exists, turn on TLS for it with
+**`SetSiteSSL{app, enable, email?}`**:
+
+- **`enable` truthy** — issues a Let's Encrypt certificate and rewrites the vhost
+  to terminate TLS on `:443`; the `:80` server keeps serving the ACME challenge
+  and 301-redirects to https. Issuance tries aaPanel's **native ACME first** and
+  falls back to **certbot `--webroot`** if that doesn't place a live cert. `email`
+  is optional (used for ACME registration). The domain is the site's stored
+  domain, an explicit `domain`, or the `site_suffix` convention — never a guessed
+  FQDN.
+- **`enable` falsy** — reverts the site to plain HTTP. The **certificate is kept
+  on disk**, so re-enabling is instant.
+
+A certbot **deploy hook**
+(`/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh`) is installed so nginx
+reloads automatically after each renewal, and the SSL on/off state is recorded per
+instance at `<base>/bin/site.ssl`. With SSL on, the app sees `X-Forwarded-Proto:
+https`, so its request scheme reads `https` end-to-end.
+
 ---
 
 ## 7. System hardening

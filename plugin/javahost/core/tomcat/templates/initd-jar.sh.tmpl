@@ -18,7 +18,16 @@ JAR="$APP_DIR/app.jar"
 JAVA_OPTS="@@java_opts@@"
 
 start() {
-  [ -f "$APP_DIR/bin/app.env" ] && . "$APP_DIR/bin/app.env"
+  # Load app.env WITHOUT shell-sourcing it: `. file` would expand $(...)/backticks
+  # in values (e.g. a DB password), enabling command injection. Read line-by-line
+  # and export literally instead — `export "$k=$v"` does not re-evaluate $v.
+  if [ -f "$APP_DIR/bin/app.env" ]; then
+    while IFS='=' read -r __k __v; do
+      case "$__k" in ''|\#*) continue ;; esac
+      __v="${__v%\"}"; __v="${__v#\"}"
+      export "$__k=$__v"
+    done < "$APP_DIR/bin/app.env"
+  fi
   # runuser (not the aaPanel-jailed `su`) to drop privileges.
   runuser -u "$RUNAS" -- bash -c "cd '$APP_DIR' && exec '$JAVA_HOME/bin/java' $JAVA_OPTS -jar '$JAR' >> '$APP_DIR/logs/app.out' 2>&1 & echo \$! > '$PIDFILE'"
 }

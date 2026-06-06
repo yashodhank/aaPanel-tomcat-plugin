@@ -42,3 +42,14 @@ def aapanel_port(default: int = 37778):
         return int(get("aapanel_port", default) or default)
     except (TypeError, ValueError):
         return default
+
+
+def site_suffix() -> str:
+    """Public-domain suffix the plugin appends to an app name to form a default
+    reverse-proxy domain (e.g. suffix "example.com" -> "<app>.example.com").
+
+    Read from the plugin config key "site_suffix"; defaults to "" (empty). When
+    empty there is NO baked-in domain — callers must require an explicit ?domain=
+    (no FQDN is ever guessed). Never hardcoded into the shipped plugin."""
+    val = get("site_suffix", "")
+    return str(val).strip().strip(".") if val else ""

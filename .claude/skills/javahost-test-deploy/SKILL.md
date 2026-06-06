@@ -138,12 +138,34 @@ reachable on their raw public port. You reach them through a reverse-proxy domai
 DNS `*.5d.bisotech.in` (and apex `5d.bisotech.in`) already points to the box.
 
 - **`SetSite{app, domain?}`** — create a reverse-proxy site → app's loopback port.
-  No `domain` ⇒ `<app>.5d.bisotech.in`. Uses the aaPanel site API, falls back to
-  writing an nginx vhost. `--proxy` does this and asserts the hostname for you.
+  No `domain` ⇒ `<app>.<suffix>`, where the suffix is the plugin config key
+  **`site_suffix`** (`/www/server/javahost/config.json`), **empty by default** —
+  so with no suffix set you MUST pass `domain` (no FQDN is guessed). The campaign
+  box has `site_suffix: "5d.bisotech.in"`, hence `<app>.5d.bisotech.in`. Uses the
+  aaPanel site API, falls back to writing an nginx vhost. `--proxy` does this and
+  asserts the hostname for you.
 - **`RemoveSite{app}`** — remove that site (teardown).
 
 Verify: `curl http://<app>.5d.bisotech.in/ | grep JAVAHOST_OK` (off-box) or
 `curl http://127.0.0.1:<port>/` (on-box). Never expect the app on `public-ip:port`.
+
+### Per-site HTTPS (`SetSiteSSL`)
+
+- **`SetSiteSSL{app, enable, email?}`** — `enable` truthy issues a Let's Encrypt
+  cert and flips the vhost to HTTPS (`:443` terminates TLS, `:80` serves the ACME
+  challenge + 301-redirects); falsy reverts to plain HTTP. The domain is the
+  site's stored domain / `?domain=` / the `site_suffix` convention — never guessed.
+- **Issuance: aaPanel-native first, certbot `--webroot` fallback** (both serve the
+  HTTP-01 challenge from a shared webroot, so no downtime).
+- **Auto-renewal** via a certbot deploy hook
+  (`/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh`) that reloads nginx.
+- **State marker** `<base>/bin/site.ssl` (read by `list_apps()`); the `:443` vhost
+  uses the LE live cert at `/etc/letsencrypt/live/<domain>/`.
+- **Cert kept on disable** — re-enabling is instant (no re-issue).
+
+With SSL on, `request scheme` reads `https` end-to-end (proxy sets
+`X-Forwarded-Proto https`) — visible in the `hello.war` "served by" block. Verify:
+`curl -s https://<app>.5d.bisotech.in/ | grep JAVAHOST_OK`.
 
 ## 6. Tasks & Logs (observability)
 

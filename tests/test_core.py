@@ -10,7 +10,7 @@ from core.util import validate, immutable
 from core import config
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
-from core.deploy import war, jar, proxy, ssl
+from core.deploy import war, jar, proxy, ssl, sitestatus
 from core.db import pg, mysql, mongo, engines as dbengines
 
 
@@ -703,8 +703,10 @@ def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
     monkeypatch.setattr(ssl, "_install_renewal_hook", lambda: None)
     monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)   # native unavailable
-    monkeypatch.setattr(ssl, "_certbot_issue", lambda domain, email=None: True)  # certbot succeeds
+    monkeypatch.setattr(ssl, "_certbot_issue",
+                        lambda domain, email=None: (True, None))  # certbot succeeds
     monkeypatch.setattr(ssl, "_cert_exists", lambda domain: True)      # cert now present
+    monkeypatch.setattr(ssl, "_cert_not_after", lambda domain: None)   # skip openssl
 
     res = ssl.enable("site", "app.example.com", 8085)
     assert res == {"ssl": True, "url": "https://app.example.com/", "via": "certbot"}
@@ -723,12 +725,228 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
     monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)
-    monkeypatch.setattr(ssl, "_certbot_issue", lambda domain, email=None: False)
+    monkeypatch.setattr(ssl, "_certbot_issue",
+                        lambda domain, email=None: (False, "rate limited"))
     monkeypatch.setattr(ssl, "_cert_exists", lambda domain: False)
 
     res = ssl.enable("site", "app.example.com", 8085)
     assert res["ssl"] is False and "error" in res
+    assert "rate limited" in res["error"]  # certbot stderr surfaced (M5)
     assert ssl.read_ssl("site") is False
     # HTTP vhost left in place (no 443 server)
     conf = open(proxy.vhost_path("site")).read()
     assert "listen 443 ssl;" not in conf
+
+
+# ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
+def test_set_site_falls_back_when_aapanel_status_false(tmp_path, monkeypatch):
+    """aaPanel methods return {"status": False, ...} on failure without raising.
+    aapanel_add_site must report ok=False so set_site writes the nginx vhost."""
+    vdir = str(tmp_path / "vhost")
+    monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
+
+    class _FakeSite(object):
+        def add_redirect(self, g):
+            return {"status": False, "msg": "site exists"}  # explicit failure
+
+    class _FakeMod(object):
+        panelSite = _FakeSite
+
+    monkeypatch.setitem(__import__("sys").modules, "panelSite", _FakeMod())
+
+    aap = proxy.aapanel_add_site("demo.example.com", 8080)
+    assert aap["ok"] is False  # status=False is NOT treated as success
+
+    res = proxy.set_site("demo", "demo.example.com", 8080)
+    assert res["via"] == "nginx-vhost"
+    assert os.path.isfile(os.path.join(vdir, "demo.conf"))
+
+
+def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
+
+    class _FakeSite(object):
+        def add_redirect(self, g):
+            return {"status": True, "msg": "ok"}
+
+    class _FakeMod(object):
+        panelSite = _FakeSite
+
+    monkeypatch.setitem(__import__("sys").modules, "panelSite", _FakeMod())
+    res = proxy.set_site("demo", "demo.example.com", 8081)
+    assert res["via"] == "aapanel"
+    assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
+
+
+# ---- ssl.disable reverts to HTTP and clears the marker ----------------------
+def test_ssl_disable_reverts_to_http(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    ssl._mark_ssl("site", True)
+    assert ssl.read_ssl("site") is True
+    res = ssl.disable("site", "app.example.com", 8085)
+    assert res == {"ssl": False, "url": "http://app.example.com/"}
+    assert ssl.read_ssl("site") is False
+    conf = open(proxy.vhost_path("site")).read()
+    assert "listen 443 ssl;" not in conf
+    assert "proxy_pass http://127.0.0.1:8085;" in conf
+
+
+# ---- ssl.enable native-success path stores cert not_after in the marker -----
+def test_ssl_enable_marker_carries_not_after(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(ssl, "_install_renewal_hook", lambda: None)
+    monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: True)   # native succeeds
+    monkeypatch.setattr(ssl, "_cert_exists", lambda domain: True)
+    monkeypatch.setattr(ssl, "_cert_not_after", lambda domain: "2026-09-01T00:00:00Z")
+
+    res = ssl.enable("site", "app.example.com", 8085)
+    assert res["ssl"] is True and res["via"] == "aapanel"
+    assert res["not_after"] == "2026-09-01T00:00:00Z"
+    marker = open(ssl._ssl_marker("site")).read()
+    assert "2026-09-01T00:00:00Z" in marker
+    assert ssl.read_ssl("site") is True
+
+
+# ---- site_suffix de-hardcode -------------------------------------------------
+def test_site_suffix_default_empty_and_default_domain_none(monkeypatch):
+    # no config file -> empty suffix -> no synthesized domain
+    monkeypatch.setattr(config, "site_suffix", lambda: "")
+    assert proxy.default_domain("myapp") is None
+
+
+def test_default_domain_uses_configured_suffix(monkeypatch):
+    monkeypatch.setattr(config, "site_suffix", lambda: "example.com")
+    assert proxy.default_domain("myapp") == "myapp.example.com"
+
+
+def test_setsite_errors_without_domain_or_suffix(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.config, "site_suffix", lambda: "")
+    monkeypatch.setattr(javahost_main.proxy, "default_domain", lambda app: None)
+
+    class G(object):
+        app = "demo"
+        domain = None
+
+    res = javahost_main.javahost_main().SetSite(G())
+    assert res.get("status") is False
+    assert "no domain" in (res.get("msg") or "")
+
+
+# ---- sitestatus.probe shape (openssl + urllib monkeypatched) ----------------
+def test_sitestatus_probe_full_shape(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+
+    monkeypatch.setattr(sitestatus.instance, "health",
+                        lambda app, **k: {"app": app, "up": True, "code": 200, "port": 8085})
+    monkeypatch.setattr(sitestatus.proxy, "read_domain", lambda app: "app.example.com")
+    monkeypatch.setattr(sitestatus.ssl, "read_ssl", lambda app: True)
+    # cert file present + openssl returns a parseable enddate
+    monkeypatch.setattr(sitestatus.ssl, "_live_fullchain",
+                        lambda d: str(tmp_path / "fullchain.pem"))
+    (tmp_path / "fullchain.pem").write_text("x")
+    monkeypatch.setattr(sitestatus.shell, "run",
+                        lambda argv, **k: (0, "notAfter=Sep  1 00:00:00 2099 GMT\n", ""))
+    monkeypatch.setattr(sitestatus, "_probe_http",
+                        lambda d: {"code": 301, "redirects_to_https": True})
+    monkeypatch.setattr(sitestatus, "_probe_https",
+                        lambda d: {"reachable": True, "code": 200})
+
+    res = sitestatus.probe("site", probe_site=True)
+    assert set(res) == {"app", "health", "domain", "ssl_marker", "cert", "site"}
+    assert res["domain"] == "app.example.com"
+    assert res["ssl_marker"] is True
+    assert res["cert"]["exists"] is True
+    assert res["cert"]["not_after"].startswith("2099-09-01")
+    assert res["cert"]["valid"] is True and res["cert"]["days_left"] > 0
+    assert res["site"]["http"] == {"code": 301, "redirects_to_https": True}
+    assert res["site"]["https"] == {"reachable": True, "code": 200}
+
+
+def test_sitestatus_probe_no_domain(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(sitestatus.instance, "health",
+                        lambda app, **k: {"app": app, "up": False, "code": None, "port": None})
+    monkeypatch.setattr(sitestatus.proxy, "read_domain", lambda app: None)
+    monkeypatch.setattr(sitestatus.ssl, "read_ssl", lambda app: False)
+    res = sitestatus.probe("site", probe_site=True)
+    assert res["domain"] is None
+    assert res["cert"] is None      # no domain -> no cert lookup
+    assert res["site"] is None      # no domain -> nothing to reach
+
+
+def test_sitestatus_probe_site_skipped_when_false(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(sitestatus.instance, "health",
+                        lambda app, **k: {"app": app, "up": True, "code": 200, "port": 8085})
+    monkeypatch.setattr(sitestatus.proxy, "read_domain", lambda app: "app.example.com")
+    monkeypatch.setattr(sitestatus.ssl, "read_ssl", lambda app: False)
+    monkeypatch.setattr(sitestatus.ssl, "_live_fullchain", lambda d: str(tmp_path / "none.pem"))
+
+    def _boom(d):
+        raise AssertionError("network probe ran despite probe_site=False")
+
+    monkeypatch.setattr(sitestatus, "_probe_http", _boom)
+    monkeypatch.setattr(sitestatus, "_probe_https", _boom)
+    res = sitestatus.probe("site", probe_site=False)
+    assert res["site"] is None
+    assert res["cert"] is None      # no cert file
+
+
+# ---- StartAppAction returns a job_id (jobs.start monkeypatched) --------------
+def test_start_app_action_returns_job_id(monkeypatch):
+    import javahost_main
+    captured = {}
+
+    def fake_start(kind, target, argv):
+        captured["kind"] = kind
+        captured["target"] = target
+        captured["argv"] = argv
+        return "app-restart-20260606T000000Z-abc123"
+
+    monkeypatch.setattr(javahost_main.jobs, "start", fake_start)
+
+    class G(object):
+        app = "demo"
+        action = "restart"
+
+    res = javahost_main.javahost_main().StartAppAction(G())
+    assert res["status"] is True
+    assert res["msg"]["job_id"] == "app-restart-20260606T000000Z-abc123"
+    assert res["msg"]["app"] == "demo" and res["msg"]["action"] == "restart"
+    assert captured["kind"] == "app-restart" and captured["target"] == "demo"
+
+
+def test_start_app_action_rejects_bad_action(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.jobs, "start",
+                        lambda *a, **k: pytest.fail("job started for invalid action"))
+
+    class G(object):
+        app = "demo"
+        action = "obliterate"
+
+    res = javahost_main.javahost_main().StartAppAction(G())
+    assert res.get("status") is False
+    assert "invalid action" in (res.get("msg") or "")

@@ -147,8 +147,14 @@ def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
 
-def test_default_domain_convention():
-    assert proxy.default_domain("myapp") == "myapp.5d.bisotech.in"
+def test_default_domain_convention(monkeypatch):
+    # No baked-in suffix any more: default_domain is None unless a site_suffix is
+    # configured, then it is "<app>.<suffix>" (de-hardcode of the old FQDN).
+    from core import config
+    monkeypatch.setattr(config, "site_suffix", lambda: "")
+    assert proxy.default_domain("myapp") is None
+    monkeypatch.setattr(config, "site_suffix", lambda: "example.com")
+    assert proxy.default_domain("myapp") == "myapp.example.com"
 
 
 def test_store_and_read_domain_marker(tmp_path, monkeypatch):

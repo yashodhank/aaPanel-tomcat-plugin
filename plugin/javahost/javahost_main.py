@@ -26,9 +26,10 @@ from core.compat import aapanel as panel       # noqa: E402
 from core.util import validate                  # noqa: E402
 from core.runtime import java                   # noqa: E402
 from core.tomcat import registry, installer, service, instance  # noqa: E402
-from core.deploy import war, proxy, ssl         # noqa: E402
+from core.deploy import war, proxy, ssl, sitestatus  # noqa: E402
 from core.db import engines as dbengines        # noqa: E402
 from core import jobs                            # noqa: E402
+from core import config                          # noqa: E402
 
 
 class javahost_main(object):
@@ -71,6 +72,9 @@ class javahost_main(object):
                     "so JavaHost can register Tomcat/JAR services." if hardening_locked else ""),
                 "exec_filter_active": exec_filter.get("active", False),
                 "exec_filter_hint": exec_filter.get("guidance", ""),
+                # Public-domain suffix (config "site_suffix", "" when unset) so the
+                # UI can offer "<app>.<suffix>" defaults; empty => UI must prompt.
+                "site_suffix": config.site_suffix(),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -158,6 +162,11 @@ class javahost_main(object):
 
     def GetJobs(self, get=None):
         try:
+            # Best-effort GC so JOBS_ROOT can't grow unbounded across installs.
+            try:
+                jobs.prune()
+            except Exception:
+                pass
             return panel.ok({"jobs": jobs.list_jobs()})
         except Exception as e:
             return panel.err(str(e))
@@ -172,12 +181,16 @@ class javahost_main(object):
 
     # ---- reverse-proxy sites ------------------------------------------------
     def SetSite(self, get):
-        """Publish <app> at <domain> (default <app>.5d.bisotech.in) reverse-proxied
-        to its loopback port. Tries aaPanel's site API, falls back to our nginx
-        vhost. Returns {domain, url}."""
+        """Publish <app> at <domain> reverse-proxied to its loopback port. The
+        domain comes from ?domain= or, if a site_suffix is configured, the
+        convention "<app>.<suffix>"; with neither, the caller MUST pass ?domain=
+        (no FQDN is ever guessed). Tries aaPanel's site API, falls back to our
+        nginx vhost. Returns {domain, url}."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             domain = panel.attr(get, "domain") or proxy.default_domain(app)
+            if not domain:
+                return panel.err("no domain: pass ?domain= or set site_suffix in config")
             domain = validate.domain(domain)
             port = instance.detail(app).get("port") or instance.health(app).get("port")
             if not port:
@@ -205,7 +218,15 @@ class javahost_main(object):
         Returns {app, domain, ssl, url, via?}."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            domain = proxy.read_domain(app) or proxy.default_domain(app)
+            # Require a REAL domain: stored site domain, explicit ?domain=, or a
+            # convention domain (only when site_suffix is configured). Never issue
+            # a cert against a guessed FQDN.
+            domain = (proxy.read_domain(app)
+                      or panel.attr(get, "domain", None)
+                      or proxy.default_domain(app))
+            if not domain:
+                return panel.err("no domain configured for %r — create a reverse-proxy "
+                                 "site first or pass domain" % app)
             domain = validate.domain(domain)
             port = instance.detail(app).get("port") or instance.health(app).get("port")
             if not port:
@@ -249,6 +270,43 @@ class javahost_main(object):
             what = panel.attr(get, "action")
             service.action(app, what)
             return panel.ok({"app": app, "status": service.status(app)})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartAppAction(self, get):
+        """Async app lifecycle: run start|stop|restart|repair in a detached job so
+        a slow systemd transition can't time out the panel AJAX worker. Returns
+        {job_id, app, action} at once; the UI polls GetJobs/GetJobLog and reads
+        the resulting status the job prints. The sync AppAction stays for CLI."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            action = str(panel.attr(get, "action") or "").strip().lower()
+            if action not in ("start", "stop", "restart", "repair"):
+                return panel.err("invalid action: %r (start|stop|restart|repair)" % action)
+            if action == "repair":
+                body = ("from core.tomcat import instance, service\n"
+                        "instance.repair(%r)\n"
+                        "print('status:', service.status(%r))\n" % (app, app))
+            else:
+                body = ("from core.tomcat import service\n"
+                        "service.action(%r, %r)\n"
+                        "print('status:', service.status(%r))\n" % (app, action, app))
+            argv = jobs.python_work(body)
+            job_id = jobs.start("app-" + action, app, argv)
+            panel.log("StartAppAction", "%s %s -> job %s" % (app, action, job_id))
+            return panel.ok({"job_id": job_id, "app": app, "action": action})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetSiteStatus(self, get):
+        """On-demand SSL/site status for an app's reverse-proxy site (cert expiry
+        + http/https reachability). Heavier than the list view, so it's a separate
+        endpoint the detail drawer calls. Set probe_site=0 to skip network probes."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            probe_raw = panel.attr(get, "probe_site", True)
+            probe_site = str(probe_raw).lower() not in ("0", "false", "no", "off", "")
+            return panel.ok(sitestatus.probe(app, probe_site=probe_site))
         except Exception as e:
             return panel.err(str(e))
 
@@ -440,12 +498,15 @@ class javahost_main(object):
             return panel.err(str(e))
 
     def GetProxyHint(self, get=None):
-        dbs = []
-        for name in ("postgresql", "mysql", "mariadb", "mongodb"):
-            e = dbengines.get(name)
-            dbs.append({"engine": e.name, "label": e.label, "default_port": e.default_port,
-                        "versions": "%s–%s" % (e.versions[0], e.versions[-1]),
-                        "driver": e.recommend_driver(), "guidance": e.guidance()})
-        return panel.ok({"include": proxy.include_hint(),
-                         "databases": dbs,
-                         "db": dbengines.get("postgresql").guidance()})  # back-compat
+        try:
+            dbs = []
+            for name in ("postgresql", "mysql", "mariadb", "mongodb"):
+                e = dbengines.get(name)
+                dbs.append({"engine": e.name, "label": e.label, "default_port": e.default_port,
+                            "versions": "%s–%s" % (e.versions[0], e.versions[-1]),
+                            "driver": e.recommend_driver(), "guidance": e.guidance()})
+            return panel.ok({"include": proxy.include_hint(),
+                             "databases": dbs,
+                             "db": dbengines.get("postgresql").guidance()})  # back-compat
+        except Exception as e:
+            return panel.err(str(e))

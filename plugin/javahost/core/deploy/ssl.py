@@ -52,6 +52,33 @@ def _cert_exists(domain: str) -> bool:
     return os.path.isfile(_live_fullchain(domain))
 
 
+def _cert_not_after(domain: str) -> Optional[str]:
+    """notAfter (ISO 8601) of the live fullchain, via `openssl x509 -enddate`.
+    Best-effort: returns None if the cert/openssl is absent or unparseable.
+    Never raises (the cert was just placed; this is only for the cheap marker)."""
+    from ..util import shell
+    import time
+    path = _live_fullchain(domain)
+    if not os.path.isfile(path):
+        return None
+    try:
+        # openssl: fixed argv, no shell; path is the plugin-known live cert file.
+        rc, out, _ = shell.run(
+            ["openssl", "x509", "-enddate", "-noout", "-in", path],
+            check=False, timeout=10)
+        if rc != 0 or not out:
+            return None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("notAfter="):
+                raw = line.split("=", 1)[1].strip()
+                t = time.strptime(raw, "%b %d %H:%M:%S %Y %Z")
+                return time.strftime("%Y-%m-%dT%H:%M:%SZ", t)
+    except Exception:
+        return None
+    return None
+
+
 def _ssl_marker(app: str) -> str:
     """<INSTANCE_ROOT>/<app>/bin/site.ssl. Lazy import to avoid an import cycle."""
     from ..tomcat import instance
@@ -59,11 +86,15 @@ def _ssl_marker(app: str) -> str:
     return os.path.join(instance.base_path(app), "bin", SSL_MARKER_NAME)
 
 
-def _mark_ssl(app: str, on: bool) -> None:
+def _mark_ssl(app: str, on: bool, not_after: Optional[str] = None) -> None:
+    """Write/clear the per-app SSL marker. When enabling, store the cert's
+    not_after (ISO 8601) as the marker contents so the list view can show expiry
+    cheaply without an openssl/network probe; falls back to "1" when unknown.
+    read_ssl() only cares that the file EXISTS, so any non-empty body is truthy."""
     path = _ssl_marker(app)
     if on:
         fs.ensure_dir(os.path.dirname(path))
-        fs.atomic_write(path, "1", mode=0o644)
+        fs.atomic_write(path, (not_after or "1") + "\n", mode=0o644)
     elif os.path.exists(path):
         try:
             os.unlink(path)
@@ -135,9 +166,13 @@ def _aapanel_apply(domain: str) -> Optional[bool]:
         return False
 
 
-def _certbot_issue(domain: str, email: Optional[str] = None) -> bool:
-    """Issue via `certbot certonly --webroot`. Success = rc==0 AND a live cert
-    now exists. Never raises."""
+def _certbot_issue(domain: str, email: Optional[str] = None):
+    """Issue via `certbot certonly --webroot`.
+
+    Returns (ok, error) where ok = rc==0 AND a live cert now exists, and error is
+    the tail of certbot's combined stdout+stderr on failure (None on success).
+    Certbot's output carries no secrets, so surfacing it helps operators see the
+    real reason (rate-limit, DNS, challenge unreachable). Never raises."""
     from ..util import shell
     try:
         argv = [
@@ -150,10 +185,14 @@ def _certbot_issue(domain: str, email: Optional[str] = None) -> bool:
             argv += ["-m", email]
         else:
             argv += ["--register-unsafely-without-email"]
-        rc, _, _ = shell.run(argv, check=False, timeout=300)
-        return rc == 0 and _cert_exists(domain)
-    except Exception:
-        return False
+        rc, out, err = shell.run(argv, check=False, timeout=300)
+        if rc == 0 and _cert_exists(domain):
+            return True, None
+        detail = ((out or "") + (err or "")).strip()
+        detail = detail[-500:] if detail else "certbot rc=%s (no output)" % rc
+        return False, detail
+    except Exception as e:
+        return False, "certbot invocation failed: %s" % e
 
 
 def _install_renewal_hook() -> None:
@@ -186,21 +225,34 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
     proxy.ensure_include()
     proxy.reload_nginx()
 
-    # 2) issue — native first, certbot fallback
+    # 2) issue — native first, certbot fallback. The certbot fallback ALWAYS runs
+    #    when the native path didn't actually place a cert (a native call can
+    #    "succeed" yet leave no live cert on broken ACME stacks). Only a real cert
+    #    on disk counts as success.
     via = None
-    if _aapanel_apply(domain):
+    certbot_err = None
+    if _aapanel_apply(domain) and _cert_exists(domain):
         via = "aapanel"
-    elif _certbot_issue(domain, email):
-        via = "certbot"
+    if not via:
+        ok, certbot_err = _certbot_issue(domain, email)
+        if ok:
+            via = "certbot"
 
-    if via and _cert_exists(domain):
+    if _cert_exists(domain):
+        not_after = _cert_not_after(domain)
         proxy.write_vhost(app, domain, port, ssl=True)
         proxy.reload_nginx()
         _install_renewal_hook()
-        _mark_ssl(app, True)
-        return {"ssl": True, "url": "https://%s/" % domain, "via": via}
+        _mark_ssl(app, True, not_after=not_after)
+        res = {"ssl": True, "url": "https://%s/" % domain, "via": via or "unknown"}
+        if not_after:
+            res["not_after"] = not_after
+        return res
 
-    return {"ssl": False, "error": "certificate issuance failed (native + certbot)"}
+    error = "certificate issuance failed (native + certbot)"
+    if certbot_err:
+        error += ": " + certbot_err
+    return {"ssl": False, "error": error}
 
 
 def disable(app: str, domain: str, port: int) -> Dict:

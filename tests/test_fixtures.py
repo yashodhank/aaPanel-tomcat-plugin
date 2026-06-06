@@ -38,6 +38,30 @@ def test_hello_war_has_jsp_and_jakarta_webxml(tmp_path):
     assert "java.sun.com" not in webxml
 
 
+def test_hello_war_servedby_block(tmp_path):
+    """JAVAHOST_OK must remain the FIRST emitted line (the matrix greps it), and
+    the secret-safe 'served by' block markers must be present in index.jsp."""
+    path = make_samples.build_hello(str(tmp_path))
+    with zipfile.ZipFile(path) as z:
+        jsp = z.read("index.jsp").decode()
+    # JAVAHOST_OK is the first thing printed (no out.print precedes it).
+    body = jsp.split("%>", 1)[1] if "%>" in jsp else jsp
+    first_print = body.find("out.print")
+    marker_print = body.find('out.println("JAVAHOST_OK')
+    assert marker_print != -1, "JAVAHOST_OK println missing"
+    assert marker_print == first_print, "JAVAHOST_OK is not the first output line"
+    # New served-by block markers.
+    for marker in ("served by", "servlet", "jvm args", "context path",
+                   "request scheme", "request host", "safe sysprops"):
+        assert marker in jsp, "missing served-by marker: %r" % marker
+    # Secret-redaction of jvm args is wired (pattern present).
+    assert "(?i)(pass|secret|token|key|pwd|credential)" in jsp
+    # Never dump all system properties.
+    assert "getProperties()" not in jsp
+    # Management import is on the page directive.
+    assert "java.lang.management" in jsp
+
+
 def test_legacy_war_detects_javax(tmp_path):
     path = make_samples.build_legacy(str(tmp_path))
     assert war.detect_namespace(path) == "javax"

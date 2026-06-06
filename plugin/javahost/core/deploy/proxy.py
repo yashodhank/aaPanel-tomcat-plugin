@@ -8,8 +8,10 @@ Tomcat instance's loopback HTTP port. Never edits another plugin's config
 from __future__ import annotations
 
 import os
+import re
 from typing import Dict, Optional
 
+from .. import config
 from ..util import shell, fs, validate
 
 VHOST_DIR = "/www/server/javahost/vhost/nginx"
@@ -18,8 +20,10 @@ NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
 # native (aaPanel) and certbot paths serve challenges from here, so the port-80
 # server ALWAYS exposes /.well-known/acme-challenge/ pointing at it.
 ACME_WEBROOT = "/www/wwwroot/acme"
-# Default public domain convention: <app>.5d.bisotech.in
-SITE_SUFFIX = "5d.bisotech.in"
+# Public-domain suffix for default <app>.<suffix> domains. NOT hardcoded — comes
+# from plugin config (config.site_suffix()); empty by default, in which case no
+# default domain is synthesized and the caller must pass an explicit ?domain=.
+SITE_SUFFIX = config.site_suffix()
 
 # The ACME challenge location is present in BOTH http-only and https vhosts so a
 # cert can be issued AND auto-renewed without ever taking the site down.
@@ -30,7 +34,7 @@ _ACME_LOCATION = """    location ^~ /.well-known/acme-challenge/ {
     }"""
 
 # HTTP-only vhost: proxy everything to the backend + serve ACME challenges.
-_TEMPLATE = """# Managed by JavaHost — instance @@app@@ ($domain). Do not edit by hand.
+_TEMPLATE = """# Managed by JavaHost — instance @@app@@ (@@domain@@). Do not edit by hand.
 server {
     listen 80;
     listen [::]:80;
@@ -50,7 +54,7 @@ server {
 
 # HTTPS vhost: port-80 server serves only ACME + redirects to https; the 443
 # server terminates TLS and proxies to the backend.
-_TEMPLATE_SSL = """# Managed by JavaHost — instance @@app@@ ($domain) [SSL]. Do not edit by hand.
+_TEMPLATE_SSL = """# Managed by JavaHost — instance @@app@@ (@@domain@@) [SSL]. Do not edit by hand.
 server {
     listen 80;
     listen [::]:80;
@@ -126,10 +130,15 @@ def include_hint() -> str:
     return "include %s/*.conf;" % VHOST_DIR
 
 
-def default_domain(app: str) -> str:
-    """Convention domain for an app: <app>.5d.bisotech.in."""
+def default_domain(app: str) -> Optional[str]:
+    """Convention domain for an app: "<app>.<site_suffix>" when a suffix is
+    configured, else None (no FQDN is ever guessed). Reads the suffix live from
+    config so a config edit takes effect without a reload."""
     app = validate.identifier(app, "app")
-    return validate.domain("%s.%s" % (app, SITE_SUFFIX))
+    suffix = config.site_suffix()
+    if not suffix:
+        return None
+    return validate.domain("%s.%s" % (app, suffix))
 
 
 _INCLUDE_LINE = "include %s/*.conf;" % VHOST_DIR
@@ -151,21 +160,21 @@ def ensure_include(nginx_conf: str = NGINX_CONF) -> bool:
         # already referenced (idempotent — tolerate trailing-slash variants)
         if _INCLUDE_LINE in content or ("%s/*.conf" % VHOST_DIR) in content:
             return False
-    idx = content.find("http")
-    # find the opening brace of the http{} block
-    brace = -1
-    while idx != -1:
-        b = content.find("{", idx)
-        if b != -1:
-            brace = b
-            break
-        idx = content.find("http", idx + 4)
-    if brace == -1:
+    # Locate the http{} block by a real `http {` token (not a bare substring
+    # match, which would also hit comments, "https", $http_host, etc.).
+    m = re.search(r"\bhttp\s*\{", content)
+    if not m:
         return False
+    brace = content.index("{", m.start())
     injected = (content[: brace + 1]
                 + "\n    " + _INCLUDE_LINE + "\n"
                 + content[brace + 1:])
     fs.atomic_write(nginx_conf, injected, mode=0o644)
+    # Validate the rewritten config; if nginx rejects it, restore the original
+    # so we never leave nginx in a non-reloadable state.
+    if not nginx_test():
+        fs.atomic_write(nginx_conf, content, mode=0o644)
+        return False
     return True
 
 
@@ -212,10 +221,23 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         g.port = "80"
         for meth in ("add_redirect", "AddProxy", "create_proxy", "set_proxy"):
             fn = getattr(site, meth, None)
-            if callable(fn):
-                fn(g)
-                return {"ok": True, "path": "aapanel", "detail": "via panelSite.%s" % meth}
-        return {"ok": False, "path": "aapanel", "detail": "no usable panelSite proxy method"}
+            if not callable(fn):
+                continue
+            # aaPanel methods DON'T raise on failure — they return
+            # {"status": False, "msg": ...}. Treat only a truthy `status` as
+            # success; otherwise keep trying methods, then fall through so the
+            # caller takes the nginx-vhost path.
+            res = fn(g)
+            if isinstance(res, dict):
+                if res.get("status"):
+                    return {"ok": True, "path": "aapanel",
+                            "detail": "via panelSite.%s" % meth}
+                continue  # explicit failure envelope — try the next method
+            # Non-dict / None return: older shims signalled success by not
+            # raising; accept it (the nginx path remains a safety net).
+            return {"ok": True, "path": "aapanel", "detail": "via panelSite.%s" % meth}
+        return {"ok": False, "path": "aapanel",
+                "detail": "no usable panelSite proxy method (or all returned status=false)"}
     except Exception as e:
         return {"ok": False, "path": "aapanel", "detail": "panelSite call failed: %s" % e}
 
@@ -281,9 +303,12 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     if not aap.get("ok"):
         # fallback: plugin-owned nginx vhost (never edits other plugins' config)
         write_vhost(app, domain, port)
-        ensure_include()
         reload_nginx()
         via = "nginx-vhost"
+    # The include line must exist in BOTH paths: even when aaPanel "owns" the
+    # site, a later SSL flip or manual edit may rely on JavaHost vhosts being
+    # picked up. ensure_include() is idempotent and self-validating.
+    ensure_include()
 
     _store_domain(app, domain)
     return {"domain": domain, "url": "http://%s/" % domain, "via": via,

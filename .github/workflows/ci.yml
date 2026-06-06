@@ -46,7 +46,9 @@ jobs:
           "
 
           echo "== no aaPanel-derived code committed =="
-          if git ls-files | grep -E '(^|/)tomcat2_main\.py$'; then
+          # Reject both the source and any compiled bytecode of the proprietary
+          # tomcat2_main module (e.g. tomcat2_main.py, tomcat2_main.cpython-311.pyc).
+          if git ls-files | grep -E '(^|/)tomcat2_main([^/]*)?\.(py|pyc)$'; then
             echo 'ERROR: proprietary-derived file tracked'; exit 1; fi
           echo "  ✓ clean"
 
@@ -78,6 +80,12 @@ jobs:
         run: |
           find plugin/javahost -name '*.py' -print0 | xargs -0 python3 -m py_compile
           python3 -m pytest -q tests/
+
+      - name: Matrix plan drift (offline dry-run)
+        # Fast, host-free sanity check: the full-matrix planner must produce a
+        # consistent cell plan. Catches Tomcat/Java floor or DB-mode drift before
+        # anyone runs the heavyweight on-box campaign. Needs no Tomcat/Java/DB.
+        run: python3 tests/e2e/matrix_full.py --dry-run
 
       - name: UI a11y/CSP sanity
         # Offline, stdlib-only static check of plugin/javahost/index.html

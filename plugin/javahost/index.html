@@ -507,7 +507,7 @@
       <button class="jh-btn ghost sm icon" id="jh-fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false">
         <svg aria-hidden="true" focusable="false"><use href="#i-expand"/></svg>
       </button>
-      <button class="jh-btn ghost sm" id="jh-refresh" title="Refresh status" aria-label="Refresh status">
+      <button class="jh-btn ghost sm" id="jh-refresh" type="button" title="Refresh status" aria-label="Refresh status">
         <svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg> Refresh
       </button>
     </header>
@@ -519,13 +519,13 @@
     <div class="jh-body">
       <nav class="jh-tabs" aria-label="Sections">
         <div class="jh-tablist" role="tablist" aria-label="JavaHost sections">
-          <button class="jh-tab" role="tab" data-section="dashboard" aria-selected="true" aria-controls="page-dashboard" id="tab-dashboard" tabindex="0"><svg aria-hidden="true" focusable="false"><use href="#i-grid"/></svg>Dashboard</button>
-          <button class="jh-tab" role="tab" data-section="apps" aria-selected="false" aria-controls="page-apps" id="tab-apps" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
-          <button class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
-          <button class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
-          <button class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
-          <button class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
-          <button class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
+          <button type="button" class="jh-tab" role="tab" data-section="dashboard" aria-selected="true" aria-controls="page-dashboard" id="tab-dashboard" tabindex="0"><svg aria-hidden="true" focusable="false"><use href="#i-grid"/></svg>Dashboard</button>
+          <button type="button" class="jh-tab" role="tab" data-section="apps" aria-selected="false" aria-controls="page-apps" id="tab-apps" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
+          <button type="button" class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
+          <button type="button" class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
+          <button type="button" class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
+          <button type="button" class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
+          <button type="button" class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
         </div>
       </nav>
 
@@ -562,9 +562,9 @@
         <div class="jh-card-h">
           <div><h3>Managed applications</h3><p>Tomcat instances and Spring Boot services</p></div>
           <div class="jh-spread" style="gap:var(--s2)">
-            <button class="jh-btn ghost sm" id="jh-open-war"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Deploy WAR</button>
-            <button class="jh-btn ghost sm" id="jh-open-jar"><svg aria-hidden="true" focusable="false"><use href="#i-server"/></svg>Deploy JAR</button>
-            <button class="jh-btn accent sm" id="jh-open-create"><svg aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Create app</button>
+            <button class="jh-btn ghost sm" id="jh-open-war" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Deploy WAR</button>
+            <button class="jh-btn ghost sm" id="jh-open-jar" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-server"/></svg>Deploy JAR</button>
+            <button class="jh-btn accent sm" id="jh-open-create" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Create app</button>
           </div>
         </div>
         <div id="jh-apps-body">
@@ -610,7 +610,7 @@
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Background tasks</h3><p>Asynchronous installs, updates &amp; uninstalls</p></div>
-          <button class="jh-btn ghost sm" id="jh-tasks-refresh"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+          <button class="jh-btn ghost sm" id="jh-tasks-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <div class="jh-table-wrap">
           <table>
@@ -640,7 +640,7 @@
           <div class="jh-bar-spacer"></div>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
             <input type="checkbox" id="lg-auto" style="width:auto;cursor:pointer"> Auto-tail</label>
-          <button class="jh-btn ghost sm" id="jh-logs-refresh"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+          <button class="jh-btn ghost sm" id="jh-logs-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <pre class="jh-pre" id="lg-pre" tabindex="0" role="region" aria-label="Log output" style="max-height:55vh">Pick a source to view its log.</pre>
       </div>
@@ -668,7 +668,7 @@
     <div class="jh-modal" id="jh-modal">
       <div class="jh-modal-h">
         <div><h3 id="jh-modal-title">Dialog</h3><p id="jh-modal-sub"></p></div>
-        <button class="jh-x" id="jh-modal-x" aria-label="Close dialog"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
+        <button type="button" class="jh-x" id="jh-modal-x" aria-label="Close dialog"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
       </div>
       <div class="jh-modal-b" id="jh-modal-body"></div>
       <div class="jh-modal-f" id="jh-modal-foot"></div>
@@ -681,7 +681,7 @@
       <div class="jh-drawer-h">
         <div class="jh-approw-ic" id="jh-drawer-ic" aria-hidden="true"><svg focusable="false"><use href="#i-box"/></svg></div>
         <div class="jh-drawer-ht"><h3 id="jh-drawer-title">App</h3><p id="jh-drawer-sub"></p></div>
-        <button class="jh-x" id="jh-drawer-x" aria-label="Close detail panel"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
+        <button type="button" class="jh-x" id="jh-drawer-x" aria-label="Close detail panel"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
       </div>
       <div class="jh-drawer-tabs" role="tablist" aria-label="App detail sections" id="jh-drawer-tabs"></div>
       <div class="jh-drawer-b" id="jh-drawer-body"></div>
@@ -708,12 +708,13 @@
   // a 302 to the login page returns the login HTML (not the JSON envelope).
   // Heuristics: HTML body (starts with '<' after trim), or a fetch that was
   // redirected / whose final URL points at the login/entrance path.
-  var LOGIN_RE = /\/(login|entrance|safe)/i;
+  var LOGIN_RE = /\/login(\b|\/|\?|$)/i;
   function looksLikeLoginHtml(text){
     if(typeof text !== 'string') return false;
     var t = text.replace(/^﻿/, '').trim();
     if(t.charAt(0) !== '<') return false;                  // not HTML at all
-    return /<!doctype|<html|name=["']?username|id=["']?username|<form/i.test(t) || true;
+    // rely on real login-page heuristics — never blanket-trip on any HTML
+    return /<!doctype|<html|name=["']?username|id=["']?username|<form/i.test(t);
   }
 
   // Panel plugin convention. jQuery $.post if available, else Fetch.
@@ -829,6 +830,10 @@
     }
     if(typeof JOBLOG === 'object' && JOBLOG && JOBLOG.timer){ clearInterval(JOBLOG.timer); JOBLOG.timer = null; }
     if(typeof METRICS === 'object' && METRICS && METRICS.timer){ clearInterval(METRICS.timer); METRICS.timer = null; }
+    if(typeof LIFECYCLE_TIMERS === 'object' && LIFECYCLE_TIMERS){
+      for(var jk in LIFECYCLE_TIMERS){ clearInterval(LIFECYCLE_TIMERS[jk]); }
+      LIFECYCLE_TIMERS = {};
+    }
   }
   function sessionExpired(){
     if(SESSION_DEAD) return;              // fire exactly once
@@ -1053,7 +1058,7 @@
   });
   // factory for footer buttons
   function mkBtn(label, cls, onClick, iconName){
-    var b = el('<button class="jh-btn '+(cls||'')+'">'+(iconName?ic(iconName):'')+esc(label)+'</button>');
+    var b = el('<button type="button" class="jh-btn '+(cls||'')+'">'+(iconName?ic(iconName):'')+esc(label)+'</button>');
     if(onClick) b.addEventListener('click', function(){ onClick(b); });
     return b;
   }
@@ -1083,6 +1088,7 @@
         apps.length ? (apps.filter(function(a){return a.status==='active';}).length + ' running') : 'no apps yet') +
       statTile('server', 'ok', d.systemd ? 'systemd' : 'init.d', 'Service backend',
         d.service_dirs_locked ? 'dirs locked' : 'writable');
+    $('jh-stats').setAttribute('aria-busy', 'false');   // tiles populated
 
     // java rows
     $('dash-java').innerHTML = jKeys.length ? jKeys.map(function(k){
@@ -1115,7 +1121,7 @@
         '<div style="flex:1"><b>System hardening is active.</b> '+
         esc(d.hardening_hint || 'Service directories are immutable; JavaHost cannot register services until hardening is lifted.')+
         ' See <code>docs/system-hardening.md</code>.'+
-        '<div style="margin-top:var(--s2)"><button class="jh-btn sm" id="jh-allow-services">'+ic('wrench')+'Allow services</button></div>'+
+        '<div style="margin-top:var(--s2)"><button type="button" class="jh-btn sm" id="jh-allow-services">'+ic('wrench')+'Allow services</button></div>'+
         '</div></div>';
     } else { hb.style.display = 'none'; hb.innerHTML = ''; }
   }
@@ -1136,7 +1142,7 @@
         (on ? ' <span class="jh-muted" title="'+esc(java[k])+'">'+esc(java[k])+'</span>' : '')+'</span>'+
         '<span class="btns">'+
           (on ? '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'
-              : '<button class="jh-btn accent sm" data-jdk="'+esc(k)+'">'+ic('plus')+'Install</button>')+
+              : '<button type="button" class="jh-btn accent sm" data-jdk="'+esc(k)+'">'+ic('plus')+'Install</button>')+
         '</span></div>';
     }).join('');
 
@@ -1147,9 +1153,9 @@
       return '<div class="jh-kv"><span>Tomcat '+esc(k)+' <span class="jh-muted">'+esc(meta)+'</span></span>'+
         '<span class="btns">'+
         (info
-          ? '<button class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>'+
-            '<button class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>'
-          : '<button class="jh-btn accent sm" data-tc-install="'+esc(k)+'">'+ic('plus')+'Install</button>')+
+          ? '<button type="button" class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>'+
+            '<button type="button" class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>'
+          : '<button type="button" class="jh-btn accent sm" data-tc-install="'+esc(k)+'">'+ic('plus')+'Install</button>')+
         '</span></div>';
     }).join('');
   }
@@ -1161,6 +1167,14 @@
   // app name, so the drawer + Open link can use them without re-fetch.
   var APPS_BY_NAME = {};
   var HEALTH_PORT = {};      // app -> port discovered by GetHealth
+  // apps with a pending lifecycle/SSL/delete action. While non-empty the 5s
+  // appsTick re-render is suppressed so in-flight busy controls aren't wiped,
+  // and a repeat click for an already-pending app is ignored (no double-act).
+  var APP_PENDING = Object.create(null);
+  function appPending(app){ return !!APP_PENDING[app]; }
+  function markPending(app){ if(app!=null) APP_PENDING[app] = true; }
+  function clearPending(app){ if(app!=null) delete APP_PENDING[app]; }
+  function anyPending(){ for(var k in APP_PENDING){ return true; } return false; }
 
   // map raw service status -> {cls, label} per the agreed taxonomy
   function statusBadge(status){
@@ -1216,8 +1230,16 @@
     var scheme = (x && x.ssl) ? 'https://' : 'http://';
     return scheme + dom + ctx;
   }
-  // default reverse-proxy host for an app per convention <app>.5d.bisotech.in
-  function defaultDomain(app){ return cssId(app).toLowerCase() + '.5d.bisotech.in'; }
+  // default reverse-proxy host for an app: <app>.<site_suffix>, where the suffix
+  // is supplied by the server (GetStatus -> site_suffix). Returns '' when no
+  // suffix is configured — callers then prompt the operator for a full domain
+  // rather than baking in any vendor FQDN.
+  function defaultDomain(app){
+    var suf = (STATE && STATE.site_suffix != null) ? String(STATE.site_suffix).trim() : '';
+    suf = suf.replace(/^\.+/, '').replace(/\.+$/, '');
+    if(!suf) return '';
+    return cssId(app).toLowerCase() + '.' + suf;
+  }
 
   // Open affordances for one app. With a domain: a working Open link + copy
   // URL + copy port. Without one: a "Set up reverse proxy" action (no dead
@@ -1225,13 +1247,15 @@
   function openHtmlFor(x){
     var ec = esc(x.app), port = appPort(x);
     var url = appUrl(x);
-    var portBtn = (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" data-stop="1" title="Copy port" aria-label="Copy port for '+ec+'">'+ic('layers')+'</button>':'');
+    var portBtn = (port!=null?'<button type="button" class="jh-iconbtn" data-copyport="'+ec+'" data-stop="1" title="Copy port" aria-label="Copy port for '+ec+'">'+ic('layers')+'</button>':'');
     if(url){
       return '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="Open '+esc(url)+'" aria-label="Open '+ec+' in a new tab" data-stop="1">'+ic('link')+'</a>'+
-        '<button class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
+        '<button type="button" class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
         portBtn + sslSwitchFor(x);
     }
-    return '<button class="jh-btn ghost sm" data-setsite="'+ec+'" data-stop="1" title="Set up reverse proxy ('+esc(defaultDomain(x.app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
+    var dd = defaultDomain(x.app);
+    var setTitle = dd ? ('Set up reverse proxy ('+esc(dd)+')') : 'Set up reverse proxy';
+    return '<button type="button" class="jh-btn ghost sm" data-setsite="'+ec+'" data-stop="1" title="'+setTitle+'" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
       portBtn;
   }
 
@@ -1245,21 +1269,58 @@
       ' title="'+(on?'HTTPS enabled':'Enable HTTPS')+' for '+ec+'"></button>';
   }
 
-  // SetSite{app} — create the reverse-proxy vhost, then update the row/drawer
-  // so the working Open link appears. Tolerates absence of the endpoint.
-  function setupSite(app, btn){
+  // SetSite{app, domain} — create the reverse-proxy vhost, then update the
+  // row/drawer so the working Open link appears. Tolerates absence of the
+  // endpoint. The actual POST + UI update lives in doSetSite(); setupSite()
+  // resolves the domain first: prefer the server-derived default, else prompt
+  // the operator for a full domain (no vendor FQDN is ever assumed).
+  function doSetSite(app, domain, btn){
     busy(btn, true);
     toast('Setting up reverse proxy for '+app+'…');
-    call('SetSite', {app:app, domain:defaultDomain(app)}, function(r){
+    call('SetSite', {app:app, domain:domain}, function(r){
       busy(btn, false);
       var p = payload(r);
       if(failed(r)){ toast(errText(p), 'err', 'Reverse proxy setup failed'); return; }
-      var dom = (p && (p.domain || p.url)) || defaultDomain(app);
+      var dom = (p && (p.domain || p.url)) || domain;
       if(APPS_BY_NAME[app]){ APPS_BY_NAME[app].domain = (p && p.domain) || dom.replace(/^https?:\/\//,'').replace(/\/+$/,''); }
       toast('Reverse proxy ready: '+((p&&p.domain)||dom), 'ok');
       refreshOpen(app);
       if(DRAWER.app === app) drawerOverview();   // rebuild the drawer Open row
       refresh();                                  // pick up the new domain server-side
+    });
+  }
+  function setupSite(app, btn){
+    var def = defaultDomain(app);
+    if(def){ doSetSite(app, def, btn); return; }
+    // no server suffix configured — ask the operator for a full domain.
+    promptDomain(app, btn);
+  }
+  // Small modal asking for a full reverse-proxy domain (used when the server
+  // exposes no site_suffix). Validates a bare hostname before POSTing SetSite.
+  function promptDomain(app, returnBtn){
+    openModal({
+      title:'Set up reverse proxy', sub:app,
+      returnFocus: returnBtn,
+      body:
+        '<div class="jh-form">'+
+          '<div class="jh-field wide"><label for="rp-domain">Domain</label>'+
+            '<input id="rp-domain" placeholder="app.example.com" autocomplete="off" inputmode="url"></div>'+
+        '</div>'+
+        '<div class="jh-hint">No default domain suffix is configured on this server, so enter the full hostname to front <code>'+esc(app)+'</code> (e.g. <code>app.example.com</code>).</div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Set up reverse proxy', 'accent', function(btn){
+          var raw = ($('rp-domain') && $('rp-domain').value || '').trim();
+          var dom = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+          if(!dom || !/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(dom)){
+            toast('Enter a valid domain (e.g. app.example.com)', 'err');
+            if($('rp-domain')) $('rp-domain').focus();
+            return;
+          }
+          closeModal();
+          doSetSite(app, dom, returnBtn);
+        }, 'globe')
+      ]
     });
   }
 
@@ -1270,11 +1331,14 @@
   function toggleSsl(app, sw){
     if(!sw || sw.disabled) return;
     var want = sw.getAttribute('aria-checked') !== 'true';   // target state
-    // optimistic UI: show intended state, lock + spin while provisioning
+    // optimistic UI: show intended state, lock + spin while provisioning.
+    // mark in-flight so the 5s tick re-render won't wipe this control.
+    markPending(app);
     sw.classList.add('busy'); sw.disabled = true;
     sw.setAttribute('aria-checked', want ? 'true' : 'false');
     toast((want ? 'Provisioning SSL for ' : 'Disabling SSL for ') + app + '…');
     call('SetSiteSSL', {app:app, enable: want ? 1 : 0}, function(r){
+      clearPending(app);
       var p = payload(r);
       // resolve to the live switch node (the row/drawer may have re-rendered)
       var live = (sw && sw.isConnected) ? sw
@@ -1301,8 +1365,82 @@
     });
   }
 
+  // ---- FEATURE A: async app lifecycle ----------------------------------
+  // start/stop/restart/repair run as background jobs server-side. We POST
+  // StartAppAction{app,action} -> {job_id,app,action}; mark the app in-flight
+  // (so the 5s tick won't wipe the busy control and repeat clicks are ignored),
+  // poll GetJobLog{job_id,lines:50} (~1.5s) until state ∈ {done,failed}, then
+  // toast + refresh. If StartAppAction is absent on an older backend, fall back
+  // to the blocking sync AppAction. Routed through call() (session-expiry).
+  var APPACTION_POLL = 1500;
+  var LIFECYCLE_TIMERS = {};   // job_id -> interval id (for async lifecycle polls)
+  function lifecycleLabel(action, app){ return action + ' ' + app; }
+  // sync fallback: blocking AppAction (or RepairApp for 'repair').
+  function syncAppAction(app, action, btn){
+    var label = lifecycleLabel(action, app);
+    function fin(r){
+      clearPending(app); busy(btn, false);
+      if(failed(r)) toast(errText(payload(r)), 'err', label + ' failed');
+      else toast(label + ' completed', 'ok');
+      refresh();
+    }
+    if(action === 'repair') call('RepairApp', {app:app}, fin);
+    else call('AppAction', {app:app, action:action}, fin);
+  }
+  function startAppLifecycle(app, action, btn){
+    markPending(app); busy(btn, true);
+    var label = lifecycleLabel(action, app);
+    if(action !== 'repair') toast(label.charAt(0).toUpperCase()+label.slice(1)+'…');
+    else toast('Repairing '+app+'…');
+    call('StartAppAction', {app:app, action:action}, function(r){
+      var p = payload(r);
+      var jid = p && (p.job_id || p.id);
+      if(failed(r) && !jid){
+        // unknown method / missing endpoint -> fall back to the sync call
+        var em = errText(p).toLowerCase();
+        var notImpl = em.indexOf('unknown') !== -1 || em.indexOf('not found') !== -1 ||
+          em.indexOf('no such') !== -1 || em.indexOf('not implemented') !== -1 ||
+          em.indexOf('attribute') !== -1 || em === '' || em.indexOf('404') !== -1;
+        if(notImpl){ syncAppAction(app, action, btn); return; }
+        clearPending(app); busy(btn, false);
+        toast(errText(p), 'err', label + ' failed'); return;
+      }
+      if(!jid){
+        // success envelope but no job id — treat as a completed sync call
+        clearPending(app); busy(btn, false);
+        toast(label + ' completed', 'ok'); refresh(); return;
+      }
+      // surface the job in the Tasks section, then poll its log to completion
+      if(activeSection === 'tasks') refreshTasks();
+      pollAppJob(jid, app, action, btn);
+    });
+  }
+  function pollAppJob(jid, app, action, btn){
+    var label = lifecycleLabel(action, app);
+    var timer = setInterval(tick, APPACTION_POLL);
+    LIFECYCLE_TIMERS[jid] = timer;            // so stopAllPolls() can clear it
+    function tick(){
+      call('GetJobLog', {job_id: jid, lines: 50}, function(r){
+        var p = payload(r);
+        if(failed(r)) return;                 // transient; keep polling
+        if(jobIsRunning(p && p.state)) return;
+        clearInterval(timer); delete LIFECYCLE_TIMERS[jid];
+        clearPending(app); busy(btn, false);
+        var b = jobStateBadge(p && p.state);
+        if(b.cls === 'danger') toast(errText((p && (p.message || p.log)) || '') || (label+' failed'), 'err', label + ' failed');
+        else toast(label + ' completed', 'ok');
+        refreshHealthAll(STATE.apps);         // live health for the (un)started app
+        refresh();                            // re-pull status / list
+        if(activeSection === 'tasks') refreshTasks();
+      });
+    }
+    tick();
+  }
+
   function renderApps(apps){
     apps = apps || [];
+    // skip rows with a null/empty app name — they have no usable id/selector
+    apps = apps.filter(function(x){ return x && x.app != null && String(x.app) !== ''; });
     appMajor = {}; APPS_BY_NAME = {};
     var body = $('jh-apps-body');
     if(!apps.length){
@@ -1310,8 +1448,8 @@
         '<b>No applications yet</b>'+
         '<div>Create a Tomcat app, deploy a WAR, or run a Spring Boot JAR to get started.</div>'+
         '<div class="jh-spread" style="margin-top:var(--s3);justify-content:center">'+
-          '<button class="jh-btn accent" id="jh-empty-create">'+ic('plus')+'Create your first app</button>'+
-          '<button class="jh-btn ghost" id="jh-empty-jar">'+ic('server')+'Deploy Spring Boot JAR</button>'+
+          '<button type="button" class="jh-btn accent" id="jh-empty-create">'+ic('plus')+'Create your first app</button>'+
+          '<button type="button" class="jh-btn ghost" id="jh-empty-jar">'+ic('server')+'Deploy Spring Boot JAR</button>'+
         '</div>'+
         '</div>';
       var ec = $('jh-empty-create'); if(ec) ec.addEventListener('click', openCreate);
@@ -1341,20 +1479,20 @@
         '</div>'+
         '<div class="jh-approw-act" data-stop="1">'+
           '<div class="jh-seg" role="group" aria-label="Lifecycle for '+ec+'">'+
-            '<button data-act="start" data-app="'+ec+'" title="Start" aria-label="Start '+ec+'">'+ic('play')+'</button>'+
-            '<button data-act="stop" data-app="'+ec+'" title="Stop" aria-label="Stop '+ec+'">'+ic('stop')+'</button>'+
-            '<button data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'">'+ic('refresh')+'</button>'+
+            '<button type="button" data-act="start" data-app="'+ec+'" title="Start" aria-label="Start '+ec+'">'+ic('play')+'</button>'+
+            '<button type="button" data-act="stop" data-app="'+ec+'" title="Stop" aria-label="Stop '+ec+'">'+ic('stop')+'</button>'+
+            '<button type="button" data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'">'+ic('refresh')+'</button>'+
           '</div>'+
           '<div class="jh-menu">'+
-            '<button class="jh-iconbtn" data-menu="'+cid+'" data-app="'+ec+'" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
+            '<button type="button" class="jh-iconbtn" data-menu="'+cid+'" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
             '<div class="jh-menu-pop" id="menu-'+cid+'" role="menu" aria-label="Actions for '+ec+'">'+
-              '<button role="menuitem" tabindex="-1" data-logs="'+ec+'">'+ic('doc')+'View logs</button>'+
-              '<button role="menuitem" tabindex="-1" data-metrics="'+ec+'">'+ic('cpu')+'Metrics</button>'+
-              '<button role="menuitem" tabindex="-1" data-health="'+ec+'">'+ic('heart')+'Check health</button>'+
-              '<button role="menuitem" tabindex="-1" data-repair="'+ec+'">'+ic('wrench')+'Repair</button>'+
-              '<button role="menuitem" tabindex="-1" data-dbenv="'+ec+'">'+ic('db')+'Database env</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" data-logs="'+ec+'">'+ic('doc')+'View logs</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" data-metrics="'+ec+'">'+ic('cpu')+'Metrics</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" data-health="'+ec+'">'+ic('heart')+'Check health</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" data-repair="'+ec+'">'+ic('wrench')+'Repair</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" data-dbenv="'+ec+'">'+ic('db')+'Database env</button>'+
               '<hr>'+
-              '<button role="menuitem" tabindex="-1" class="danger" data-delete="'+ec+'">'+ic('trash')+'Delete app</button>'+
+              '<button type="button" role="menuitem" tabindex="-1" class="danger" data-delete="'+ec+'">'+ic('trash')+'Delete app</button>'+
             '</div>'+
           '</div>'+
         '</div>'+
@@ -1421,8 +1559,8 @@
   }
 
   // clipboard copy with a non-HTTPS textarea fallback
-  function copyText(text){
-    function ok(){ toast('Copied', 'ok'); }
+  function copyText(text, what){
+    function ok(){ toast((what ? what + ' copied' : 'Copied'), 'ok'); }
     function fb(){
       try{
         var ta = document.createElement('textarea');
@@ -1465,7 +1603,7 @@
     $('jh-drawer-ic').classList.toggle('jar', ty.cls === 'jar');
     // build tablist
     $('jh-drawer-tabs').innerHTML = DTABS.map(function(t, i){
-      return '<button class="jh-dtab" role="tab" data-dtab="'+t[0]+'" aria-controls="dpanel-'+t[0]+'" '+
+      return '<button type="button" class="jh-dtab" role="tab" data-dtab="'+t[0]+'" aria-controls="dpanel-'+t[0]+'" '+
         'aria-selected="'+(i===0?'true':'false')+'" tabindex="'+(i===0?'0':'-1')+'">'+esc(t[1])+'</button>';
     }).join('');
     // build empty panels
@@ -1513,21 +1651,38 @@
     var app = DRAWER.app, x = APPS_BY_NAME[app] || {app:app};
     var p = $('dpanel-overview'); if(!p) return;
     var url = appUrl(x), ec = esc(app), port = appPort(x);
-    var copyPortBtn = (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'');
+    var copyPortBtn = (port!=null?'<button type="button" class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'');
     var hasDomain = appDomain(x) != null;
     var openRow = url
       ? '<div class="jh-kv"><span>Open</span><span class="btns">'+
           '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(url)+'" aria-label="Open '+ec+'">'+ic('link')+'</a>'+
-          '<button class="jh-iconbtn" data-copyurl="'+ec+'" title="Copy URL" aria-label="Copy URL">'+ic('doc')+'</button>'+
+          '<button type="button" class="jh-iconbtn" data-copyurl="'+ec+'" title="Copy URL" aria-label="Copy URL">'+ic('doc')+'</button>'+
           copyPortBtn+
         '</span></div>'
-      : '<div class="jh-kv"><span>Open</span><span class="btns">'+
-          '<button class="jh-btn ghost sm" data-setsite="'+ec+'" title="Set up reverse proxy ('+esc(defaultDomain(app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
-          copyPortBtn+
-        '</span></div>';
-    // HTTPS switch row — only once a reverse-proxy domain exists for the app
+      : (function(){
+          var dd = defaultDomain(app);
+          var st = dd ? ('Set up reverse proxy ('+esc(dd)+')') : 'Set up reverse proxy';
+          return '<div class="jh-kv"><span>Open</span><span class="btns">'+
+            '<button type="button" class="jh-btn ghost sm" data-setsite="'+ec+'" title="'+st+'" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
+            copyPortBtn+
+          '</span></div>';
+        })();
+    // HTTPS switch row — only once a reverse-proxy domain exists for the app.
+    // A refresh button + cert-state mirror live next to the switch.
     var sslRow = hasDomain
-      ? '<div class="jh-kv"><span>HTTPS</span><span class="btns">'+ sslSwitchFor(x) +'</span></div>'
+      ? '<div class="jh-kv"><span>HTTPS</span><span class="btns">'+ sslSwitchFor(x) +
+          '<span class="jh-muted" id="dw-cert-mirror" style="font-size:12px">—</span></span></div>'
+      : '';
+    // Site & SSL block (Feature B) — only when the app has a domain. Filled
+    // on-demand by drawerSiteStatus() via GetSiteStatus (NOT the 5s list poll).
+    var siteBlock = hasDomain
+      ? '<div class="jh-card" style="margin-top:var(--s3);padding:var(--s3)" id="dw-site">'+
+          '<div class="jh-card-h" style="margin-bottom:var(--s2)">'+
+            '<div><h3 style="font-size:13px">Site &amp; SSL</h3></div>'+
+            '<button type="button" class="jh-btn ghost sm" data-sitestatus="'+ec+'" title="Refresh site &amp; SSL status" aria-label="Refresh site and SSL status for '+ec+'">'+ic('refresh')+'Refresh</button>'+
+          '</div>'+
+          '<div class="jh-rows" id="dw-site-rows"><div class="jh-loading">Checking site &amp; SSL…</div></div>'+
+        '</div>'
       : '';
     p.innerHTML = '<div class="jh-rows">'+
       '<div class="jh-kv"><span>Status</span><span class="jh-badge '+statusBadge(x.status).cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(statusBadge(x.status).label)+'</span></div>'+
@@ -1542,8 +1697,10 @@
       sslRow+
       '<div class="jh-kv"><span>Live CPU</span><span class="jh-muted" id="dw-cpu">—</span></div>'+
       '<div class="jh-kv"><span>Live memory</span><span class="jh-muted" id="dw-mem">—</span></div>'+
-    '</div>';
+    '</div>'+ siteBlock +
+    (hasDomain ? '' : '<div class="jh-alert info" style="margin-top:var(--s3)">'+ic('info')+'<div>No reverse-proxy site — set one up to expose this app and enable HTTPS.</div></div>');
     checkHealth(app);
+    if(hasDomain) drawerSiteStatus(app);
     // pull one metrics snapshot for the live CPU/mem fields
     call('GetMetrics', {app:app}, function(r){
       if(DRAWER.app !== app || DRAWER.tab !== 'overview') return;
@@ -1557,6 +1714,98 @@
     var n = $('dw-health'); if(!n) return;
     setPill(n, up?'ok':'off', up?'up':'down', detail);
   }
+
+  // ---- FEATURE B: Site & SSL ------------------------------------------
+  // On-demand GetSiteStatus{app} -> {app, health, domain, ssl_marker,
+  //   cert:{exists,not_after,days_left,valid}|null,
+  //   site:{http:{code,redirects_to_https}, https:{reachable,code}}|null}.
+  // Renders into #dw-site-rows: linked domain, HTTP->HTTPS redirect, HTTPS
+  // reachability+code, and cert validity + days-to-expiry. Warns <14d, errors
+  // if expired / missing-but-ssl-on. Tolerates nulls. Routed through call().
+  function pillSpan(cls, text, title){
+    return '<span class="jh-badge '+cls+'"'+(title?' title="'+esc(title)+'"':'')+'>'+
+      '<span class="jh-dot"></span>'+esc(text)+'</span>';
+  }
+  function drawerSiteStatus(app, btn){
+    var rows = $('dw-site-rows'); if(!rows) return;
+    busy(btn, true);
+    rows.innerHTML = '<div class="jh-loading">Checking site &amp; SSL…</div>';
+    call('GetSiteStatus', {app:app}, function(r){
+      busy(btn, false);
+      if(DRAWER.app !== app || DRAWER.tab !== 'overview') return;
+      var rr = $('dw-site-rows'); if(!rr) return;
+      var p = payload(r);
+      if(failed(r)){
+        rr.innerHTML = '<div class="jh-alert info" style="padding:10px 12px">'+ic('info')+
+          '<div>Site &amp; SSL status is unavailable on this server build.</div></div>';
+        return;
+      }
+      var dom = p && p.domain;
+      if(dom == null || dom === ''){
+        rr.innerHTML = '<div class="jh-alert info" style="padding:10px 12px">'+ic('info')+
+          '<div>No reverse-proxy site configured for this app.</div></div>';
+        var mir0 = $('dw-cert-mirror'); if(mir0) mir0.textContent = '—';
+        return;
+      }
+      var domBare = String(dom).replace(/^https?:\/\//,'').replace(/\/+$/,'');
+      var sslOn = !!(p && (p.ssl_marker));
+      var href = (sslOn ? 'https://' : 'http://') + domBare;
+      var html = '';
+      // domain (linked)
+      html += '<div class="jh-kv"><span>Domain</span><span class="btns">'+
+        '<a class="jh-iconbtn" href="'+esc(href)+'" target="_blank" rel="noopener" title="'+esc(href)+'" aria-label="Open '+esc(domBare)+'">'+ic('link')+'</a>'+
+        '<span class="jh-muted" style="overflow-wrap:anywhere">'+esc(domBare)+'</span></span></div>';
+
+      var site = p && p.site;
+      // HTTP -> HTTPS redirect
+      var http = site && site.http;
+      if(http && http.code != null){
+        var red = !!http.redirects_to_https;
+        html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span>'+
+          (red ? pillSpan('ok', 'redirects', 'HTTP '+http.code+' redirects to HTTPS')
+               : pillSpan('neutral', 'no redirect', 'HTTP '+http.code))+'</div>';
+      } else {
+        html += '<div class="jh-kv"><span>HTTP&nbsp;→&nbsp;HTTPS</span><span class="jh-muted">—</span></div>';
+      }
+      // HTTPS reachable + code
+      var https = site && site.https;
+      if(https){
+        var reach = !!https.reachable;
+        var codeTxt = (https.code != null ? ('HTTP '+https.code) : 'no response');
+        html += '<div class="jh-kv"><span>HTTPS</span>'+
+          (reach ? pillSpan('ok', codeTxt, 'HTTPS reachable')
+                 : pillSpan('off', 'unreachable', codeTxt))+'</div>';
+      } else {
+        html += '<div class="jh-kv"><span>HTTPS</span><span class="jh-muted">—</span></div>';
+      }
+      // cert validity + days-to-expiry (warn <14d, error if expired/missing-with-ssl-on)
+      var cert = p && p.cert, certCls = 'neutral', certTxt = '—', certTitle = '';
+      if(cert && cert.exists){
+        var days = (cert.days_left != null) ? Number(cert.days_left) : null;
+        if(cert.valid === false || (days != null && days < 0)){
+          certCls = 'danger'; certTxt = 'expired';
+          certTitle = cert.not_after ? ('expired '+cert.not_after) : 'certificate expired';
+        } else if(days != null){
+          certTxt = days + 'd left';
+          certCls = days < 14 ? 'danger' : 'ok';
+          certTitle = cert.not_after ? ('expires '+cert.not_after) : '';
+        } else {
+          certCls = 'ok'; certTxt = 'valid';
+          certTitle = cert.not_after ? ('expires '+cert.not_after) : '';
+        }
+      } else if(sslOn){
+        // SSL is marked on but there's no cert — an error condition
+        certCls = 'danger'; certTxt = 'missing'; certTitle = 'HTTPS is enabled but no certificate was found';
+      } else {
+        certCls = 'neutral'; certTxt = 'no cert'; certTitle = 'HTTPS not enabled';
+      }
+      html += '<div class="jh-kv"><span>Certificate</span>'+pillSpan(certCls, certTxt, certTitle)+'</div>';
+      rr.innerHTML = html;
+      // mirror cert state next to the HTTPS toggle
+      var mir = $('dw-cert-mirror');
+      if(mir){ mir.textContent = certTxt; mir.title = certTitle || ''; }
+    });
+  }
   function drawerLogs(){
     var app = DRAWER.app, p = $('dpanel-logs'); if(!p) return;
     if(!p.querySelector('#dw-log')){
@@ -1564,7 +1813,7 @@
           '<label for="dw-lines" style="margin:0">Lines</label>'+
           '<select id="dw-lines" style="width:auto"><option>50</option><option selected>200</option><option>500</option></select>'+
           '<div class="jh-bar-spacer"></div>'+
-          '<button class="jh-btn ghost sm" data-dwlog-refresh="1">'+ic('refresh')+'Refresh</button>'+
+          '<button type="button" class="jh-btn ghost sm" data-dwlog-refresh="1">'+ic('refresh')+'Refresh</button>'+
         '</div><pre class="jh-pre" id="dw-log">Loading…</pre>';
     }
     function pull(){
@@ -1616,7 +1865,7 @@
       kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
     '</div>'+
     '<div class="jh-spread" style="margin-top:var(--s3)">'+
-      '<button class="jh-btn ghost sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Database env</button>'+
+      '<button type="button" class="jh-btn ghost sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Database env</button>'+
     '</div>';
   }
   function drawerDb(){
@@ -1624,7 +1873,7 @@
     p.innerHTML = '<div class="jh-alert info">'+ic('db')+
       '<div>Write this app’s database connection environment. Secrets are stored server-side and never echoed back.</div></div>'+
       '<div class="jh-spread" style="margin-top:var(--s3)">'+
-        '<button class="jh-btn accent sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Configure database env</button>'+
+        '<button type="button" class="jh-btn accent sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Configure database env</button>'+
       '</div>';
   }
   // drawer controls: close, tablist arrow-keys, focus trap, Esc
@@ -1964,19 +2213,15 @@
       }
     });
   }
-  function metricRow(key, value, id){
-    return '<div class="jh-kv"><span>'+esc(key)+'</span>'+
-      '<span class="jh-muted"'+(id?' id="'+id+'"':'')+'>'+esc(value)+'</span></div>';
-  }
   // Build the static metrics layout once; subsequent refreshes only update
   // text nodes in place via textContent (no modal/DOM recreation).
   function buildMetricsShell(){
     return '<div class="jh-kv"><span>Status</span>'+
         '<span class="jh-badge ok" id="m-status"><span class="jh-dot"></span>up</span></div>'+
-      metricRow('PID', '—', 'm-pid')+
-      metricRow('Memory', '—', 'm-mem')+
-      metricRow('Threads', '—', 'm-thr')+
-      metricRow('Uptime', '—', 'm-up')+
+      kv('PID', '—', 'm-pid')+
+      kv('Memory', '—', 'm-mem')+
+      kv('Threads', '—', 'm-thr')+
+      kv('Uptime', '—', 'm-up')+
       '<div class="jh-spread" style="margin-top:var(--s3);justify-content:space-between">'+
         '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">'+
           '<input type="checkbox" id="m-auto" checked style="width:auto;cursor:pointer"> Auto-refresh</label>'+
@@ -2192,7 +2437,7 @@
     var box = $('db-app-picker');
     if(!apps.length){ box.innerHTML = emptyInline('No apps to configure', 'Create an app first.'); return; }
     box.innerHTML = apps.map(function(a){
-      return '<button class="jh-btn ghost sm" data-dbenv="'+esc(a.app)+'">'+ic('db')+esc(a.app)+'</button>';
+      return '<button type="button" class="jh-btn ghost sm" data-dbenv="'+esc(a.app)+'">'+ic('db')+esc(a.app)+'</button>';
     }).join('');
   }
 
@@ -2264,7 +2509,7 @@
     var box = $('help-docs'); if(!box) return;
     box.innerHTML = HELP_DOCS.map(function(d){
       return '<div class="jh-kv"><span>'+ic('doc')+' '+esc(d[1])+'</span>'+
-        '<button class="jh-btn ghost sm jh-doc" data-doc="'+esc(d[0])+'" data-title="'+esc(d[1])+'">'+
+        '<button type="button" class="jh-btn ghost sm jh-doc" data-doc="'+esc(d[0])+'" data-title="'+esc(d[1])+'">'+
         ic('doc')+'View</button></div>';
     }).join('');
   }
@@ -2301,13 +2546,17 @@
   }
   function viewDoc(name, title){
     openModal({ title: title || 'Document', large: true,
-      body: '<div class="jh-doc-body jh-muted">Loading…</div>' });
+      body: '<div class="jh-doc-body jh-muted">Loading…</div>',
+      footer: [ mkBtn('Close', 'ghost', closeModal) ] });
     call('GetDoc', { name: name }, function(r){
       var p = payload(r), b = document.querySelector('#jh-modal-body .jh-doc-body');
       if(!b) return;
       b.className = 'jh-doc-body';
       if(failed(r)){ b.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
-      b.innerHTML = mdToHtml(p.content || '');
+      var content = (p && p.content != null) ? String(p.content) : '';
+      b.innerHTML = content.trim()
+        ? mdToHtml(content)
+        : emptyInline('Document is empty', 'This guide has no content to display.');
     });
   }
   document.addEventListener('click', function(e){
@@ -2385,6 +2634,8 @@
     if(document.hidden) return;
     if(activeSection !== 'apps') return;
     if(appsModalBusy()) return;        // don't refresh under a destructive modal
+    if(anyPending()) return;           // a lifecycle/SSL action is in flight — a
+                                       // re-render would wipe its busy control
     if(APPS.inflight) return;          // single in-flight at a time
     APPS.inflight = true;
     call('GetStatus', {}, function(r){
@@ -2446,7 +2697,7 @@
         '<td>'+esc(target)+'</td>'+
         '<td><span class="jh-badge '+b.cls+'"><span class="jh-dot"></span>'+esc(b.label)+'</span></td>'+
         '<td class="jh-muted">'+esc(fmtElapsed(j.started, j.ended))+'</td>'+
-        '<td><button class="jh-btn ghost sm" data-joblog="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('doc')+'View log</button></td>'+
+        '<td><button type="button" class="jh-btn ghost sm" data-joblog="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('doc')+'View log</button></td>'+
       '</tr>';
     }).join('');
   }
@@ -2544,6 +2795,9 @@
     }
   }
   function initLogsSection(){
+    // sync the auto-tail checkbox to the actual timer state on (re)entry
+    var auto = $('lg-auto');
+    if(auto) auto.checked = !!(LOGS && LOGS.timer);
     // pull fresh jobs so the task picker is current, then populate + load
     call('GetJobs', {}, function(r){
       if(activeSection !== 'logs') return;
@@ -2575,6 +2829,19 @@
   }
   function logsAutoTick(){
     if(document.hidden || activeSection !== 'logs') return;
+    // if the auto-tailed source has vanished (app deleted / job pruned), stop
+    // the timer, uncheck the toggle, and tell the operator instead of silently
+    // tailing nothing.
+    var sel = $('lg-source');
+    var v = sel && sel.value;
+    var present = !!v && Array.prototype.some.call((sel && sel.options) || [],
+      function(o){ return o.value === v && !o.disabled; });
+    if(!present){
+      stopLogsAuto();
+      var auto = $('lg-auto'); if(auto) auto.checked = false;
+      toast('Auto-tail stopped — log source is no longer available', 'err');
+      return;
+    }
     loadUnifiedLog();
   }
   function startLogsAuto(){ stopLogsAuto(); LOGS.timer = setInterval(logsAutoTick, JOB_POLL); }
@@ -2601,12 +2868,13 @@
     if(b.getAttribute('role') === 'menuitem') closeAllMenus();
 
     // copy-to-clipboard (URL / port)
-    if(ds.copyurl){ var ux = APPS_BY_NAME[ds.copyurl]||{app:ds.copyurl}; var u = appUrl(ux); if(u) copyText(u); else toast('No URL yet','err'); return; }
-    if(ds.copyport){ var px = APPS_BY_NAME[ds.copyport]||{app:ds.copyport}; var pt = appPort(px); if(pt!=null) copyText(String(pt)); else toast('No port yet','err'); return; }
+    if(ds.copyurl){ var ux = APPS_BY_NAME[ds.copyurl]||{app:ds.copyurl}; var u = appUrl(ux); if(u) copyText(u, 'URL'); else toast('No URL yet','err'); return; }
+    if(ds.copyport){ var px = APPS_BY_NAME[ds.copyport]||{app:ds.copyport}; var pt = appPort(px); if(pt!=null) copyText(String(pt), 'Port'); else toast('No port yet','err'); return; }
 
     // drawer tab switch + drawer logs refresh
     if(ds.dtab){ drawerShowTab(ds.dtab); return; }
     if(ds.dwlogRefresh){ if(DRAWER._logPull) DRAWER._logPull(); return; }
+    if(ds.sitestatus){ drawerSiteStatus(ds.sitestatus, b); return; }
     if(b.id === 'jh-drawer-x'){ closeDrawer(); return; }
 
     // header / toolbar
@@ -2653,15 +2921,29 @@
       else openMenu(pop, b);
       return;
     }
-    // app lifecycle (start/stop/restart)
+    // app lifecycle (start/stop/restart) — async background job, sync fallback
     if(ds.act){
-      busy(b, true);
-      call('AppAction', {app:ds.app, action:ds.act}, done(ds.act+' '+ds.app, b)); return;
+      if(appPending(ds.app)) return;                 // ignore repeat clicks
+      startAppLifecycle(ds.app, ds.act, b); return;
     }
-    if(ds.repair){ busy(b, true); toast('Repairing '+ds.repair+'…'); call('RepairApp', {app:ds.repair}, done('Repair '+ds.repair, b)); return; }
+    if(ds.repair){
+      if(appPending(ds.repair)) return;
+      startAppLifecycle(ds.repair, 'repair', b); return;
+    }
     if(ds.delete){
+      if(appPending(ds.delete)) return;              // a delete is already running
       if(!confirm('Delete app "'+ds.delete+'"? This removes its Tomcat instance and files.')) return;
-      call('DeleteApp', {app:ds.delete}, done('Delete '+ds.delete)); return;
+      var dApp = ds.delete;
+      markPending(dApp);                             // block double-delete + tick wipe
+      busy(b, true);
+      call('DeleteApp', {app:dApp}, function(r){
+        clearPending(dApp);
+        busy(b, false);
+        if(failed(r)) toast(errText(payload(r)), 'err', 'Delete '+dApp+' failed');
+        else toast('Delete '+dApp+' completed', 'ok');
+        refresh();
+      });
+      return;
     }
     if(ds.logs){ openLogs(ds.logs); return; }
     if(ds.metrics){ openMetrics(ds.metrics); return; }

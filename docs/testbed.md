@@ -143,8 +143,8 @@ Outputs land in `tests/fixtures/out/`:
 |----------|-------|----------------|
 | `hello.war`   | `jakarta.*` WAR | baseline WAR deploy → `JAVAHOST_OK` |
 | `legacy.war`  | `javax.*` WAR | namespace warning + `javax`→`jakarta` migrate |
-| `app.war`     | minimal app WAR | a second clean deploy target |
-| `boot.war`    | Boot-style WAR | servlet-container Boot path |
+| `app.jar`     | executable fat JAR (`com.sun.net.httpserver`) | service-less JAR deploy → `JAVAHOST_OK` |
+| `boot.jar`    | Spring Boot-shaped JAR (`JarLauncher` + `BOOT-INF/`) | Spring Boot auto-detection |
 | `dbcheck.war` | WAR + JDBC/Mongo probe | reads `app.env`, connects → `DB_OK` |
 | `dbapp.jar`   | executable JAR + DB probe | service-less JAR + DB → `DB_OK` |
 
@@ -267,10 +267,51 @@ for a default/apex app). Endpoints:
   the site API is unavailable.
 - **`RemoveSite{app}`** — remove that reverse-proxy site.
 
+> **The domain suffix is configurable, not hardcoded.** The default
+> `<app>.<suffix>` convention reads the suffix from the plugin config key
+> **`site_suffix`** (`/www/server/javahost/config.json`), which is **empty by
+> default**. With no suffix set, JavaHost never guesses an FQDN — you must pass an
+> explicit `domain`. This guide uses `5d.bisotech.in` because that is the suffix
+> configured on the campaign box (`site_suffix: "5d.bisotech.in"`).
+
 This is what makes an app reachable at all from outside the box — see the
 [loopback invariant](#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain).
 For the manual include-snippet alternative, see the **Reverse-proxy hint** card
 in the [User Guide](user-guide.md#6-reverse-proxy).
+
+### Per-site HTTPS (Let's Encrypt)
+
+JavaHost can provision a real Let's Encrypt certificate per reverse-proxy site
+and flip the vhost to HTTPS:
+
+- **`SetSiteSSL{app, enable, email?}`** — `enable` truthy issues a cert and
+  rewrites the vhost to terminate TLS on `:443` (the `:80` server keeps serving
+  the ACME challenge and 301-redirects to https). `enable` falsy reverts to plain
+  HTTP. The domain is the app's stored site domain, an explicit `?domain=`, or the
+  `site_suffix` convention — a cert is **never** issued against a guessed FQDN.
+  `email` is optional, passed to the ACME registration.
+- **Issuance path: aaPanel-native first, certbot fallback.** It tries the panel's
+  native ACME API, and if that doesn't actually place a live cert it falls back to
+  `certbot certonly --webroot`. Both serve the HTTP-01 challenge from a shared
+  webroot, so the site never goes down during issuance.
+- **Auto-renewal.** A certbot **deploy hook**
+  (`/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh`) is installed
+  idempotently so nginx is reloaded automatically after every renewal.
+- **State marker.** The on/off state is recorded per instance at
+  `<base>/bin/site.ssl` (read by `list_apps()`); the `:443` vhost references the LE
+  live cert at `/etc/letsencrypt/live/<domain>/`.
+- **Cert kept on disable.** Turning SSL off rewrites the vhost back to HTTP but
+  **leaves the certificate on disk**, so re-enabling is instant (no re-issue).
+
+Once SSL is on, an app's `request scheme` reads `https` end-to-end (the proxy sets
+`X-Forwarded-Proto https`) — visible in the `hello.war` "served by" block.
+
+Verify after enabling:
+
+```bash
+curl -s https://hello.5d.bisotech.in/ | grep JAVAHOST_OK
+curl -sI http://hello.5d.bisotech.in/ | grep '301'   # http -> https redirect
+```
 
 ---
 
