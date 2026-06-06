@@ -491,6 +491,7 @@
       <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
       <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
       <symbol id="i-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     </defs>
   </svg>
 
@@ -526,6 +527,7 @@
           <button type="button" class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
           <button type="button" class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
           <button type="button" class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
+          <button type="button" class="jh-tab" role="tab" data-section="settings" aria-selected="false" aria-controls="page-settings" id="tab-settings" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-settings"/></svg>Settings</button>
         </div>
       </nav>
 
@@ -656,6 +658,17 @@
         <div class="jh-card-h"><div><h3>Documentation</h3><p>Operational guides shipped with the plugin</p></div></div>
         <div class="jh-rows" id="help-docs"></div>
         <div class="jh-hint">Per-app Tomcat instances on the chosen major; downloads are verified; services run under systemd (with init.d fallback).</div>
+      </div>
+    </section>
+
+    <!-- ================== PAGE: SETTINGS ================== -->
+    <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
+      <div class="jh-card">
+        <div class="jh-card-h">
+          <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
+          <button class="jh-btn ghost sm" id="jh-wipe-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-danger-body"><div class="jh-loading">Loading…</div></div>
       </div>
     </section>
 
@@ -953,6 +966,233 @@
   }
 
   // =====================================================================
+  // JAVA RUNTIME ACTIONS (Runtimes section) — reinstall / uninstall
+  //   Mirrors the Tomcat row actions but adds a "block with dependents" guard
+  //   for uninstall: GetJavaUsage{version} first; if apps depend on this major
+  //   we surface them and require an explicit "Force uninstall anyway". All
+  //   real work runs through the async Start* job poll (startJob) with a sync
+  //   fallback baked into startJob/done(). Routed through call() throughout.
+  // =====================================================================
+  function reinstallJava(version, toPluginDir, btn){
+    var label = 'JDK '+version+' reinstall';
+    var data = {version: version};
+    if(toPluginDir) data.to_plugin_dir = 1;
+    busy(btn, true);
+    startJob('ReinstallJava', data, label, btn);
+  }
+  // Perform the actual uninstall: async StartUninstallJava (job poll), with a
+  // sync UninstallJava fallback handled inside startJob/done().
+  function doUninstallJava(version, force, btn){
+    var label = 'JDK '+version+' uninstall';
+    var data = {version: version};
+    if(force) data.force = 1;
+    busy(btn, true);
+    startJob('UninstallJava', data, label, btn);
+  }
+  // Uninstall flow: check dependents first. If any app uses this major, open a
+  // confirm modal listing them with Cancel + a secondary "Force uninstall
+  // anyway". If none, a plain confirm modal, then uninstall.
+  function uninstallJava(version, btn){
+    call('GetJavaUsage', {version: version}, function(r){
+      var p = payload(r);
+      // tolerate a missing endpoint: fall through to a plain confirm
+      var inUse = (!failed(r) && p && Array.isArray(p.in_use_by)) ? p.in_use_by : [];
+      if(inUse.length){
+        confirmJavaInUse(version, inUse, btn);
+      } else {
+        confirmUninstallJava(version, btn);
+      }
+    });
+  }
+  function confirmUninstallJava(version, btn){
+    openModal({
+      title:'Uninstall Java '+version, sub:'Removes this plugin-managed JDK',
+      returnFocus: btn,
+      body:
+        '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div>This permanently removes the Java '+esc(version)+' runtime managed by JavaHost. '+
+          'Apps configured to use Java '+esc(version)+' will fail to start until repointed.</div></div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Uninstall', 'danger', function(b){
+          closeModal();
+          doUninstallJava(version, false, btn);
+        }, 'trash')
+      ]
+    });
+  }
+  function confirmJavaInUse(version, apps, btn){
+    var list = apps.map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('');
+    openModal({
+      title:'Java '+version+' is in use', sub:'Dependent apps must be stopped or repointed first',
+      returnFocus: btn,
+      body:
+        '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div><b>Java '+esc(version)+' is used by:</b> '+esc(apps.join(', '))+
+          ' — stop or repoint these apps before removing this runtime.</div></div>'+
+        '<ul style="margin:var(--s3) 0 0;padding-left:var(--s5)">'+list+'</ul>'+
+        '<div class="jh-hint">Forcing the uninstall will leave the listed apps without a Java '+esc(version)+' runtime; they will not start until repointed or the runtime is reinstalled.</div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Force uninstall anyway', 'danger ghost', function(b){
+          closeModal();
+          doUninstallJava(version, true, btn);
+        }, 'trash')
+      ]
+    });
+  }
+
+  // =====================================================================
+  // DANGER ZONE (Settings section) — preview + scoped wipe
+  //   On entering Settings we call WipePreview{} -> {apps,jdks,tomcats,sites,
+  //   counts,data_root}. We render labelled category checkboxes + a dry-run
+  //   list of exactly what each removes, a typed-WIPE confirm, and a Run button
+  //   that is disabled until the text == "WIPE" and at least one category is
+  //   checked. Run -> Wipe{scope:<csv>, confirm:"WIPE"}. Tolerates a missing
+  //   WipePreview endpoint (hides the zone with an info note).
+  // =====================================================================
+  var WIPE_PREVIEW = null;
+  var WIPE_CATS = [
+    {key:'apps',    label:'Remove deployed apps',         field:'apps'},
+    {key:'jdks',    label:'Remove plugin JDKs',           field:'jdks'},
+    {key:'tomcats', label:'Remove Tomcats',               field:'tomcats'},
+    {key:'sites',   label:'Remove reverse-proxy sites',   field:'sites'}
+  ];
+  function wipeCount(p, cat){
+    if(p && p.counts && p.counts[cat.field] != null) return Number(p.counts[cat.field]) || 0;
+    var arr = p && p[cat.field];
+    return Array.isArray(arr) ? arr.length : 0;
+  }
+  function refreshDangerZone(btn){
+    var body = $('jh-danger-body'); if(!body) return;
+    busy(btn, true);
+    body.innerHTML = '<div class="jh-loading">Loading…</div>';
+    call('WipePreview', {}, function(r){
+      busy(btn, false);
+      var body2 = $('jh-danger-body'); if(!body2) return;
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object'){
+        WIPE_PREVIEW = null;
+        body2.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>The danger zone is unavailable on this server build. No destructive bulk operations are exposed.</div></div>';
+        return;
+      }
+      WIPE_PREVIEW = p;
+      renderDangerZone(p);
+    });
+  }
+  function previewList(items, emptyLabel){
+    if(!Array.isArray(items) || !items.length){
+      return '<div class="jh-hint">'+esc(emptyLabel)+'</div>';
+    }
+    return '<ul style="margin:4px 0 0;padding-left:var(--s5);font-size:12px;color:var(--muted)">'+
+      items.map(function(it){
+        var t = (it && typeof it === 'object') ? (it.name || it.app || it.domain || it.version || JSON.stringify(it)) : it;
+        return '<li>'+esc(t)+'</li>';
+      }).join('')+'</ul>';
+  }
+  function renderDangerZone(p){
+    var body = $('jh-danger-body'); if(!body) return;
+    var dataRoot = (p.data_root && (p.data_root.path || p.data_root.root)) || (typeof p.data_root === 'string' ? p.data_root : '/www/server/javahost');
+    var cats = WIPE_CATS.map(function(cat){
+      var n = wipeCount(p, cat);
+      var cid = 'wipe-cat-' + cat.key;
+      return '<div class="jh-kv" style="align-items:flex-start;flex-direction:column;gap:6px">'+
+        '<label for="'+cid+'" style="display:flex;align-items:center;gap:var(--s2);cursor:pointer;font-weight:600;color:var(--text)">'+
+          '<input type="checkbox" id="'+cid+'" data-wipe-cat="'+cat.key+'" style="width:auto;flex:none">'+
+          esc(cat.label)+' <span class="jh-badge neutral">'+n+'</span></label>'+
+        previewList(p[cat.field], 'Nothing to remove')+
+      '</div>';
+    }).join('');
+
+    var fullCid = 'wipe-cat-full';
+    var fullBlock = '<div class="jh-kv" style="align-items:flex-start;flex-direction:column;gap:6px;border-top:2px solid color-mix(in srgb,var(--danger) 30%,var(--line));margin-top:var(--s2);padding-top:var(--s3)">'+
+      '<label for="'+fullCid+'" style="display:flex;align-items:center;gap:var(--s2);cursor:pointer;font-weight:700;color:var(--danger)">'+
+        '<input type="checkbox" id="'+fullCid+'" data-wipe-cat="full" style="width:auto;flex:none">'+
+        ic('trash')+'FULL WIPE — remove everything under <code>'+esc(dataRoot)+'</code></label>'+
+      '<div class="jh-hint">Selecting full wipe removes all apps, JDKs, Tomcats, sites, and the entire plugin data directory. After this you can uninstall the plugin from the App Store.</div>'+
+    '</div>';
+
+    body.innerHTML =
+      '<div class="jh-alert danger" role="alert" style="margin-bottom:var(--s3)">'+ic('warn')+
+        '<div><b>These actions are irreversible.</b> Review the dry-run preview below, then type <code>WIPE</code> to confirm. '+
+        'Data root: <code>'+esc(dataRoot)+'</code>.</div></div>'+
+      '<div class="jh-rows" id="jh-wipe-cats">'+cats+fullBlock+'</div>'+
+      '<div class="jh-form" style="margin-top:var(--s4)">'+
+        '<div class="jh-field wide"><label for="jh-wipe-confirm">Type WIPE to confirm</label>'+
+          '<input id="jh-wipe-confirm" placeholder="WIPE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="jh-wipe-confirm-hint"></div>'+
+      '</div>'+
+      '<div class="jh-hint" id="jh-wipe-confirm-hint">The Run button stays disabled until you type <code>WIPE</code> exactly and select at least one category.</div>'+
+      '<div class="jh-spread" style="margin-top:var(--s4);justify-content:flex-end">'+
+        '<button type="button" class="jh-btn danger" id="jh-wipe-run" disabled>'+ic('trash')+'Run destructive wipe</button>'+
+      '</div>'+
+      '<div id="jh-wipe-result" style="margin-top:var(--s3)" aria-live="polite"></div>';
+    updateWipeRunState();
+  }
+  function wipeCheckedCats(){
+    var out = [];
+    document.querySelectorAll('[data-wipe-cat]').forEach(function(cb){
+      if(cb.checked) out.push(cb.getAttribute('data-wipe-cat'));
+    });
+    return out;
+  }
+  function updateWipeRunState(){
+    var run = $('jh-wipe-run'), inp = $('jh-wipe-confirm');
+    if(!run) return;
+    var typed = inp && inp.value === 'WIPE';
+    var anyChecked = wipeCheckedCats().length > 0;
+    run.disabled = !(typed && anyChecked);
+  }
+  function runWipe(btn){
+    var cats = wipeCheckedCats();
+    var inp = $('jh-wipe-confirm');
+    if(!cats.length || !inp || inp.value !== 'WIPE'){ updateWipeRunState(); return; }
+    var isFull = cats.indexOf('full') !== -1;
+    var scope = cats.join(',');
+    busy(btn, true);
+    var res = $('jh-wipe-result');
+    if(res) res.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Running wipe…</div></div>';
+    call('Wipe', {scope: scope, confirm: 'WIPE'}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      var res2 = $('jh-wipe-result');
+      if(failed(r)){
+        if(res2) res2.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
+        toast(errText(p), 'err', 'Wipe failed');
+        return;
+      }
+      showWipeSummary(p, isFull);
+      toast('Wipe completed', 'ok');
+      refresh();                 // re-pull status (apps/runtimes now changed)
+      refreshDangerZone();       // re-fetch the preview (counts now zeroed)
+    });
+  }
+  function summaryLine(p, key, label){
+    var v = (p && p.summary && p.summary[key] != null) ? p.summary[key]
+          : (p && p[key] != null ? p[key] : null);
+    if(v == null) return '';
+    if(Array.isArray(v)) v = v.length;
+    return '<div class="jh-kv"><span>'+esc(label)+'</span><span class="jh-muted">'+esc(v)+'</span></div>';
+  }
+  function showWipeSummary(p, isFull){
+    var rows = summaryLine(p,'apps','Apps removed') + summaryLine(p,'jdks','JDKs removed') +
+      summaryLine(p,'tomcats','Tomcats removed') + summaryLine(p,'sites','Sites removed');
+    var fullNote = isFull
+      ? '<div class="jh-alert" style="margin-top:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
+        '<div><b>Plugin data removed.</b> You may now uninstall the JavaHost plugin from the aaPanel App Store.</div></div>'
+      : '';
+    openModal({
+      title:'Wipe complete', sub:'Summary of what was removed',
+      body:
+        '<div class="jh-alert" style="margin-bottom:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
+          '<div>The destructive wipe finished.</div></div>'+
+        (rows ? '<div class="jh-rows">'+rows+'</div>' : '<div class="jh-hint">No per-category counts were reported by the server.</div>')+
+        fullNote,
+      footer: [ mkBtn('Close', 'ghost', closeModal) ]
+    });
+  }
+
+  // =====================================================================
   // SECTION TABS (top horizontal tablist — WAI-ARIA Tabs pattern)
   //   Each tab has role="tab", data-section="X", aria-controls="page-X";
   //   each content page has id="page-X" role="tabpanel". For EVERY tab we
@@ -1133,17 +1373,44 @@
   // =====================================================================
   // RUNTIMES TAB — Java + Tomcat install/update/uninstall
   // =====================================================================
+  // A JDK whose path is under /usr/local/btjdk (or otherwise NOT under the
+  // plugin's own runtimes dir /www/server/javahost/runtimes) is the shared,
+  // panel-managed JDK 17 — the panel owns it, so we must never let the plugin
+  // uninstall it; instead we offer to (re)install a private copy into the
+  // plugin dir. Defaults to "plugin-managed" when the path is absent/unknown.
+  function jdkIsPanelManaged(path){
+    var p = String(path == null ? '' : path);
+    if(!p) return false;
+    if(/^\/usr\/local\/btjdk(\/|$)/.test(p)) return true;
+    if(/^\/www\/server\/javahost\/runtimes(\/|$)/.test(p)) return false;
+    return false;
+  }
   function renderRuntimes(d){
     var java = d.java || {};
     var majors = ['8','11','17','21'];
     $('rt-java').innerHTML = majors.map(function(k){
       var on = java[k] != null;
-      return '<div class="jh-kv"><span>Java '+esc(k)+
-        (on ? ' <span class="jh-muted" title="'+esc(java[k])+'">'+esc(java[k])+'</span>' : '')+'</span>'+
-        '<span class="btns">'+
-          (on ? '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'
-              : '<button type="button" class="jh-btn accent sm" data-jdk="'+esc(k)+'">'+ic('plus')+'Install</button>')+
-        '</span></div>';
+      var panel = on && jdkIsPanelManaged(java[k]);
+      var ek = esc(k);
+      var pathHtml = on ? ' <span class="jh-muted" title="'+esc(java[k])+'">'+esc(java[k])+'</span>' : '';
+      var panelBadge = panel
+        ? ' <span class="jh-badge neutral" title="Shared with aaPanel; managed by the panel">'+ic('info')+'panel JDK</span>'
+        : '';
+      var btns;
+      if(!on){
+        btns = '<button type="button" class="jh-btn accent sm" data-jdk="'+ek+'">'+ic('plus')+'Install</button>';
+      } else if(panel){
+        // panel-managed: badge + reinstall-into-plugin-dir, NO uninstall
+        btns = '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'+
+          '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'" data-to-plugin-dir="1" title="Install a private copy into the plugin runtimes dir">'+ic('refresh')+'Reinstall into plugin dir</button>';
+      } else {
+        // plugin-managed: reinstall + uninstall (danger)
+        btns = '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'+
+          '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'">'+ic('refresh')+'Reinstall</button>'+
+          '<button type="button" class="jh-btn danger ghost sm" data-jdk-uninstall="'+ek+'">'+ic('trash')+'Uninstall</button>';
+      }
+      return '<div class="jh-kv"><span>Java '+ek+pathHtml+panelBadge+'</span>'+
+        '<span class="btns">'+btns+'</span></div>';
     }).join('');
 
     var tom = d.tomcat || {}, supp = d.supported_tomcat || ['9','10','11'];
@@ -2665,6 +2932,7 @@
     if(name === 'apps') startAppsPoll();
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
+    if(name === 'settings') refreshDangerZone();
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -2894,6 +3162,17 @@
       busy(b, true);
       startJob('InstallJava', {version:ds.jdk}, 'JDK '+ds.jdk+' install', b); return;
     }
+    // runtimes — Java reinstall (plugin-managed, or panel JDK -> into plugin dir)
+    if(ds.jdkReinstall){
+      var toPlugin = ds.toPluginDir === '1';
+      var rLabel = toPlugin
+        ? ('Reinstall Java '+ds.jdkReinstall+' into the plugin runtimes dir? A private copy is built; the shared panel JDK is left untouched.')
+        : ('Reinstall Java '+ds.jdkReinstall+'? The runtime is rebuilt from a verified download.');
+      if(!confirm(rLabel)) return;
+      reinstallJava(ds.jdkReinstall, toPlugin, b); return;
+    }
+    // runtimes — Java uninstall (block-with-dependents flow)
+    if(ds.jdkUninstall){ uninstallJava(ds.jdkUninstall, b); return; }
     // runtimes — Tomcat (async)
     if(ds.tcInstall){ busy(b, true);
       startJob('InstallTomcat', {version:ds.tcInstall}, 'Tomcat '+ds.tcInstall+' install', b); return; }
@@ -2903,6 +3182,10 @@
       if(!confirm('Uninstall Tomcat '+ds.tcUninstall+'? Apps on this major may break.')) return;
       busy(b, true); startJob('UninstallTomcat', {version:ds.tcUninstall}, 'Tomcat '+ds.tcUninstall+' uninstall', b); return;
     }
+
+    // settings / danger zone
+    if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
+    if(b.id === 'jh-wipe-run'){ runWipe(b); return; }
 
     // tasks / logs sections
     if(b.id === 'jh-tasks-refresh'){ refreshTasks(b); return; }
@@ -2955,9 +3238,17 @@
   // Delegated change handler so it survives DOM that's static here anyway.
   $('jh-root').addEventListener('change', function(e){
     var t = e.target;
-    if(!t || !t.id) return;
+    if(!t) return;
+    // danger-zone category checkboxes -> re-evaluate the Run button
+    if(t.getAttribute && t.getAttribute('data-wipe-cat') != null){ updateWipeRunState(); return; }
+    if(!t.id) return;
     if(t.id === 'lg-source' || t.id === 'lg-lines'){ loadUnifiedLog(); return; }
     if(t.id === 'lg-auto'){ if(t.checked){ startLogsAuto(); loadUnifiedLog(); } else stopLogsAuto(); return; }
+  });
+  // typed-confirm input ("WIPE") gates the destructive Run button live
+  $('jh-root').addEventListener('input', function(e){
+    var t = e.target;
+    if(t && t.id === 'jh-wipe-confirm'){ updateWipeRunState(); }
   });
 
   // keyboard activation for app rows (role="button"): Enter / Space open drawer

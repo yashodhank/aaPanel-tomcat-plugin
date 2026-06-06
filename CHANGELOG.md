@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.15.0] — 2026-06-06
+
+### Added
+- **Java runtime Install / Reinstall / Uninstall** per version (async jobs).
+  Uninstall is **blocked when a JDK is in use** by deployed apps (lists the
+  dependents; `Force` overrides) — `GetJavaUsage`/`UninstallJava`/
+  `StartUninstallJava`/`StartReinstallJava`. The **panel-managed JDK**
+  (`/usr/local/btjdk`, shared with aaPanel) is shown with a "panel JDK" badge,
+  cannot be uninstalled, and instead offers **"reinstall into the plugin dir"**.
+- **Settings → Danger zone:** granular plugin teardown — per-category checkboxes
+  (deployed apps / plugin JDKs / Tomcats / reverse-proxy sites / **full wipe**),
+  a dry-run **preview** of exactly what will be removed (`WipePreview`), and a
+  typed `WIPE` confirmation (`Wipe`). Apps are stopped before removal; the panel
+  JDK, panel cert, other plugins' configs, and databases are never touched.
+- **Plan-driven uninstall:** `install.sh uninstall` honors an optional
+  `/www/server/javahost/.uninstall_plan` (written by the Danger zone) to wipe the
+  chosen scope; **default is keep-data** (only the plugin code is removed).
+
 ## [0.14.0] — 2026-06-06
 
 Outcome of a full 3-dimension code review (UI / backend / tests-docs).

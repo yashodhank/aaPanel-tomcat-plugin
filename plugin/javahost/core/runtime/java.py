@@ -142,6 +142,112 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
     return dest
 
 
+# --- uninstall / dependents (Feature 1) ---
+# Where the plugin's own runtimes live. ANYTHING outside this tree (notably the
+# panel-owned /usr/local/btjdk) is shared/system and must never be removed.
+_PLUGIN_RUNTIMES = JDK_ROOT  # "/www/server/javahost/runtimes"
+
+
+def _is_plugin_runtime(path: str) -> bool:
+    """True only when `path` is a plugin-managed runtime under JDK_ROOT."""
+    if not path:
+        return False
+    rp = os.path.realpath(path)
+    root = os.path.realpath(_PLUGIN_RUNTIMES)
+    return rp == root or rp.startswith(root + os.sep)
+
+
+def usage(major: int) -> List[str]:
+    """App names whose pinned JAVA_HOME resolves to Java `major`.
+
+    Scans every instance's setenv.sh / app.env for a JAVA_HOME and compares its
+    parsed major to `major`. Defensive: a malformed instance never raises here.
+    Imported lazily to avoid a runtime<->tomcat import cycle.
+    """
+    from ..tomcat import instance as _inst
+
+    out: List[str] = []
+    root = _inst.INSTANCE_ROOT
+    if not os.path.isdir(root):
+        return out
+    for name in sorted(os.listdir(root)):
+        base = os.path.join(root, name)
+        if not os.path.isdir(base):
+            continue
+        try:
+            env = _inst._read_setenv(base)
+            jhome = env.get("JAVA_HOME") or _inst._read_app_env(base).get("JAVA_HOME", "")
+            if _inst._java_major_from_home(jhome) == int(major):
+                out.append(name)
+        except Exception:
+            continue
+    return out
+
+
+def uninstall(major: int, force: bool = False) -> Dict:
+    """Remove the plugin-managed JDK `major`.
+
+    Refuses the panel-owned JDK (anything outside /www/server/javahost/runtimes):
+    those are shared; reinstall into the plugin dir instead of deleting the
+    panel's copy. Blocks (not silently) when any app pins this major unless
+    `force=True`. Returns a summary dict; never removes anything system-wide.
+    """
+    major = int(major)
+    found = detect()
+    home = found.get(major)
+    if not home:
+        # nothing detected for this major; treat the canonical plugin path
+        dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % major)
+        if not os.path.isdir(dest):
+            return {"major": major, "removed": False, "reason": "not installed"}
+        home = dest
+    if not _is_plugin_runtime(home):
+        raise RuntimeError(
+            "Java %d resolves to a panel-managed JDK (%s, shared); refusing to "
+            "remove it. Reinstall into the plugin dir instead, don't remove the "
+            "panel's copy." % (major, os.path.realpath(home)))
+    in_use = usage(major)
+    if in_use and not force:
+        raise RuntimeError(
+            "Java %d is in use by: %s (pass force to remove anyway)"
+            % (major, ", ".join(in_use)))
+    dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % major)
+    target = dest if os.path.isdir(dest) else os.path.realpath(home)
+    removed = False
+    if os.path.isdir(target):
+        # marker-gated when present (install_temurin marks it), else a guarded
+        # rmtree of exactly that dir (safe_rmtree still refuses anything outside
+        # the managed roots / follows-symlink-out protection).
+        fs.safe_rmtree(target, require_marker=fs.is_managed(target))
+        removed = True
+    return {"major": major, "removed": removed, "home": target,
+            "in_use_by": in_use, "forced": bool(force)}
+
+
+def reinstall(major: int, to_plugin_dir: bool = False) -> Dict:
+    """Reinstall Temurin JDK `major` into the plugin runtimes.
+
+    Normally uninstalls the plugin-managed copy first (force=True) then installs.
+    For a panel-owned JDK (e.g. the panel's jdk17) `to_plugin_dir=True` means:
+    DON'T touch the panel copy — just install_temurin(major) under the plugin
+    runtimes so the plugin owns its own. With to_plugin_dir False on a panel
+    path, uninstall() refuses (by design) and the error surfaces.
+    """
+    major = int(major)
+    found = detect()
+    home = found.get(major)
+    panel_owned = bool(home) and not _is_plugin_runtime(home)
+    if panel_owned and to_plugin_dir:
+        # leave the panel's copy alone; give the plugin its own under JDK_ROOT
+        new_home = install_temurin(major)
+        return {"major": major, "reinstalled": True, "home": new_home,
+                "kept_panel_copy": True}
+    uninstall(major, force=True)
+    new_home = install_temurin(major)
+    return {"major": major, "reinstalled": True, "home": new_home,
+            "kept_panel_copy": False}
+
+
 def _fetch_with_sha256(url: str, dest_dir: str, sha256_hex, sha256_url) -> str:
     import hashlib
     name = os.path.basename(url.split("?")[0])

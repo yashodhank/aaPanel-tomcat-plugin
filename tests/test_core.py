@@ -950,3 +950,140 @@ def test_start_app_action_rejects_bad_action(monkeypatch):
     res = javahost_main.javahost_main().StartAppAction(G())
     assert res.get("status") is False
     assert "invalid action" in (res.get("msg") or "")
+
+
+# ---- Java uninstall: panel-path refusal + dependents block + force ----------
+def _mk_instance_with_java(tmp_path, name, java_home):
+    base = tmp_path / name / "bin"
+    base.mkdir(parents=True)
+    (base / "setenv.sh").write_text('export JAVA_HOME="%s"\n' % java_home)
+    return base
+
+
+def test_java_uninstall_refuses_panel_path(monkeypatch):
+    # major 17 resolves to the panel-owned /usr/local/btjdk -> refuse.
+    monkeypatch.setattr(java, "detect", lambda: {17: "/usr/local/btjdk/jdk17"})
+    with pytest.raises(RuntimeError) as e:
+        java.uninstall(17)
+    assert "panel-managed" in str(e.value)
+
+
+def test_java_uninstall_blocks_on_dependents_then_force(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    # an app pins jdk-8 under the plugin runtimes
+    _mk_instance_with_java(tmp_path, "legacyapp",
+                           "/www/server/javahost/runtimes/jdk-8")
+    monkeypatch.setattr(java, "detect",
+                        lambda: {8: "/www/server/javahost/runtimes/jdk-8"})
+
+    assert java.usage(8) == ["legacyapp"]
+
+    # blocked (not silent) without force
+    with pytest.raises(RuntimeError) as e:
+        java.uninstall(8)
+    assert "in use" in str(e.value) and "legacyapp" in str(e.value)
+
+    # with force it proceeds; intercept the actual removal so nothing is deleted
+    removed = {}
+    monkeypatch.setattr(java.fs, "is_managed", lambda p: True)
+    monkeypatch.setattr(java.fs, "safe_rmtree",
+                        lambda p, **k: removed.update(path=p))
+    monkeypatch.setattr(java.os.path, "isdir",
+                        lambda p: p == "/www/server/javahost/runtimes/jdk-8")
+    res = java.uninstall(8, force=True)
+    assert res["removed"] is True and res["forced"] is True
+    assert removed["path"] == "/www/server/javahost/runtimes/jdk-8"
+
+
+def test_java_usage_endpoint(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.java, "usage", lambda m: ["a", "b"])
+
+    class G(object):
+        version = "17"
+
+    res = javahost_main.javahost_main().GetJavaUsage(G())
+    assert res["status"] is True
+    assert res["msg"] == {"version": 17, "in_use_by": ["a", "b"]}
+
+
+def test_uninstall_java_endpoint_blocks_with_in_use_list(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.java, "usage", lambda m: ["webapp"])
+    monkeypatch.setattr(javahost_main.java, "uninstall",
+                        lambda *a, **k: pytest.fail("uninstall ran despite dependents"))
+
+    class G(object):
+        version = "17"
+        force = "0"
+
+    res = javahost_main.javahost_main().UninstallJava(G())
+    assert res["status"] is False
+    assert res["msg"]["in_use_by"] == ["webapp"]
+
+
+# ---- maintenance.wipe_preview / wipe ----------------------------------------
+def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
+    from core import maintenance
+    from core.tomcat import instance as inst, installer as instr
+    # apps
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path / "instances"))
+    (tmp_path / "instances" / "app1").mkdir(parents=True)
+    # plugin jdks: jdk-8, jdk-17 present; an unrelated dir must NOT be listed
+    monkeypatch.setattr(maintenance.java, "JDK_ROOT", str(tmp_path / "runtimes"))
+    for d in ("jdk-8", "jdk-17", "notajdk"):
+        (tmp_path / "runtimes" / d).mkdir(parents=True)
+    # tomcats: only major 11 installed
+    monkeypatch.setattr(maintenance, "_list_installed_tomcats", lambda: ["11"])
+    # sites under VHOST_DIR
+    monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    (tmp_path / "vhost").mkdir()
+    (tmp_path / "vhost" / "site.conf").write_text("server {}\n")
+    monkeypatch.setattr(maintenance, "DATA_ROOT", str(tmp_path / "javahost"))
+
+    res = maintenance.wipe_preview()
+    assert set(res) == {"apps", "jdks", "tomcats", "sites",
+                        "data_root", "confirm_required"}
+    assert res["apps"]["items"] == ["app1"]
+    # plugin jdks only — the panel /usr/local/btjdk is never scanned, and the
+    # non-jdk dir is excluded
+    assert res["jdks"]["items"] == ["jdk-17", "jdk-8"]
+    assert "/usr/local/btjdk" not in str(res["jdks"])
+    assert res["tomcats"]["items"] == ["11"]
+    assert res["sites"]["items"] == ["site.conf"]
+    assert res["data_root"]["path"].endswith("/javahost")
+
+
+def test_wipe_noop_when_confirm_wrong(monkeypatch):
+    from core import maintenance
+    monkeypatch.setattr(maintenance, "_wipe_apps",
+                        lambda: pytest.fail("wipe ran without confirm"))
+    res = maintenance.wipe(["apps"], confirm="nope")
+    assert res["performed"] is False
+    assert "confirmation required" in res["reason"]
+
+
+def test_wipe_sites_calls_remove_site(monkeypatch, tmp_path):
+    from core import maintenance
+    monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    (tmp_path / "vhost").mkdir()
+    (tmp_path / "vhost" / "demo.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "shop.conf").write_text("server {}\n")
+    calls = []
+    monkeypatch.setattr(maintenance.proxy, "remove_site",
+                        lambda app: calls.append(app) or {"app": app, "removed": True})
+    monkeypatch.setattr(maintenance, "_remove_include", lambda *a, **k: True)
+    monkeypatch.setattr(maintenance.proxy, "reload_nginx", lambda *a, **k: True)
+
+    res = maintenance.wipe(["sites"], confirm="WIPE")
+    assert res["performed"] is True
+    assert sorted(calls) == ["demo", "shop"]
+    assert sorted(res["steps"]["sites"]["removed"]) == ["demo", "shop"]
+    assert res["steps"]["sites"]["include_removed"] is True
+
+
+def test_wipe_rejects_bad_scope():
+    from core import maintenance
+    with pytest.raises(ValueError):
+        maintenance.wipe("apps,bogus", confirm="WIPE")

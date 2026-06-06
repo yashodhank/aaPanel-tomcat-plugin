@@ -29,15 +29,50 @@ install_javahost() {
     echo "JavaHost installed. Data root: ${DATA_ROOT}"
 }
 
+# Optional plan written by the Settings UI: a csv scope (apps,jdks,tomcats,sites
+# or "full"). When present, run the equivalent granular wipe via the Python
+# maintenance module (typed confirm "WIPE" supplied here). DEFAULT (no plan
+# file) keeps ALL data — only the plugin code/icon is removed by the panel.
+UNINSTALL_PLAN="${DATA_ROOT}/.uninstall_plan"
+
+run_planned_wipe() {
+    # $1 = scope csv. Delegates to core.maintenance.wipe; defensive: any failure
+    # here must NOT abort the panel's uninstall, so it never returns non-zero.
+    local scope="$1"
+    [ -n "$scope" ] || return 0
+    local pybin
+    pybin="$(command -v /www/server/panel/pyenv/bin/python 2>/dev/null \
+        || command -v python3 2>/dev/null || true)"
+    [ -n "$pybin" ] || { echo "no python found; skipping planned wipe"; return 0; }
+    JAVAHOST_PLUGIN_DIR="${PANEL_PLUGIN}" JAVAHOST_WIPE_SCOPE="$scope" \
+        "$pybin" - <<'PYEOF' || echo "planned wipe reported an error (continuing)"
+import os, sys, json
+sys.path.insert(0, os.environ.get("JAVAHOST_PLUGIN_DIR",
+                                  "/www/server/panel/plugin/javahost"))
+from core import maintenance  # noqa: E402
+scope = os.environ.get("JAVAHOST_WIPE_SCOPE", "")
+res = maintenance.wipe(scope, "WIPE")
+print(json.dumps(res))
+PYEOF
+}
+
 uninstall_javahost() {
-    # Conservative: remove only the plugin code + icon. Managed runtimes/apps
-    # are left intact unless the operator runs uninstall with PURGE=1.
+    # Conservative DEFAULT: remove only the plugin code + icon (the panel removes
+    # the code). Managed runtimes/apps under DATA_ROOT are kept unless either a
+    # plan file requests a granular wipe, or the operator sets PURGE=1.
     for d in "${ICON_DIRS[@]}"; do rm -f "${d}/ico-${PLUGIN_NAME}.png" 2>/dev/null || true; done
-    if [ "${PURGE:-0}" = "1" ]; then
+    if [ -f "$UNINSTALL_PLAN" ]; then
+        local scope
+        scope="$(head -n1 "$UNINSTALL_PLAN" 2>/dev/null | tr -d '[:space:]')"
+        echo "JavaHost: running planned wipe (scope=${scope})"
+        run_planned_wipe "$scope"
+        rm -f "$UNINSTALL_PLAN" 2>/dev/null || true
+        echo "JavaHost plugin removed; planned wipe applied (scope=${scope})."
+    elif [ "${PURGE:-0}" = "1" ]; then
         rm -rf "${DATA_ROOT}" 2>/dev/null || true
         echo "JavaHost purged (PURGE=1): ${DATA_ROOT} removed."
     else
-        echo "JavaHost plugin removed. Runtimes/apps under ${DATA_ROOT} kept (set PURGE=1 to remove)."
+        echo "JavaHost plugin removed. Runtimes/apps under ${DATA_ROOT} kept (set PURGE=1 or write ${UNINSTALL_PLAN} to remove)."
     fi
 }
 

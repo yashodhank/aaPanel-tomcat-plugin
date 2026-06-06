@@ -30,6 +30,7 @@ from core.deploy import war, proxy, ssl, sitestatus  # noqa: E402
 from core.db import engines as dbengines        # noqa: E402
 from core import jobs                            # noqa: E402
 from core import config                          # noqa: E402
+from core import maintenance                      # noqa: E402
 
 
 class javahost_main(object):
@@ -86,6 +87,69 @@ class javahost_main(object):
             home = java.install_temurin(major)
             panel.log("InstallJava", "jdk %d -> %s" % (major, home))
             return panel.ok({"java_home": home, "major": major})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetJavaUsage(self, get):
+        """Apps whose pinned JAVA_HOME is this major — so the UI can warn before
+        an uninstall. -> {"version": N, "in_use_by": [apps]}."""
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            return panel.ok({"version": major, "in_use_by": java.usage(major)})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def UninstallJava(self, get):
+        """Remove a plugin-managed JDK (sync). Refuses the panel-owned JDK; blocks
+        when apps pin this major unless force is set, returning the in_use_by
+        list so the UI can prompt."""
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            in_use = java.usage(major)
+            if in_use and not force:
+                return panel.err({"error": "Java %d is in use" % major,
+                                  "in_use_by": in_use})
+            res = java.uninstall(major, force=force)
+            panel.log("UninstallJava", "jdk %d removed=%s" % (major, res.get("removed")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartUninstallJava(self, get):
+        """Async JDK uninstall (job kind 'uninstall-java'). Blocks on dependents
+        (returns in_use_by) unless force; otherwise the job records the result."""
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            in_use = java.usage(major)
+            if in_use and not force:
+                return panel.err({"error": "Java %d is in use" % major,
+                                  "in_use_by": in_use})
+            argv = jobs.python_work(
+                "from core.runtime import java\n"
+                "java.uninstall(%d, force=%r)\n" % (major, force))
+            job_id = jobs.start("uninstall-java", major, argv)
+            panel.log("StartUninstallJava", "jdk %d -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartReinstallJava(self, get):
+        """Async JDK reinstall (job kind 'reinstall-java'). to_plugin_dir keeps a
+        panel-owned JDK untouched and installs the plugin's own copy under the
+        runtimes dir; otherwise uninstall(force=True) then install_temurin."""
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            to_plugin = str(panel.attr(get, "to_plugin_dir", "")).lower() \
+                in ("1", "true", "yes", "on")
+            argv = jobs.python_work(
+                "from core.runtime import java\n"
+                "java.reinstall(%d, to_plugin_dir=%r)\n" % (major, to_plugin))
+            job_id = jobs.start("reinstall-java", major, argv)
+            panel.log("StartReinstallJava",
+                      "jdk %d to_plugin=%s -> job %s" % (major, to_plugin, job_id))
+            return panel.ok({"job_id": job_id})
         except Exception as e:
             return panel.err(str(e))
 
@@ -494,6 +558,32 @@ class javahost_main(object):
                 return panel.err("document not found: %s" % name)
             with open(path, encoding="utf-8", errors="replace") as f:
                 return panel.ok({"name": name, "content": f.read()})
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- Danger-zone maintenance (granular wipe) ----------------------------
+    def WipePreview(self, get=None):
+        """Dry-run: counts + lists of what each wipe category would remove,
+        without removing anything. jdks lists plugin runtimes only (never the
+        panel btjdk)."""
+        try:
+            return panel.ok(maintenance.wipe_preview())
+        except Exception as e:
+            return panel.err(str(e))
+
+    def Wipe(self, get):
+        """Granular plugin wipe. Requires confirm='WIPE' and a scope csv drawn
+        from {apps,jdks,tomcats,sites,full}. Never touches the panel JDK/cert,
+        other plugins' configs, or any database."""
+        try:
+            confirm = panel.attr(get, "confirm", "")
+            if confirm != maintenance.CONFIRM:
+                return panel.err("confirmation required: pass confirm=%r"
+                                 % maintenance.CONFIRM)
+            scope = panel.attr(get, "scope", "")
+            res = maintenance.wipe(scope, confirm)
+            panel.log("Wipe", "scope=%s performed=%s" % (scope, res.get("performed")))
+            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 
