@@ -24,12 +24,10 @@ if _HERE not in sys.path:
 
 from core.compat import aapanel as panel       # noqa: E402
 from core.util import validate                  # noqa: E402
-from core.runtime import java, jvm_opts         # noqa: E402
-from core.tomcat import registry, installer, service  # noqa: E402
+from core.runtime import java                   # noqa: E402
+from core.tomcat import registry, installer, service, instance  # noqa: E402
 from core.deploy import war, proxy              # noqa: E402
 from core.db import engines as dbengines        # noqa: E402
-
-INSTANCE_ROOT = "/www/server/javahost/instances"
 
 
 class javahost_main(object):
@@ -46,11 +44,10 @@ class javahost_main(object):
                         "min_java": registry.get_line(major).min_java,
                         "namespace": registry.get_line(major).namespace,
                     }
-            apps = self._list_apps()
             return panel.ok({
                 "java": jdks,
                 "tomcat": tomcats,
-                "apps": apps,
+                "apps": instance.list_apps(),
                 "systemd": service.have_systemd(),
                 "supported_tomcat": sorted(registry.LINES),
             })
@@ -86,26 +83,27 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def UpdateTomcat(self, get):
+        """Upgrade a managed Tomcat major to the latest patch (atomic, rollback-safe)."""
+        try:
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            res = installer.install(major)  # resolves latest patch; staged + verified
+            panel.log("UpdateTomcat", "tomcat %s -> %s" % (major, res["patch"]))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
     # ---- apps ----
     def CreateApp(self, get):
         try:
-            app = validate.identifier(panel.attr(get, "app"), "app")
-            major = validate.tomcat_version(panel.attr(get, "version"))
-            port = validate.port(panel.attr(get, "port", 8080))
-            heap = validate.memory_mb(panel.attr(get, "memory", 512))
-            home = installer.home_path(major)
-            if not installer.is_installed(major):
-                return panel.err("Tomcat %s is not installed" % major)
-            java_home = installer.ensure_java(major)
-            major_java = java.probe(java_home) or registry.get_line(major).min_java
-            base = os.path.join(INSTANCE_ROOT, app)
-            self._scaffold_base(base)
-            opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(heap), major_java)
-            service.write_setenv(base, app, java_home, home, opts, [])
-            self._render_instance_conf(base, port)
-            service.install_unit(app, java_home, home, base)
-            service.enable_start(app)
-            return panel.ok({"app": app, "port": port, "warnings": warns})
+            res = instance.create(
+                app=panel.attr(get, "app"),
+                major=panel.attr(get, "version"),
+                port=panel.attr(get, "port", 8080),
+                memory_mb=panel.attr(get, "memory", 512),
+            )
+            panel.log("CreateApp", "%(app)s tomcat=%(tomcat)s port=%(port)s" % res)
+            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 
@@ -118,6 +116,34 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def DeleteApp(self, get):
+        try:
+            res = instance.delete(panel.attr(get, "app"))
+            panel.log("DeleteApp", res["app"])
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RepairApp(self, get):
+        try:
+            return panel.ok(instance.repair(panel.attr(get, "app")))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetAppDetail(self, get):
+        try:
+            return panel.ok(instance.detail(panel.attr(get, "app")))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetLogs(self, get):
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            lines = panel.attr(get, "lines", 200)
+            return panel.ok({"app": app, "log": instance.tail_log(app, int(lines))})
+        except Exception as e:
+            return panel.err(str(e))
+
     def DeployWar(self, get):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
@@ -127,8 +153,7 @@ class javahost_main(object):
                 return panel.err("WAR not found: %r" % war_path)
             ns = registry.get_line(major).namespace
             warn = war.namespace_warning(war_path, ns)
-            base = os.path.join(INSTANCE_ROOT, app)
-            target = os.path.join(base, "webapps", "ROOT")
+            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
             war.safe_extract(war_path, target)
             return panel.ok({"app": app, "deployed": True, "warning": warn})
         except Exception as e:
@@ -137,7 +162,7 @@ class javahost_main(object):
     def SetDbEnv(self, get):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            base = os.path.join(INSTANCE_ROOT, app)
+            base = instance.base_path(app)
             engine = dbengines.get(panel.attr(get, "db_engine", "postgresql"))
             mapping = engine.render_env(
                 host=panel.attr(get, "db_host", "127.0.0.1"),
@@ -164,28 +189,3 @@ class javahost_main(object):
     def GetProxyHint(self, get=None):
         eng = dbengines.get("postgresql")
         return panel.ok({"include": proxy.include_hint(), "db": eng.guidance()})
-
-    # ---- helpers ----
-    def _list_apps(self):
-        out = []
-        if os.path.isdir(INSTANCE_ROOT):
-            for app in sorted(os.listdir(INSTANCE_ROOT)):
-                out.append({"app": app, "status": service.status(app)})
-        return out
-
-    def _scaffold_base(self, base):
-        from core.util import fs
-        for sub in ("conf", "webapps", "logs", "work", "temp", "bin"):
-            fs.ensure_dir(os.path.join(base, sub))
-        fs.mark_managed(base)
-
-    def _render_instance_conf(self, base, port):
-        from core.tomcat import templating
-        from core.util import fs
-        fs.atomic_write(os.path.join(base, "conf", "server.xml"),
-                        templating.render_file("server.xml.tmpl", {"http_port": str(port)}),
-                        mode=0o640)
-        fs.atomic_write(os.path.join(base, "conf", "context.xml"),
-                        templating.render_file("context.xml.tmpl",
-                                               {"app": os.path.basename(base)}),
-                        mode=0o640)

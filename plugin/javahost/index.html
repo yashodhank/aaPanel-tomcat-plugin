@@ -1,85 +1,532 @@
 <!-- JavaHost UI — original clean-room markup (Apache-2.0). No aaPanel layout. -->
+<!--
+  Single-file admin UI for the JavaHost plugin.
+  Talks to the backend over the panel plugin AJAX convention:
+      POST /plugin?action=a&name=javahost&s=<Method>
+  Responses are the standard {status, msg} envelope; the actual data lives in
+  r.msg (we read `r.msg||r` everywhere). All dynamic text is escaped via esc().
+  Dependency-light: uses jQuery's $.post when present, otherwise falls back to
+  the Fetch API — identical to the original call() helper.
+-->
 <div class="javahost" style="padding:16px;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1b3a4b">
   <style>
+    /* ---- palette: #1b3a4b ink · #7fd1e0 accent · #f0a830 highlight ---- */
     .javahost h2{margin:0 0 12px;font-size:18px}
-    .javahost .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .javahost .section{margin-top:22px}
+    .javahost .section>h2{font-size:16px;border-bottom:2px solid #7fd1e0;padding-bottom:6px}
+    .javahost .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
     .javahost .card{border:1px solid #e2e8ec;border-radius:8px;padding:12px;background:#fff}
-    .javahost .card h3{margin:0 0 8px;font-size:13px;color:#5b7;letter-spacing:.04em;text-transform:uppercase}
-    .javahost .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #eef}
-    .javahost .badge{padding:1px 7px;border-radius:10px;font-size:12px}
-    .javahost .ok{background:#e6f7ec;color:#1a7f37}.javahost .off{background:#fdecec;color:#c0392b}
+    .javahost .card h3{margin:0 0 8px;font-size:13px;color:#3a8ca0;letter-spacing:.04em;text-transform:uppercase}
+    .javahost .row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px dashed #eef}
+    .javahost .row:last-child{border-bottom:0}
+    .javahost .badge{padding:1px 8px;border-radius:10px;font-size:12px;white-space:nowrap}
+    .javahost .ok{background:#e6f7ec;color:#1a7f37}
+    .javahost .off{background:#fdecec;color:#c0392b}
+    .javahost .neutral{background:#eef4f6;color:#3a8ca0}
     .javahost button{cursor:pointer;border:1px solid #1b3a4b;background:#1b3a4b;color:#fff;border-radius:6px;padding:6px 12px;font-size:13px}
+    .javahost button:hover{opacity:.9}
     .javahost button.ghost{background:#fff;color:#1b3a4b}
+    .javahost button.accent{border-color:#f0a830;background:#f0a830;color:#1b3a4b}
+    .javahost button.sm{padding:3px 8px;font-size:12px}
+    .javahost button:disabled{cursor:default;opacity:.45}
     .javahost .muted{color:#88a;font-size:12px}
+    .javahost input,.javahost select{font:13px inherit;padding:6px 8px;border:1px solid #cdd9de;border-radius:6px;color:#1b3a4b;background:#fff}
+    .javahost label{display:block;font-size:12px;color:#5b7a86;margin:0 0 3px}
+    .javahost .field{display:flex;flex-direction:column;min-width:120px}
+    .javahost .formrow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+    .javahost table{width:100%;border-collapse:collapse;font-size:13px}
+    .javahost th,.javahost td{text-align:left;padding:7px 8px;border-bottom:1px solid #eef2f4}
+    .javahost th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5b7a86}
+    .javahost td .btns{display:flex;flex-wrap:wrap;gap:4px}
+    .javahost pre{background:#102832;color:#cfe9ef;padding:10px;border-radius:6px;max-height:340px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+    .javahost .panel{margin-top:10px;border:1px solid #cdd9de;border-radius:8px;padding:12px;background:#f7fbfc}
     .javahost .warn{background:#fff6e5;border:1px solid #f0c36d;border-radius:6px;padding:8px;margin-top:10px;font-size:13px}
+    .javahost code{background:#eef4f6;padding:1px 5px;border-radius:4px;font:12px ui-monospace,Menlo,monospace}
+    .javahost .hide{display:none}
+    .javahost .kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:12px}
   </style>
 
   <h2>JavaHost — Tomcat &amp; Java Runtime Manager</h2>
-  <div class="muted" style="margin-bottom:12px">
+  <div class="muted" style="margin-bottom:6px">
     Independent OSS plugin (Apache-2.0). Tomcat 9 / 10.1 / 11 · Java 8 / 11 / 17 / 21 · verified downloads · systemd.
   </div>
-
-  <div class="grid">
-    <div class="card"><h3>Java Runtimes</h3><div id="jh-java" class="muted">loading…</div>
-      <div style="margin-top:8px"><button class="ghost" data-jdk="17">Install JDK 17</button>
-      <button class="ghost" data-jdk="21">Install JDK 21</button></div>
-    </div>
-    <div class="card"><h3>Tomcat</h3><div id="jh-tomcat" class="muted">loading…</div>
-      <div style="margin-top:8px"><button data-tc="10">Install 10.1</button>
-      <button data-tc="11">Install 11</button>
-      <button class="ghost" data-tc="9">Install 9 (legacy)</button></div>
-    </div>
-    <div class="card"><h3>Apps</h3><div id="jh-apps" class="muted">loading…</div></div>
-    <div class="card"><h3>Environment</h3><div id="jh-env" class="muted">loading…</div></div>
-  </div>
+  <!-- Global status / error line, written by msg() -->
   <div id="jh-msg"></div>
+
+  <!-- ====================== 1. DASHBOARD ====================== -->
+  <div class="section">
+    <h2>Dashboard</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Java Runtimes</h3>
+        <div id="jh-java" class="muted">loading…</div>
+        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+          <button class="ghost sm" data-jdk="8">+ JDK 8</button>
+          <button class="ghost sm" data-jdk="11">+ JDK 11</button>
+          <button class="ghost sm" data-jdk="17">+ JDK 17</button>
+          <button class="ghost sm" data-jdk="21">+ JDK 21</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Tomcat Versions</h3>
+        <!-- one row per supported_tomcat major, with install/update/uninstall -->
+        <div id="jh-tomcat" class="muted">loading…</div>
+      </div>
+      <div class="card">
+        <h3>Environment</h3>
+        <div id="jh-env" class="muted">loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================== 2. APPS ====================== -->
+  <div class="section">
+    <h2>Applications</h2>
+
+    <!-- Create app form. The version dropdown is populated from installed tomcats. -->
+    <div class="card">
+      <h3>Create App</h3>
+      <div class="formrow">
+        <div class="field"><label for="jh-new-name">Name</label>
+          <input id="jh-new-name" placeholder="myapp" autocomplete="off"></div>
+        <div class="field"><label for="jh-new-ver">Tomcat version</label>
+          <select id="jh-new-ver"><option value="">(no tomcat installed)</option></select></div>
+        <div class="field"><label for="jh-new-port">Port</label>
+          <input id="jh-new-port" type="number" value="8080" min="1" max="65535" style="width:90px"></div>
+        <div class="field"><label for="jh-new-mem">Memory (MB)</label>
+          <input id="jh-new-mem" type="number" value="512" min="64" step="64" style="width:100px"></div>
+        <div class="field"><label>&nbsp;</label>
+          <button id="jh-create" class="accent">Create app</button></div>
+      </div>
+      <div class="muted" style="margin-top:6px">A dedicated Tomcat instance is created per app on the chosen major.</div>
+    </div>
+
+    <!-- App table: status badge + per-app actions -->
+    <div class="card" style="margin-top:12px">
+      <h3>Managed Apps</h3>
+      <table>
+        <thead><tr><th>App</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="jh-app-rows"><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
+      </table>
+
+      <!-- Logs panel: toggled by the per-app "Logs" button -->
+      <div id="jh-logs" class="panel hide">
+        <div class="formrow" style="justify-content:space-between">
+          <strong id="jh-logs-title">Logs</strong>
+          <div class="field" style="flex-direction:row;align-items:center;gap:6px">
+            <label for="jh-logs-lines" style="margin:0">Lines</label>
+            <select id="jh-logs-lines">
+              <option>50</option><option selected>200</option><option>500</option><option>1000</option>
+            </select>
+            <button class="ghost sm" id="jh-logs-refresh">Refresh</button>
+            <button class="ghost sm" id="jh-logs-close">Close</button>
+          </div>
+        </div>
+        <pre id="jh-logs-pre">…</pre>
+      </div>
+
+      <!-- DB-env panel: toggled by the per-app "DB env" button -->
+      <div id="jh-dbpanel" class="panel hide">
+        <div class="formrow" style="justify-content:space-between">
+          <strong id="jh-db-title">Database environment</strong>
+          <button class="ghost sm" id="jh-db-close">Close</button>
+        </div>
+        <div class="formrow" style="margin-top:8px">
+          <div class="field"><label for="jh-db-engine">Engine</label>
+            <select id="jh-db-engine"><option value="">loading…</option></select></div>
+          <div class="field"><label for="jh-db-version">Version</label>
+            <select id="jh-db-version"></select></div>
+          <div class="field"><label for="jh-db-host">Host</label>
+            <input id="jh-db-host" value="127.0.0.1"></div>
+          <div class="field"><label for="jh-db-port">Port</label>
+            <input id="jh-db-port" type="number" style="width:90px"></div>
+        </div>
+        <div class="formrow" style="margin-top:8px">
+          <div class="field"><label for="jh-db-name">Database</label>
+            <input id="jh-db-name" placeholder="appdb"></div>
+          <div class="field"><label for="jh-db-user">User</label>
+            <input id="jh-db-user" placeholder="appuser"></div>
+          <div class="field"><label for="jh-db-pass">Password</label>
+            <input id="jh-db-pass" type="password" autocomplete="new-password"></div>
+          <div class="field"><label>&nbsp;</label>
+            <button id="jh-db-save" class="accent">Write DB env</button></div>
+        </div>
+        <!-- recommended driver coordinates for the chosen engine -->
+        <div id="jh-db-driver" class="muted" style="margin-top:8px"></div>
+        <div class="muted">Secrets are written server-side and never echoed back to this UI.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================== 3. DB HELPER REFERENCE ====================== -->
+  <div class="section">
+    <h2>Database Support</h2>
+    <div class="card">
+      <h3>Supported Engines</h3>
+      <div class="muted" style="margin-bottom:6px">
+        Reference matrix from the server. Use the per-app <em>DB env</em> button above to wire an app to a database.
+      </div>
+      <table>
+        <thead><tr><th>Engine</th><th>Default port</th><th>Versions</th><th>Driver</th><th>Local</th></tr></thead>
+        <tbody id="jh-db-matrix"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ====================== 4. PROXY HINT ====================== -->
+  <div class="section">
+    <h2>Reverse-Proxy Hint</h2>
+    <div class="card">
+      <h3>Web Server Include</h3>
+      <div id="jh-proxy" class="muted">loading…</div>
+    </div>
+  </div>
 </div>
 
 <script>
 (function(){
-  // aaPanel plugin AJAX convention: POST /plugin?action=a&name=javahost&s=<Method>
+  "use strict";
+
+  // ---- AJAX: panel plugin convention (jQuery if present, else Fetch) ----
   function call(method, data, cb){
     var url = '/plugin?action=a&name=javahost&s=' + method;
-    if (window.$ && $.post){ $.post(url, data||{}, function(r){ cb(typeof r==='string'?JSON.parse(r):r); }); }
-    else { fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-           body:new URLSearchParams(data||{})}).then(function(x){return x.json();}).then(cb); }
+    if (window.$ && $.post){
+      $.post(url, data||{}, function(r){ cb(typeof r==='string'?JSON.parse(r):r); });
+    } else {
+      fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:new URLSearchParams(data||{})})
+        .then(function(x){return x.json();}).then(cb)
+        .catch(function(e){ cb({status:false, msg:String(e)}); });
+    }
   }
+  // Unwrap the {status,msg} envelope: data lives in msg, fall back to r itself.
+  function payload(r){ return (r && r.msg!=null) ? r.msg : (r||{}); }
+  function failed(r){ return !!(r && r.status===false); }
+
+  // ---- XSS escaping for every piece of dynamic text ----
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-  function msg(t,bad){document.getElementById('jh-msg').innerHTML =
-    '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+esc(t)+'</div>';}
 
-  function refresh(){
-    call('GetStatus',{},function(r){
-      var d=(r&&r.msg)||r||{};
-      var j=d.java||{}, jh='';
-      Object.keys(j).forEach(function(k){jh+='<div class="row"><span>Java '+esc(k)+'</span><span class="badge ok">installed</span></div>';});
-      document.getElementById('jh-java').innerHTML = jh||'<span class="muted">none detected</span>';
+  // ---- tiny DOM helper ----
+  function $id(id){return document.getElementById(id);}
 
-      var t=d.tomcat||{}, th='';
-      (d.supported_tomcat||['9','10','11']).forEach(function(k){
-        var info=t[k]; th+='<div class="row"><span>Tomcat '+esc(k)+'</span>'+
-          (info?'<span class="badge ok">'+esc(info.patch)+'</span>':'<span class="badge off">not installed</span>')+'</div>';});
-      document.getElementById('jh-tomcat').innerHTML = th;
+  // ---- global status / error line ----
+  function msg(t,bad){
+    $id('jh-msg').innerHTML =
+      '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+esc(t)+'</div>';
+  }
+  // Standard completion handler for action calls.
+  function done(label){
+    return function(r){
+      var p = payload(r);
+      msg(failed(r) ? (label+' failed: '+(typeof p==='string'?p:JSON.stringify(p)))
+                    : (label+' ok'), failed(r));
+      refresh();
+    };
+  }
 
-      var a=d.apps||[], ah='';
-      a.forEach(function(x){ah+='<div class="row"><span>'+esc(x.app)+'</span><span class="badge '+
-        (x.status==='active'?'ok':'off')+'">'+esc(x.status)+'</span></div>';});
-      document.getElementById('jh-apps').innerHTML = ah||'<span class="muted">no apps yet</span>';
+  // ===================================================================
+  // DASHBOARD
+  // ===================================================================
+  function renderDashboard(d){
+    // -- Java runtimes: { major: home } --
+    var j = d.java||{}, jh='', keys=Object.keys(j);
+    keys.forEach(function(k){
+      jh += '<div class="row"><span>Java '+esc(k)+'</span>'+
+            '<span class="badge ok" title="'+esc(j[k])+'">installed</span></div>';
+    });
+    $id('jh-java').innerHTML = jh || '<span class="muted">none detected</span>';
 
-      document.getElementById('jh-env').innerHTML =
-        '<div class="row"><span>systemd</span><span class="badge '+(d.systemd?'ok':'off')+'">'+
-        (d.systemd?'yes':'init.d fallback')+'</span></div>';
+    // -- Tomcat: row per supported major with install/update/uninstall --
+    var t = d.tomcat||{}, th='';
+    (d.supported_tomcat||['9','10','11']).forEach(function(k){
+      var info = t[k];
+      th += '<div class="row"><span>Tomcat '+esc(k)+
+            (info?(' <span class="muted">'+esc(info.patch)+'</span>'):'')+'</span><span class="btns">';
+      if(info){
+        th += '<button class="sm" data-tc-update="'+esc(k)+'">Update</button>'+
+              '<button class="ghost sm" data-tc-uninstall="'+esc(k)+'">Uninstall</button>';
+      } else {
+        th += '<button class="accent sm" data-tc-install="'+esc(k)+'">Install</button>';
+      }
+      th += '</span></div>';
+    });
+    $id('jh-tomcat').innerHTML = th || '<span class="muted">no lines</span>';
+
+    // -- Environment / systemd --
+    $id('jh-env').innerHTML =
+      '<div class="row"><span>systemd</span><span class="badge '+(d.systemd?'ok':'neutral')+'">'+
+      (d.systemd?'available':'init.d fallback')+'</span></div>'+
+      '<div class="row"><span>Java runtimes</span><span class="badge neutral">'+keys.length+'</span></div>'+
+      '<div class="row"><span>Managed apps</span><span class="badge neutral">'+((d.apps||[]).length)+'</span></div>';
+
+    // -- populate Create-App version dropdown from INSTALLED tomcats --
+    var sel = $id('jh-new-ver'), prev = sel.value, opts='';
+    Object.keys(t).forEach(function(k){
+      opts += '<option value="'+esc(k)+'">Tomcat '+esc(k)+' ('+esc(t[k].patch)+')</option>';
+    });
+    sel.innerHTML = opts || '<option value="">(no tomcat installed)</option>';
+    if(prev){ sel.value = prev; }
+  }
+
+  // ===================================================================
+  // APPS TABLE
+  // ===================================================================
+  function renderApps(apps){
+    apps = apps||[];
+    if(!apps.length){
+      $id('jh-app-rows').innerHTML = '<tr><td colspan="3" class="muted">no apps yet — create one above</td></tr>';
+      return;
+    }
+    var html='';
+    apps.forEach(function(x){
+      var name = esc(x.app), live = (x.status==='active');
+      html += '<tr><td><strong>'+name+'</strong></td>'+
+        '<td><span class="badge '+(live?'ok':'off')+'">'+esc(x.status)+'</span></td>'+
+        '<td><div class="btns">'+
+          '<button class="ghost sm" data-app-action="start"   data-app="'+name+'">Start</button>'+
+          '<button class="ghost sm" data-app-action="stop"    data-app="'+name+'">Stop</button>'+
+          '<button class="ghost sm" data-app-action="restart" data-app="'+name+'">Restart</button>'+
+          '<button class="ghost sm" data-app-repair="'+name+'">Repair</button>'+
+          '<button class="ghost sm" data-app-logs="'+name+'">Logs</button>'+
+          '<button class="ghost sm" data-app-db="'+name+'">DB env</button>'+
+          '<button class="sm" data-app-delete="'+name+'" style="border-color:#c0392b;background:#c0392b">Delete</button>'+
+        '</div></td></tr>';
+    });
+    $id('jh-app-rows').innerHTML = html;
+  }
+
+  // ===================================================================
+  // LOGS PANEL
+  // ===================================================================
+  var logsApp = null;
+  function openLogs(app){
+    logsApp = app;
+    $id('jh-logs-title').textContent = 'Logs — ' + app;   // textContent = safe
+    $id('jh-logs').classList.remove('hide');
+    loadLogs();
+    $id('jh-logs').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  function loadLogs(){
+    if(!logsApp) return;
+    var lines = $id('jh-logs-lines').value;
+    $id('jh-logs-pre').textContent = 'loading…';
+    call('GetLogs',{app:logsApp, lines:lines},function(r){
+      var p = payload(r);
+      // textContent avoids any HTML interpretation of log bytes (safe by construction)
+      $id('jh-logs-pre').textContent = failed(r)
+        ? ('error: '+(typeof p==='string'?p:JSON.stringify(p)))
+        : ((p && p.log!=null) ? p.log : JSON.stringify(p));
     });
   }
 
+  // ===================================================================
+  // DB-ENV PANEL (per app) + DB SUPPORT MATRIX (reference)
+  // ===================================================================
+  var dbEngines = [];   // cached support_matrix
+  var dbApp = null;     // app the panel is currently editing
+
+  function loadDbSupport(){
+    call('GetDbSupport',{},function(r){
+      var p = payload(r);
+      dbEngines = (p && p.engines) || [];
+      renderDbMatrix();
+      fillEngineSelect();
+    });
+  }
+
+  // Reference table in the "Database Support" section.
+  function renderDbMatrix(){
+    if(!dbEngines.length){
+      $id('jh-db-matrix').innerHTML = '<tr><td colspan="5" class="muted">none reported</td></tr>';
+      return;
+    }
+    var html='';
+    dbEngines.forEach(function(e){
+      var vers = (e.versions||[]).map(esc).join(', ');
+      html += '<tr>'+
+        '<td><strong>'+esc(e.label||e.engine)+'</strong><div class="muted">'+esc(e.engine)+'</div></td>'+
+        '<td>'+esc(e.default_port)+'</td>'+
+        '<td>'+(vers||'<span class="muted">—</span>')+'</td>'+
+        '<td><code>'+esc(e.driver||e.driver_class||'—')+'</code></td>'+
+        '<td><span class="badge '+(e.local_detected?'ok':'neutral')+'">'+
+            (e.local_detected?'detected':'no')+'</span></td>'+
+      '</tr>';
+    });
+    $id('jh-db-matrix').innerHTML = html;
+  }
+
+  // Engine dropdown inside the per-app DB panel.
+  function fillEngineSelect(){
+    var sel = $id('jh-db-engine');
+    if(!dbEngines.length){ sel.innerHTML='<option value="">(none available)</option>'; return; }
+    sel.innerHTML = dbEngines.map(function(e){
+      return '<option value="'+esc(e.engine)+'">'+esc(e.label||e.engine)+'</option>';
+    }).join('');
+    onEngineChange();
+  }
+  function currentEngine(){
+    var name = $id('jh-db-engine').value;
+    for(var i=0;i<dbEngines.length;i++){ if(dbEngines[i].engine===name) return dbEngines[i]; }
+    return null;
+  }
+  // When the engine changes: refill version dropdown, default port, driver hint.
+  function onEngineChange(){
+    var e = currentEngine(); if(!e) return;
+    var vsel = $id('jh-db-version');
+    vsel.innerHTML = (e.versions||[]).map(function(v){
+      return '<option value="'+esc(v)+'">'+esc(v)+'</option>';
+    }).join('') || '<option value="">(any)</option>';
+    if(e.default_port!=null){ $id('jh-db-port').value = e.default_port; }
+    var drv = e.driver || e.driver_class || '';
+    $id('jh-db-driver').innerHTML = drv
+      ? 'Recommended driver: <code>'+esc(drv)+'</code>'+
+        (e.driver_class && e.driver_class!==drv ? ' · class <code>'+esc(e.driver_class)+'</code>' : '')
+      : '';
+  }
+
+  function openDbPanel(app){
+    dbApp = app;
+    $id('jh-db-title').textContent = 'Database environment — ' + app;
+    $id('jh-dbpanel').classList.remove('hide');
+    if(!dbEngines.length){ loadDbSupport(); } else { fillEngineSelect(); }
+    $id('jh-db-pass').value = '';   // never pre-fill secrets
+    $id('jh-dbpanel').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  function saveDbEnv(){
+    var e = currentEngine();
+    if(!dbApp || !e){ msg('Pick an app and engine first', true); return; }
+    msg('Writing DB env for '+dbApp+'…');
+    call('SetDbEnv',{
+      app:        dbApp,
+      db_engine:  e.engine,
+      db_host:    $id('jh-db-host').value,
+      db_port:    $id('jh-db-port').value,
+      db_name:    $id('jh-db-name').value,
+      db_user:    $id('jh-db-user').value,
+      db_password:$id('jh-db-pass').value,
+      db_version: $id('jh-db-version').value
+    },function(r){
+      var p = payload(r);
+      if(failed(r)){ msg('DB env failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
+      msg('DB env written for '+esc(p.app||dbApp)+' ('+esc(p.engine||e.engine)+
+          '), driver '+esc(p.driver||''));
+      $id('jh-db-pass').value = '';   // clear secret after submit
+    });
+  }
+
+  // ===================================================================
+  // PROXY HINT
+  // ===================================================================
+  function loadProxyHint(){
+    call('GetProxyHint',{},function(r){
+      var p = payload(r);
+      if(failed(r)){ $id('jh-proxy').innerHTML='<span class="off">'+esc(typeof p==='string'?p:JSON.stringify(p))+'</span>'; return; }
+      var html = '';
+      if(p.include){
+        html += '<div class="kv"><span>Include line</span></div>'+
+                '<pre>'+esc(p.include)+'</pre>';
+      }
+      if(p.db){
+        html += '<div class="warn">'+esc(p.db)+'</div>';
+      }
+      $id('jh-proxy').innerHTML = html || '<span class="muted">no hint available</span>';
+    });
+  }
+
+  // ===================================================================
+  // CREATE APP
+  // ===================================================================
+  function createApp(){
+    var name = $id('jh-new-name').value.trim(),
+        ver  = $id('jh-new-ver').value,
+        port = $id('jh-new-port').value,
+        mem  = $id('jh-new-mem').value;
+    if(!name){ msg('Enter an app name', true); return; }
+    if(!ver){ msg('Install a Tomcat version first', true); return; }
+    msg('Creating app '+name+'…');
+    call('CreateApp',{app:name, version:ver, port:port, memory:mem},function(r){
+      var p = payload(r);
+      if(failed(r)){ msg('Create failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
+      msg('Created '+esc(p.app||name)+' on Tomcat '+esc(p.tomcat||ver)+' (port '+esc(p.port||port)+')');
+      $id('jh-new-name').value='';
+      refresh();
+    });
+  }
+
+  // ===================================================================
+  // STATUS REFRESH
+  // ===================================================================
+  function refresh(){
+    call('GetStatus',{},function(r){
+      var d = payload(r);
+      if(failed(r)){ msg('Status error: '+(typeof d==='string'?d:JSON.stringify(d)), true); return; }
+      renderDashboard(d);
+      renderApps(d.apps);
+    });
+  }
+
+  // ===================================================================
+  // EVENT WIRING (single delegated click handler for the whole UI)
+  // ===================================================================
   document.querySelector('.javahost').addEventListener('click',function(e){
-    var b=e.target.closest('button'); if(!b) return;
-    if(b.dataset.jdk){ msg('Installing JDK '+b.dataset.jdk+'…');
-      call('InstallJava',{version:b.dataset.jdk},function(r){msg((r&&r.msg&&r.msg.java_home)?('JDK ready: '+r.msg.java_home):JSON.stringify(r), r&&r.status===false); refresh();}); }
-    if(b.dataset.tc){ msg('Installing Tomcat '+b.dataset.tc+' (verified download)…');
-      call('InstallTomcat',{version:b.dataset.tc},function(r){msg(JSON.stringify((r&&r.msg)||r), r&&r.status===false); refresh();}); }
+    var b = e.target.closest('button'); if(!b) return;
+    var ds = b.dataset;
+
+    // -- Java --
+    if(ds.jdk){ msg('Installing JDK '+ds.jdk+'…');
+      call('InstallJava',{version:ds.jdk},function(r){
+        var p=payload(r);
+        msg(failed(r)?('JDK install failed: '+(typeof p==='string'?p:JSON.stringify(p)))
+                     :('JDK ready: '+esc(p.java_home||p.major||ds.jdk)), failed(r));
+        refresh();
+      });
+      return;
+    }
+
+    // -- Tomcat install / update / uninstall --
+    if(ds.tcInstall){ msg('Installing Tomcat '+ds.tcInstall+' (verified download)…');
+      call('InstallTomcat',{version:ds.tcInstall}, done('Install Tomcat '+ds.tcInstall)); return; }
+    if(ds.tcUpdate){ msg('Updating Tomcat '+ds.tcUpdate+'…');
+      call('UpdateTomcat',{version:ds.tcUpdate}, done('Update Tomcat '+ds.tcUpdate)); return; }
+    if(ds.tcUninstall){
+      if(!confirm('Uninstall Tomcat '+ds.tcUninstall+'? Apps on this major may break.')) return;
+      msg('Uninstalling Tomcat '+ds.tcUninstall+'…');
+      call('UninstallTomcat',{version:ds.tcUninstall}, done('Uninstall Tomcat '+ds.tcUninstall)); return;
+    }
+
+    // -- Create app --
+    if(b.id==='jh-create'){ createApp(); return; }
+
+    // -- Per-app lifecycle --
+    if(ds.appAction){ msg(ds.appAction+' '+ds.app+'…');
+      call('AppAction',{app:ds.app, action:ds.appAction}, done(ds.appAction+' '+ds.app)); return; }
+    if(ds.appRepair){ msg('Repairing '+ds.appRepair+'…');
+      call('RepairApp',{app:ds.appRepair}, done('Repair '+ds.appRepair)); return; }
+    if(ds.appDelete){
+      if(!confirm('Delete app "'+ds.appDelete+'"? This removes its Tomcat instance and files.')) return;
+      msg('Deleting '+ds.appDelete+'…');
+      call('DeleteApp',{app:ds.appDelete}, done('Delete '+ds.appDelete)); return;
+    }
+    if(ds.appLogs){ openLogs(ds.appLogs); return; }
+    if(ds.appDb){ openDbPanel(ds.appDb); return; }
+
+    // -- Logs panel controls --
+    if(b.id==='jh-logs-refresh'){ loadLogs(); return; }
+    if(b.id==='jh-logs-close'){ $id('jh-logs').classList.add('hide'); logsApp=null; return; }
+
+    // -- DB panel controls --
+    if(b.id==='jh-db-save'){ saveDbEnv(); return; }
+    if(b.id==='jh-db-close'){ $id('jh-dbpanel').classList.add('hide'); dbApp=null; return; }
   });
+
+  // change events (selects) — not clicks
+  $id('jh-logs-lines').addEventListener('change', loadLogs);
+  $id('jh-db-engine').addEventListener('change', onEngineChange);
+
+  // ---- boot ----
   refresh();
+  loadDbSupport();
+  loadProxyHint();
 })();
 </script>

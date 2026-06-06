@@ -8,7 +8,7 @@ import pytest
 
 from core.util import validate
 from core.runtime import java, jvm_opts
-from core.tomcat import registry, templating, hardening
+from core.tomcat import registry, templating, hardening, instance
 from core.deploy import war
 from core.db import pg, mysql, mongo, engines as dbengines
 
@@ -231,6 +231,39 @@ def test_mongo_uri_and_env():
     assert m["DB_PASSWORD"] == "s3cretZZ"  # carried separately
     assert "s3cretZZ" not in m["DB_URL"]   # never embedded in the URI
     assert mongo.ENGINE.normalize("6.0.13") == "6.0"
+
+
+# ---- instance lifecycle helpers ----
+def test_instance_base_path_validates(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    assert instance.base_path("my-app").endswith("/my-app")
+    for bad in ("../etc", "a;b", ""):
+        with pytest.raises(ValueError):
+            instance.base_path(bad)
+
+
+def test_instance_tail_and_readers(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "app1"
+    (base / "logs").mkdir(parents=True)
+    (base / "conf").mkdir()
+    (base / "bin").mkdir()
+    (base / "logs" / "catalina.out").write_text("\n".join("line%d" % i for i in range(1, 51)) + "\n")
+    (base / "conf" / "server.xml").write_text('<Connector port="8085" protocol="HTTP/1.1"/>')
+    (base / "bin" / "setenv.sh").write_text('export JAVA_HOME="/x/jdk17"\nexport CATALINA_HOME="/y/tc11"\n')
+    tail = instance.tail_log("app1", 5)
+    assert tail.splitlines() == ["line46", "line47", "line48", "line49", "line50"]
+    assert instance._read_port(str(base)) == 8085
+    env = instance._read_setenv(str(base))
+    assert env["JAVA_HOME"] == "/x/jdk17" and env["CATALINA_HOME"] == "/y/tc11"
+
+
+def test_instance_list_apps(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "beta").mkdir()
+    names = [a["app"] for a in instance.list_apps()]
+    assert names == ["alpha", "beta"]
 
 
 # ---- engine registry ----
