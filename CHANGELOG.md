@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.16.1] — 2026-06-06
+
+### Fixed
+- **Status no longer lies when a runtime is removed.** If a JDK is force-uninstalled
+  while apps use it, those apps keep running on their already-started JVM and showed
+  a misleading "up". `list_apps()` now reports **`runtime_ok`** (the pinned
+  `JAVA_HOME` still exists), and the UI shows a red **"runtime missing"** badge —
+  the app is live but won't survive a restart.
+- **Force-uninstalling a JDK now stops its dependent apps** so they go cleanly DOWN
+  instead of lingering as zombie JVMs that falsely report healthy.
+
 ## [0.16.0] — 2026-06-06
 
 ### Changed

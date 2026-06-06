@@ -1802,6 +1802,7 @@
           '<div class="jh-approw-top">'+
             '<span class="jh-approw-name">'+ec+'</span>'+
             '<span class="jh-badge '+sb.cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(sb.label)+'</span>'+
+            (x.runtime_ok===false ? '<span class="jh-badge danger" title="The pinned JDK is missing — this app is running on an old JVM and will NOT survive a restart. Reinstall the runtime or repoint the app.">'+ic('warn')+'runtime missing</span>' : '')+
             '<span class="jh-badge neutral" id="hp-'+cid+'"><span class="jh-dot"></span>Checking…</span>'+
           '</div>'+
           '<div class="jh-approw-meta">'+(chips || '<span class="jh-chip jh-muted">—</span>')+'<span id="open-'+cid+'" class="jh-approw-meta" style="gap:6px">'+openHtml+'</span></div>'+

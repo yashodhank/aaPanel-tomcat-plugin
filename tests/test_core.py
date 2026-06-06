@@ -375,7 +375,8 @@ def test_list_apps_full_key_set(monkeypatch, tmp_path):
     (base / "app.jar").write_text("x")
     (base / "bin" / "app.env").write_text("SERVER_PORT=8091\n")
     expected = {"app", "type", "status", "runtime", "tomcat", "java",
-                "port", "context", "enabled", "backend", "uptime", "domain", "ssl"}
+                "port", "context", "enabled", "backend", "uptime", "domain", "ssl",
+                "runtime_ok"}
     for app in instance.list_apps():
         assert set(app) == expected
 

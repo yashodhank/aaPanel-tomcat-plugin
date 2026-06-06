@@ -219,6 +219,16 @@ def uninstall(major: int, force: bool = False) -> Dict:
         raise RuntimeError(
             "Java %d is in use by: %s (pass force to remove anyway)"
             % (major, ", ".join(in_use)))
+    if in_use and force:
+        # Force-removing a JDK leaves dependent apps unable to (re)start. Stop
+        # them so they go cleanly DOWN instead of lingering as already-running
+        # JVMs that falsely report "up" with a missing runtime.
+        from ..tomcat import service as _svc
+        for app in in_use:
+            try:
+                _svc.action(app, "stop")
+            except Exception:
+                pass
     dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % major)
     target = dest if os.path.isdir(dest) else os.path.realpath(home)
     removed = False

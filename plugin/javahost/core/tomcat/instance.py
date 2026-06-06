@@ -78,7 +78,8 @@ def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = 
 # Full key set every app dict carries, so the UI can render in one round-trip
 # without per-app follow-up calls. Order is also the documented return shape.
 _APP_KEYS = ("app", "type", "status", "runtime", "tomcat", "java", "port",
-             "context", "enabled", "backend", "uptime", "domain", "ssl")
+             "context", "enabled", "backend", "uptime", "domain", "ssl",
+             "runtime_ok")
 
 
 def _instance_backend(app: str) -> Optional[str]:
@@ -220,11 +221,17 @@ def _app_info(name: str) -> Dict:
             info["runtime"] = ("Java %d" % jmaj) if jmaj else None
             # jar apps have no servlet context
         else:
+            jhome = env.get("JAVA_HOME", "")
             tmaj = _tomcat_major(env.get("CATALINA_HOME", ""))
             info["tomcat"] = tmaj
-            info["java"] = _java_major_from_home(env.get("JAVA_HOME", ""))
+            info["java"] = _java_major_from_home(jhome)
             info["runtime"] = ("Tomcat %d" % tmaj) if tmaj else None
             info["context"] = _read_context(base)
+        # runtime_ok: the pinned JDK still exists. False here = the app may be
+        # "active" on an already-running JVM but its runtime was removed, so it
+        # will NOT survive a restart (the UI flags this — status alone lies).
+        info["runtime_ok"] = bool(jhome) and os.path.isfile(
+            os.path.join(jhome, "bin", "java"))
         # Public reverse-proxy domain, if a site was published (defensive: None).
         try:
             from ..deploy import proxy as _proxy
