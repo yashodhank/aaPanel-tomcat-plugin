@@ -95,16 +95,40 @@ def _instance_backend(app: str) -> Optional[str]:
     return None
 
 
-def _is_enabled(app: str, backend: Optional[str]) -> Optional[bool]:
+def _enabled_wants() -> set:
+    """One pass over SYSTEMD_DIR's *.wants dirs → the set of enabled javahost
+    unit filenames. Built ONCE per list_apps() instead of re-listing the dir per
+    app. Returns an empty set on error."""
+    enabled = set()
+    try:
+        for d in os.listdir(service.SYSTEMD_DIR):
+            if not d.endswith(".wants"):
+                continue
+            wants = os.path.join(service.SYSTEMD_DIR, d)
+            try:
+                for link in os.listdir(wants):
+                    if link.startswith("javahost-"):
+                        enabled.add(link)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return enabled
+
+
+def _is_enabled(app: str, backend: Optional[str], wants_cache: Optional[set] = None) -> Optional[bool]:
     """Enabled-at-boot state. systemd: a *.wants symlink to the unit; init.d:
     any rc?.d/S* link. Returns None when it can't be cheaply determined.
 
     The systemd check is a filesystem stat (no `systemctl is-enabled`
     subprocess): an enabled unit has a symlink in some target's `*.wants`
-    directory, canonically multi-user.target.wants/javahost-<app>.service."""
+    directory, canonically multi-user.target.wants/javahost-<app>.service.
+    `wants_cache` (from _enabled_wants) lets list_apps scan the dir once for all apps."""
     name = validate.identifier(app, "app")
     if backend == "systemd":
         unit = "javahost-%s.service" % name
+        if wants_cache is not None:
+            return unit in wants_cache
         try:
             for d in os.listdir(service.SYSTEMD_DIR):
                 if not d.endswith(".wants"):
@@ -195,13 +219,21 @@ def _read_context(base: str) -> Optional[str]:
     return "/" + names[0]
 
 
-def _app_info(name: str) -> Dict:
+def _app_info(name: str, status_cache: Optional[Dict[str, str]] = None,
+              wants_cache: Optional[set] = None) -> Dict:
     """Best-effort rich record for a single instance. Never raises: any field
-    that can't be cheaply determined is None, but status is always present."""
+    that can't be cheaply determined is None, but status is always present.
+
+    `status_cache`/`wants_cache` (from list_apps) collapse the per-app
+    `systemctl is-active` subprocess and the per-app *.wants dir scan into one
+    batched call/scan for the whole list."""
     info = {k: None for k in _APP_KEYS}
     info["app"] = name
     try:
-        info["status"] = service.status(name)
+        if status_cache is not None and name in status_cache:
+            info["status"] = status_cache[name]
+        else:
+            info["status"] = service.status(name)
     except Exception:
         info["status"] = "unknown"
     try:
@@ -212,7 +244,7 @@ def _app_info(name: str) -> Dict:
         info["port"] = _read_port(base)
         backend = _instance_backend(name)
         info["backend"] = backend
-        info["enabled"] = _is_enabled(name, backend)
+        info["enabled"] = _is_enabled(name, backend, wants_cache=wants_cache)
         if itype == "jar":
             # jar JAVA_HOME lives in bin/app.env (EnvironmentFile), not setenv.sh
             jhome = _read_app_env(base).get("JAVA_HOME") or env.get("JAVA_HOME", "")
@@ -262,11 +294,21 @@ def list_apps() -> List[Dict]:
     the list (each app is wrapped in try/except)."""
     out: List[Dict] = []
     if os.path.isdir(INSTANCE_ROOT):
-        for name in sorted(os.listdir(INSTANCE_ROOT)):
-            if not os.path.isdir(os.path.join(INSTANCE_ROOT, name)):
-                continue
+        names = sorted(n for n in os.listdir(INSTANCE_ROOT)
+                       if os.path.isdir(os.path.join(INSTANCE_ROOT, n)))
+        # Batch the two expensive per-app operations into one each for the whole
+        # list: ONE `systemctl is-active <all units>` and ONE *.wants scan.
+        try:
+            status_cache = service.status_all(names)
+        except Exception:
+            status_cache = {}
+        try:
+            wants_cache = _enabled_wants() if service.have_systemd() else None
+        except Exception:
+            wants_cache = None
+        for name in names:
             try:
-                out.append(_app_info(name))
+                out.append(_app_info(name, status_cache=status_cache, wants_cache=wants_cache))
             except Exception:
                 # absolute last resort: list it with a minimal valid record
                 rec = {k: None for k in _APP_KEYS}
@@ -414,16 +456,31 @@ def health_all(timeout: float = 2.0) -> Dict[str, Dict]:
     Each app's probe is wrapped in try/except: a failing app yields
     {"up": False, "code": None, "port": None}. Never raises."""
     out: Dict[str, Dict] = {}
-    if os.path.isdir(INSTANCE_ROOT):
-        for name in sorted(os.listdir(INSTANCE_ROOT)):
-            if not os.path.isdir(os.path.join(INSTANCE_ROOT, name)):
-                continue
-            try:
-                h = health(name, timeout=timeout)
-                out[name] = {"up": h.get("up", False),
-                             "code": h.get("code"), "port": h.get("port")}
-            except Exception:
-                out[name] = {"up": False, "code": None, "port": None}
+    if not os.path.isdir(INSTANCE_ROOT):
+        return out
+    names = sorted(n for n in os.listdir(INSTANCE_ROOT)
+                   if os.path.isdir(os.path.join(INSTANCE_ROOT, n)))
+    if not names:
+        return out
+
+    def _one(name):
+        try:
+            h = health(name, timeout=timeout)
+            return name, {"up": h.get("up", False), "code": h.get("code"), "port": h.get("port")}
+        except Exception:
+            return name, {"up": False, "code": None, "port": None}
+
+    # Probe in parallel — a down app blocks for the full timeout, so a sequential
+    # loop over N apps serializes N×timeout; bounded threads collapse that.
+    from concurrent.futures import ThreadPoolExecutor
+    workers = max(1, min(16, len(names)))
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for name, rec in ex.map(_one, names):
+                out[name] = rec
+    except Exception:
+        for name in names:  # fallback: sequential
+            out[name] = _one(name)[1]
     return out
 
 
@@ -494,6 +551,115 @@ def metrics(app: str) -> Dict:
         out["uptime_s"] = int(sys_up - (starttime / hz))
     except (OSError, ValueError, IndexError):
         pass
+    return out
+
+
+def _resolve_pids_all(names) -> Dict[str, Optional[int]]:
+    """Batched MainPID for many apps via ONE `systemctl show` call instead of N.
+    systemd-backed names only; a name absent from the result falls back to the
+    per-app _resolve_pid(). Never raises."""
+    names = list(names)
+    out: Dict[str, Optional[int]] = {}
+    sysd = [n for n in names
+            if os.path.exists(os.path.join(service.SYSTEMD_DIR, "javahost-%s.service" % n))]
+    if not sysd:
+        return out
+    try:
+        units = ["javahost-%s.service" % n for n in sysd]
+        _rc, o, _ = shell.run(["systemctl", "show", "-p", "Id", "-p", "MainPID"] + units, check=False)
+        cur: Dict[str, str] = {}
+
+        def _flush(c):
+            iid = c.get("Id", "")
+            if iid.startswith("javahost-") and iid.endswith(".service"):
+                app = iid[len("javahost-"):-len(".service")]
+                try:
+                    pid = int(c.get("MainPID", "0"))
+                except ValueError:
+                    pid = 0
+                out[app] = pid if pid > 0 else None
+
+        for line in (o or "").splitlines():
+            line = line.strip()
+            if not line:
+                if cur:
+                    _flush(cur)
+                    cur = {}
+                continue
+            if "=" in line:
+                k, v = line.split("=", 1)
+                cur[k] = v
+        if cur:
+            _flush(cur)
+    except Exception:
+        return {}
+    return out
+
+
+def metrics_all(names) -> Dict[str, Dict]:
+    """Batched process metrics with a SINGLE shared CPU-sample window: read every
+    PID's jiffies, sleep ONCE (~0.12s), read again — so CPU sampling is O(0.12s)
+    total regardless of N (vs ~0.12s PER app). PID resolution is batched too.
+    Returns {name: {app,pid,up,cpu_pct,rss_mb,threads,uptime_s}}. Never raises."""
+    import time
+    names = [validate.identifier(n, "app") for n in names]
+    pids = _resolve_pids_all(names)
+    for n in names:
+        if n not in pids:
+            try:
+                pids[n] = _resolve_pid(n)
+            except Exception:
+                pids[n] = None
+    out = {n: {"app": n, "pid": pids.get(n), "up": pids.get(n) is not None,
+               "rss_mb": None, "threads": None, "uptime_s": None, "cpu_pct": None}
+           for n in names}
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+    except Exception:
+        hz = None
+
+    def _jiffies(pid):
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                parts = f.read().split()
+            return int(parts[13]) + int(parts[14])
+        except Exception:
+            return None
+
+    live = [(n, pids[n]) for n in names if pids.get(n)]
+    if hz and live:
+        j0 = {n: _jiffies(pid) for n, pid in live}
+        t0 = time.time()
+        time.sleep(0.12)
+        dt = max(time.time() - t0, 1e-6)
+        for n, pid in live:
+            j1 = _jiffies(pid)
+            if j0.get(n) is not None and j1 is not None:
+                out[n]["cpu_pct"] = round((j1 - j0[n]) / hz / dt * 100.0, 1)
+    try:
+        with open("/proc/uptime") as f:
+            sys_up = float(f.read().split()[0])
+    except Exception:
+        sys_up = None
+    for n, pid in live:
+        try:
+            with open("/proc/%d/status" % pid) as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        out[n]["rss_mb"] = round(int(line.split()[1]) / 1024.0, 1)
+                    elif line.startswith("Threads:"):
+                        out[n]["threads"] = int(line.split()[1])
+        except OSError:
+            out[n]["up"] = False
+            out[n]["pid"] = None
+            continue
+        if hz and sys_up is not None:
+            try:
+                with open("/proc/%d/stat" % pid) as f:
+                    starttime = int(f.read().split()[21])
+                out[n]["uptime_s"] = int(sys_up - (starttime / hz))
+            except (OSError, ValueError, IndexError):
+                pass
     return out
 
 

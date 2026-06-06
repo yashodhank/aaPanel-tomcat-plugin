@@ -3419,12 +3419,15 @@
       var d = payload(r);
       if(failed(r)){ toast(errText(d), 'err', 'Status error'); return; }
       STATE = d;
-      renderDashboard(d);
-      renderRuntimes(d);
-      renderApps(d.apps);
-      renderDbPicker(d.apps);
+      renderDashboard(d);          // dashboard tiles (cheap)
+      renderRuntimes(d);           // runtimes rows (cheap)
+      // The 45-row apps list + DB picker (and the GetHealthAll they fire) only
+      // matter on their own tabs — building them while the Dashboard is active
+      // is wasted DOM work + an extra round-trip. Render lazily per active tab.
+      if(activeSection === 'apps'){ APPS_SIG = appsSig(d.apps); renderApps(d.apps); }
+      if(activeSection === 'apps' || activeSection === 'databases') renderDbPicker(d.apps);
     });
-    refreshDashboardOps();   // heavier aggregates, separate endpoint
+    if(activeSection === 'dashboard') refreshDashboardOps();   // heavier aggregates, lazy
   }
 
   // =====================================================================
@@ -3436,6 +3439,14 @@
   // =====================================================================
   var APPS = { timer:null, inflight:false };
   var APPS_INTERVAL = 5000;
+  var APPS_SIG = '';   // signature of the last-rendered app list (skip DOM rebuild when unchanged)
+  function appsSig(apps){
+    // structural fields only — health (up/down) is refreshed separately, so it
+    // must NOT be in the signature or every poll would force a full rebuild.
+    return JSON.stringify((apps||[]).map(function(a){
+      return [a.app,a.status,a.type,a.runtime,a.port,a.context,a.enabled,a.domain,a.ssl,a.runtime_ok];
+    }));
+  }
   function appsModalBusy(){
     return $('jh-overlay').classList.contains('open');   // confirm/dbenv/etc.
   }
@@ -3453,7 +3464,11 @@
       var d = payload(r);
       if(failed(r)) return;            // silent; the manual Refresh button surfaces errors
       STATE = d;
-      renderApps(d.apps);              // also re-runs batched health (refreshHealthAll)
+      // Diff: only rebuild the 45-row DOM when the structural list actually
+      // changed; otherwise just refresh the health pills. Kills the 5s flicker.
+      var sig = appsSig(d.apps);
+      if(sig === APPS_SIG){ refreshHealthAll(d.apps); }
+      else { APPS_SIG = sig; renderApps(d.apps); }   // renderApps also refreshes health
     });
   }
   function startAppsPoll(){
@@ -3472,7 +3487,14 @@
     stopTasksPoll();                   // (defined below; both clear on any switch)
     stopLogsAuto();
     if(name === 'dashboard') refreshDashboardOps();
-    if(name === 'apps'){ startAppsPoll(); refreshBackups(); }
+    if(name === 'apps'){
+      // render immediately from the cached STATE (refresh() no longer builds the
+      // list while off-tab), then start the live poll.
+      var a = (STATE && STATE.apps) || [];
+      APPS_SIG = appsSig(a); renderApps(a); renderDbPicker(a);
+      startAppsPoll(); refreshBackups();
+    }
+    if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
     if(name === 'settings'){ refreshRemoteStorage(); refreshSchedules(); refreshDangerZone(); }

@@ -3,6 +3,35 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.19.0] — 2026-06-07
+
+### Performance (Dashboard + status hot path)
+With ~45 apps the Dashboard and the 5 s status poll were slow from per-app
+subprocess fan-out and sequential I/O. Optimized end-to-end:
+
+- **Batched `systemctl`:** `list_apps()` now does **one** `systemctl is-active`
+  for all units (new `service.status_all`) instead of one per app, and the
+  enabled-at-boot check scans the `*.wants` dirs **once** per pass (cached) — was
+  N subprocesses + N dir scans.
+- **Single-window CPU sampling:** new `instance.metrics_all` resolves all PIDs in
+  one `systemctl show` and shares **one** ~0.12 s CPU-sample window across every
+  app, so the Dashboard's aggregate CPU is O(0.12 s) total instead of ~0.12 s per
+  app (per capped thread-wave).
+- **Parallel health probes:** `health_all()` probes apps concurrently — a down
+  app no longer serializes the full 2 s timeout × N.
+- **Cached `_dir_size`** (60 s TTL): the instances/backups tree is no longer
+  fully walked on every Dashboard load.
+- **mtime-cached `config.get`:** `config.json` is re-parsed only when it changes
+  (read on many paths); removed the stale import-time `proxy.SITE_SUFFIX`.
+- **Frontend:** the Dashboard no longer builds the 45-row apps list / DB picker or
+  fires `GetHealthAll` while it's the active tab (lazy per-tab render); the 5 s
+  apps poll **diffs** the list and skips the DOM rebuild when unchanged (kills the
+  periodic flicker); `GetDashboard` is lazy-loaded (no longer fired on every
+  refresh from any tab).
+
+No behavior or API changes — purely faster. 159 tests (+5 for the batched
+helpers' parsing).
+
 ## [0.18.1] — 2026-06-07
 
 ### Fixed

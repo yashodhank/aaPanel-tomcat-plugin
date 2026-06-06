@@ -173,7 +173,7 @@ make zip      # build javahost.zip
 
 ## Status
 
-Active (`v0.18.0`). The core library, installer, runtimes, Tomcat lifecycle,
+Active (`v0.19.0`). The core library, installer, runtimes, Tomcat lifecycle,
 WAR/JAR deploy, multi-engine databases, reverse-proxy + per-site HTTPS, async
 jobs, the Tasks/Logs/Danger-zone UI, and the offline test suite are all in
 place. The latest cycle added a richer operational **Dashboard** and full

@@ -272,7 +272,10 @@ def _stub_list_apps_env(monkeypatch, tmp_path):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
     monkeypatch.setattr(instance, "_instance_backend", lambda a: "systemd")
-    monkeypatch.setattr(instance, "_is_enabled", lambda a, b: True)
+    monkeypatch.setattr(instance, "_is_enabled", lambda a, b, wants_cache=None: True)
+    # list_apps now batches status via service.status_all() — stub it (and the
+    # per-app fallback) so no real systemctl runs on the host.
+    monkeypatch.setattr(instance.service, "status_all", lambda names: {})
     # list_apps no longer parses /proc for uptime (it stays None in the list);
     # stub metrics anyway so any stray call can't touch the host.
     monkeypatch.setattr(instance, "metrics", lambda a: {"uptime_s": 42})

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime
 import os
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import jobs, maintenance
@@ -27,8 +26,6 @@ from .tomcat import instance
 EXPIRY_WARN_DAYS = 30
 # Backups dir (Phase-2 store writes here; sized defensively even before it exists).
 BACKUPS_ROOT = os.path.join(maintenance.DATA_ROOT, "backups")
-# Cap parallel /proc samplers so a host with many apps stays snappy.
-_MAX_SAMPLERS = 8
 
 
 def _days_left(iso: str) -> Optional[int]:
@@ -43,29 +40,21 @@ def _days_left(iso: str) -> Optional[int]:
 
 
 def _resources(running: List[Dict]) -> Dict:
-    """Sum CPU% + RSS across running apps. metrics() samples CPU over ~0.12s, so
-    sample concurrently (capped) to keep wall-clock ~one sample regardless of N."""
+    """Sum CPU% + RSS across running apps. Uses instance.metrics_all — ONE shared
+    0.12s CPU-sample window + batched PID resolution — so this is O(0.12s) total
+    regardless of how many apps are running (was ~0.12s per capped-thread wave)."""
     out = {"cpu_pct_total": 0.0, "rss_mb_total": 0.0, "sampled": 0}
     names = [a.get("app") for a in running if a.get("app")]
     if not names:
         return out
-
-    def _one(name):
-        try:
-            return instance.metrics(name)
-        except Exception:
-            return None
-
-    workers = max(1, min(_MAX_SAMPLERS, len(names)))
     try:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            results = list(ex.map(_one, names))
+        metrics = instance.metrics_all(names)
     except Exception:
-        results = [_one(n) for n in names]
-
+        metrics = {}
     cpu = rss = 0.0
     sampled = 0
-    for m in results:
+    for n in names:
+        m = metrics.get(n)
         if not m:
             continue
         sampled += 1

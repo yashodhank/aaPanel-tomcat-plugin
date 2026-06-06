@@ -187,6 +187,33 @@ def status(app: str) -> str:
     return "absent"
 
 
+def status_all(names) -> Dict[str, str]:
+    """Batched is-active for many apps in ONE `systemctl` call instead of N.
+
+    Only systemd-backed apps (a unit file exists) are batched — `systemctl
+    is-active` prints exactly one state line per unit, in order. Any name NOT in
+    the returned dict (init.d apps, or a count mismatch) should fall back to the
+    per-app status(); the caller treats this dict as a best-effort cache. Never
+    raises."""
+    names = list(names)
+    out: Dict[str, str] = {}
+    if not names or not have_systemd():
+        return out
+    sysd = [n for n in names if os.path.exists(_unit_path(n))]
+    if not sysd:
+        return out
+    try:
+        units = ["javahost-%s.service" % n for n in sysd]
+        _rc, o, _ = shell.run(["systemctl", "is-active"] + units, check=False)
+        lines = (o or "").splitlines()
+        if len(lines) == len(sysd):  # one line per unit, in order
+            for i, n in enumerate(sysd):
+                out[n] = lines[i].strip() or "unknown"
+    except Exception:
+        return {}
+    return out
+
+
 def remove_unit(app: str) -> None:
     b = _backend(app)
     mh = _manage()

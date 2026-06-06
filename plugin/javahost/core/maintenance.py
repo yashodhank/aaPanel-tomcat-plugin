@@ -73,17 +73,30 @@ def _list_sites() -> List[str]:
     return sorted(f for f in os.listdir(vdir) if f.endswith(".conf"))
 
 
-def _dir_size(path: str) -> int:
-    """Best-effort recursive size in bytes (never raises)."""
+_SIZE_CACHE: Dict[str, tuple] = {}   # path -> (bytes, monotonic_ts)
+_SIZE_TTL = 60.0                      # seconds; a UI size metric tolerates this
+
+
+def _dir_size(path: str, ttl: float = _SIZE_TTL) -> int:
+    """Best-effort recursive size in bytes (never raises). Cached with a short
+    TTL: with many apps the instances tree is thousands of files, and the
+    Dashboard sizes it on every load — a 60s cache turns repeated full os.walk
+    passes into one. Pass ttl=0 to force a fresh walk."""
+    import time
+    now = time.monotonic()
+    if ttl > 0:
+        ent = _SIZE_CACHE.get(path)
+        if ent and (now - ent[1]) < ttl:
+            return ent[0]
     total = 0
-    if not os.path.isdir(path):
-        return 0
-    for root, _dirs, files in os.walk(path):
-        for f in files:
-            try:
-                total += os.lstat(os.path.join(root, f)).st_size
-            except OSError:
-                pass
+    if os.path.isdir(path):
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.lstat(os.path.join(root, f)).st_size
+                except OSError:
+                    pass
+    _SIZE_CACHE[path] = (total, now)
     return total
 
 

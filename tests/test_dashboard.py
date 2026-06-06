@@ -17,9 +17,9 @@ def _iso_in(days):
 
 def _stub_common(monkeypatch, apps, metrics=None):
     monkeypatch.setattr(dashboard.instance, "list_apps", lambda: apps)
-    monkeypatch.setattr(dashboard.instance, "metrics",
-                        lambda name: (metrics or {}).get(name, {"cpu_pct": None, "rss_mb": None}))
-    monkeypatch.setattr(dashboard.maintenance, "_dir_size", lambda p: 0)
+    monkeypatch.setattr(dashboard.instance, "metrics_all",
+                        lambda names: {n: (metrics or {}).get(n, {"cpu_pct": None, "rss_mb": None}) for n in names})
+    monkeypatch.setattr(dashboard.maintenance, "_dir_size", lambda p, ttl=0: 0)
     monkeypatch.setattr(dashboard.jobs, "list_jobs", lambda limit=8: [])
     monkeypatch.setattr(dashboard.ssl, "read_ssl_not_after", lambda app: None)
 

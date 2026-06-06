@@ -16,14 +16,37 @@ _DEFAULTS = {
 }
 
 
+# mtime-based cache: avoids re-opening/parsing config.json on every get() (it is
+# read on many hot paths) WITHOUT going stale — the file is re-read only when its
+# mtime/size changes, so a config edit takes effect immediately.
+_CACHE = {}
+
+
+def _load() -> dict:
+    try:
+        st = os.stat(CONFIG_PATH)
+    except OSError:
+        _CACHE.pop("k", None)
+        return {}
+    key = (st.st_mtime_ns, st.st_size)
+    ent = _CACHE.get("k")
+    if ent and ent[0] == key:
+        return ent[1]
+    try:
+        with open(CONFIG_PATH) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    _CACHE["k"] = (key, data)
+    return data
+
+
 def get(key: str, default=None):
     if default is None:
         default = _DEFAULTS.get(key)
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f).get(key, default)
-    except Exception:
-        return default
+    return _load().get(key, default)
 
 
 def aapanel_api_key():

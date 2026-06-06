@@ -20,10 +20,9 @@ NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
 # native (aaPanel) and certbot paths serve challenges from here, so the port-80
 # server ALWAYS exposes /.well-known/acme-challenge/ pointing at it.
 ACME_WEBROOT = "/www/wwwroot/acme"
-# Public-domain suffix for default <app>.<suffix> domains. NOT hardcoded — comes
-# from plugin config (config.site_suffix()); empty by default, in which case no
-# default domain is synthesized and the caller must pass an explicit ?domain=.
-SITE_SUFFIX = config.site_suffix()
+# Public-domain suffix for default <app>.<suffix> domains is read LIVE from
+# config.site_suffix() at call time (see default_domain) — never cached at import
+# (a module-level read would freeze a stale value for the process lifetime).
 
 # The ACME challenge location is present in BOTH http-only and https vhosts so a
 # cert can be issued AND auto-renewed without ever taking the site down.
