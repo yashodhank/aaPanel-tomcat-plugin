@@ -30,13 +30,15 @@ plugin/javahost/
   install.sh tomcat_install.sh
   core/
     util/   shell.py(arg-list exec) validate.py download.py(sha512+gpg) fs.py(atomic+markers)
-    runtime/ java.py(detect/install 8/11/17/21) jvm_opts.py
+    runtime/ java.py(detect/install/reinstall/uninstall 8/11/17/21; self-contained runtimes/, no btjdk) jvm_opts.py
     tomcat/  registry.py installer.py service.py hardening.py instance.py templating.py templates/*.tmpl
-    deploy/  war.py(zip-slip-safe) proxy.py
+    deploy/  war.py(zip-slip-safe) proxy.py(<app>.<site_suffix>) ssl.py(LE: native ACME->certbot) sitestatus.py
     db/      _base.Engine + pg/mysql/mongo + engines.py (registry)
-    compat/  aapanel.py
+    compat/  aapanel.py syssafe.py(hardening allowlist)
+    jobs.py(detached bg jobs) maintenance.py(Danger-zone wipe) config.py(site_suffix, manage_hardening)
+  docs/      bundled docs served in-UI via GetDoc (KEEP IN SYNC with repo docs/: user-guide, system-hardening, single-vs-multi-mode, databases-java-apps, troubleshooting)
 tests/                 # offline pytest (no panel, no network)
-docs/                  # architecture, java-runtime, tomcat-10/11, databases-java-apps, troubleshooting, packaging
+docs/                  # endpoints, architecture, java-runtime, tomcat-10/11, databases-java-apps, system-hardening, troubleshooting, single-vs-multi-mode, testing, testbed, packaging
 ```
 
 ## Coding conventions (enforced)
@@ -46,7 +48,10 @@ docs/                  # architecture, java-runtime, tomcat-10/11, databases-jav
 - **Downloads** go through `util.download.fetch_verified` (SHA-512 mandatory, GPG when available, fail-closed). Never add an unverified download path.
 - **Templates** use `@@token@@` placeholders + `tomcat.templating` (so shell/XML `${...}` is untouched). Missing token = hard error.
 - **DB engines**: add new engines by subclassing `db._base.Engine` and registering in `db/engines.py`.
-- Endpoints: add a method to `javahost_main`, validate inputs, delegate to `core/`, return `panel.ok(data)` / `panel.err(msg)`. Keep the entrypoint thin.
+- Endpoints: add a method to `javahost_main`, validate inputs, delegate to `core/`, return `panel.ok(data)` / `panel.err(msg)`. Keep the entrypoint thin. Full method catalogue: `docs/endpoints.md`.
+- **Long ops are async jobs.** Heavy work (JDK/Tomcat install/uninstall, app lifecycle) goes through `core.jobs` (`StartInstall*`/`StartUninstall*`/`StartReinstallJava`/`StartAppAction` → `{job_id}`, polled via `GetJobs`/`GetJobLog`). Keep a sync variant for CLI where one already exists.
+- **Secret-safe DB env**: `SetDbEnv` writes `app.env` (0640) and never echoes secrets; `GetDbEnv` returns the URL/user/driver and `has_password` only — never the password.
+- **Bundled docs ↔ repo docs.** The five `GetDoc`-allowlisted files exist in BOTH `docs/` and `plugin/javahost/docs/`; when you change one, update its twin so the in-UI Help matches the repo.
 
 ## Test / lint (always before commit)
 ```bash
@@ -62,7 +67,8 @@ make deploy VPS_HOST=root@<host>     # rsync plugin/javahost + restart panel
 Ops/login creds for the test box are in `_private_spec/OPS-ACCESS.md` (gitignored).
 
 ## More detail
-- Architecture: `docs/architecture.md` · Java: `docs/java-runtime.md`
+- Endpoints: `docs/endpoints.md` · Architecture: `docs/architecture.md` · Java: `docs/java-runtime.md`
 - Tomcat 10/11 (and why 11 isn't drop-in): `docs/tomcat-10.md`, `docs/tomcat-11.md`
-- Databases: `docs/databases-java-apps.md` · Packaging: `docs/aaPanel-plugin-packaging.md`
-- Releasing: use the `javahost-release` skill. Security review: `javahost-security` skill.
+- Databases: `docs/databases-java-apps.md` · Hardening: `docs/system-hardening.md` · Packaging: `docs/aaPanel-plugin-packaging.md`
+- Testing: `docs/testing.md` (+ full on-box campaign `docs/testbed.md`); deploy/DB matrix: `javahost-test-deploy` skill.
+- UI edits: `javahost-ui` skill. Releasing: `javahost-release` skill. Security review: `javahost-security` skill.

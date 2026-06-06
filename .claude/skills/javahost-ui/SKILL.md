@@ -20,6 +20,24 @@ self-contained admin UI. Its job is to keep every UI edit **WCAG 2.2 AA** and
 endpoints, build/test/deploy, and the clean-room rule, defer to the **javahost-dev**
 skill. This file is **instructions only** — no scripts, nothing fetched at runtime.
 
+**Current component inventory** (so accessibility patterns map to real UI):
+- **Top tabs** (APG Tabs): Dashboard · Applications · Runtimes · Databases · Tasks
+  · Logs · Help · Settings. A header **Fullscreen** toggle pops the plugin out of
+  aaPanel's modal (`position:fixed; inset:0`, own CSS only); **Esc** exits, focus
+  managed.
+- **Applications**: a rich list + a focus-trapped slide-over **drawer** (tabs
+  Overview / Logs / Metrics / Config / Database; only the visible tab polls). Rows
+  carry a status badge, **health pill**, a **"runtime missing"** badge, an inline
+  Start/Stop/Restart, an Open ↗ link, and a **per-site HTTPS toggle**.
+- **Runtimes**: Java Install/Reinstall/Uninstall + a "Java N is in use" dependents
+  dialog; Tomcat Install/Update/Uninstall.
+- **Databases**: an engines matrix + a per-app env **search/filter** + a
+  Configure-DB-env form.
+- **Tasks** (job list, auto-polled) · **Logs** (app + task viewer) · **Settings**
+  (config + a typed-`WIPE` Danger zone).
+All of the above are show/hide regions and dialogs — apply the Tabs / Dialog /
+Menu / Disclosure / Alert / Status patterns below accordingly.
+
 Authoritative sources (read these, don't guess):
 - WCAG 2.2 AA quick-ref: https://www.w3.org/WAI/WCAG22/quickref/?levels=aa
 - ARIA APG patterns index: https://www.w3.org/WAI/ARIA/apg/patterns/

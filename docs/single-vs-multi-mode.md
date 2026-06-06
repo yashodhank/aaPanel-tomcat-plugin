@@ -62,4 +62,3 @@ installations stay fully isolated from one another.
   put a separate load balancer in front if you need traffic spread or failover.
 - Do not assume an app, port, or vhost created on one node exists on another —
   it does not.
-</content>

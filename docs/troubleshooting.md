@@ -82,6 +82,48 @@ JavaHost inspects the WAR and returns a non-fatal `warning` (`DeployWar` →
 The WAR is still extracted (extraction is zip-slip-safe); the warning surfaces in
 the response so the UI can show it.
 
+## App unreachable on its public port (loopback by design)
+
+Every Tomcat and JAR connector binds to **`127.0.0.1:<port>`** on purpose — the
+raw app port is **not** exposed on the box's public interface. `http://<public-ip>:<port>/`
+will refuse/time out; that is expected, not a bug. Reach the app **through a
+reverse-proxy domain** (`SetSite`, then the HTTPS toggle / `SetSiteSSL`). On the
+box, verify with `curl http://127.0.0.1:<port>/`. The **Open ↗** link in the UI
+targets the proxy domain; with none configured it offers **Set up reverse proxy**
+instead of a dead link.
+
+## "runtime missing" badge / app won't restart
+
+A red **runtime missing** badge means the app's pinned `JAVA_HOME` no longer
+exists (its JDK was uninstalled — typically a `Force` uninstall). The app may
+still be serving on its live JVM but **will not survive a restart** (`list_apps()`
+reports `runtime_ok: false`). Reinstall that Java major (Runtimes → Install /
+Reinstall) or repoint the app to a present JDK, then restart. Force-uninstalling a
+JDK now also stops its dependents so they fail cleanly rather than lingering as
+zombie JVMs that falsely report healthy.
+
+## A long install looks like it "failed" (it didn't)
+
+JDK/Tomcat install/reinstall/uninstall and the app lifecycle run as **async
+background jobs** (`StartInstallJava` / `StartInstallTomcat` / `StartReinstallJava`
+/ `StartUninstallJava` / `StartUninstallTomcat` / `StartAppAction`), each returning
+a `{job_id}` immediately. A slow Adoptium/Apache download therefore no longer
+times out the panel request. Only treat an operation as failed when its **Task**
+shows `failed` (Tasks tab → `GetJobs` / `GetJobLog`) — not because the click took
+a while.
+
+## SSL / certificate issuance failures
+
+`SetSiteSSL{app, enable}` issues a Let's Encrypt cert and flips the vhost to HTTPS.
+It tries **aaPanel-native ACME first** and falls back to **certbot `--webroot`**
+when native doesn't place a live cert (aaPanel's bundled LE is broken against
+pyOpenSSL ≥24 on some hosts); certbot errors (rate-limit / DNS / challenge) are
+surfaced, not swallowed. A cert is **never** issued against a guessed FQDN — a
+real domain must exist (stored site domain, explicit `domain`, or the
+`site_suffix` convention). Disabling SSL reverts to HTTP but **keeps the cert on
+disk**, so re-enabling is instant. The drawer's **Site & SSL** block
+(`GetSiteStatus`) reports cert validity/expiry and live reachability.
+
 ## Where logs live
 
 - **Per-app logs:** `/www/server/javahost/instances/<app>/logs/`. JavaHost reads
@@ -112,4 +154,11 @@ Removal helpers (`fs.safe_rmtree`) refuse to delete a directory that lacks the
 `.javahost-managed` marker or sits outside the managed roots
 (`/www/server/javahost`, and JavaHost's own units under `/etc/systemd/system` /
 `/etc/init.d`). This is a guardrail, not a bug: only JavaHost-created paths are
-removable. Plugin uninstall keeps runtimes/apps unless you set `PURGE=1`.
+removable.
+
+For a controlled teardown, use **Settings → Danger zone**: preview
+(`WipePreview`) then `Wipe` with a typed `WIPE` confirm and a scope from
+`{apps, jdks, tomcats, sites, full}`. A wipe **skips runtimes still in use** by an
+app and never touches other plugins' configs or any database. Plugin uninstall
+(`install.sh uninstall`) keeps data by **default**, unless the Danger zone wrote a
+`/www/server/javahost/.uninstall_plan` selecting a wider scope.

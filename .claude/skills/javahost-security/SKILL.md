@@ -29,16 +29,29 @@ do not add them as hard dependencies.
    via `fs.safe_rmtree` (refuses unmanaged dirs / paths outside MANAGED_ROOTS).
    Temp dirs via `fs.mkdtemp` (0700) — no predictable `/tmp/*.pl` paths.
 6. **Secrets** — DB credentials only in `app.env` (0640), never in the connection
-   URL/URI, never logged, never echoed back in an endpoint response. `tomcat-users.xml` 0600.
+   URL/URI, never logged, never echoed back in an endpoint response. `GetDbEnv`
+   returns `has_password` only — never the password. `tomcat-users.xml` 0600.
 7. **Service units** — `JAVA_HOME` comes from `Environment=`/setenv, never parsed
    from a shebang. Units run as `www` (non-root); `NoNewPrivileges`/`PrivateTmp` set.
+   **init.d must NOT `. app.env`** (shell-sourcing re-evaluates `$(...)`/backticks
+   in a value → a DB password could execute as root); load vars line-by-line.
 8. **Tomcat hardening** — installer removes examples/docs/host-manager/manager;
    `hardening.assert_no_ajp` passes (no *active* AJP); HTTP connector bound to 127.0.0.1;
-   shutdown port disabled. TLS terminates at the Nginx vhost, not Tomcat.
+   shutdown port disabled. TLS terminates at the Nginx vhost, not Tomcat. **JAR apps
+   also bind loopback** (`SERVER_ADDRESS`/`SERVER_HOST=127.0.0.1`) — never `0.0.0.0`.
 9. **Coexistence** — never edit `/etc/hosts` or another plugin's configs; only write
    plugin-owned paths; check ports before claiming them; never delete external Tomcats.
-10. **Least privilege / authorization** — destructive actions are marker-gated and
-    logged; no production testing without authorization.
+   The Danger-zone wipe must SKIP in-use runtimes and never touch the panel JDK/cert,
+   other plugins, or databases.
+10. **SSL / certs** — `SetSiteSSL` issues against a **real** domain only (stored
+    site / explicit / `site_suffix` convention) — never a guessed FQDN; certbot
+    errors are surfaced, not swallowed. No vendor FQDN is hardcoded (`site_suffix`
+    is config, empty by default).
+11. **Async jobs** — `core.jobs` work bodies are built from validated inputs only;
+    never interpolate raw `get.*` into the job's python/argv. Jobs are pruned.
+12. **Least privilege / authorization** — destructive actions are marker-gated and
+    logged; the typed `WIPE` confirm guards `Wipe`; no production testing without
+    authorization.
 
 ## Output
 Produce a findings table: `Severity (Critical/High/Medium/Low/Info) | Area | Finding

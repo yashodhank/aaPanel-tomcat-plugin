@@ -154,5 +154,3 @@ only *registering and auto-starting a managed service* requires layer-3 approval
   execute `catalina.sh` (Apache tarballs ship `bin/*.sh` as `0750`).
 - Each per-app `CATALINA_BASE` gets the default `conf/web.xml` (DefaultServlet +
   welcome files) and is `chown`ed to the run user — otherwise `/` returns 404.
-</content>
-</invoke>

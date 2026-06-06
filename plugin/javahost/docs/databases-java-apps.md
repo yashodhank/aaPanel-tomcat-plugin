@@ -42,10 +42,39 @@ MariaDB    : jdbc:mariadb://db:3306/appdb?sslMode=REQUIRED
 MongoDB    : mongodb://db:27017/appdb?tls=true      (user/password supplied via MongoCredential)
 ```
 
+## In the Databases tab
+
+- The top card is a read-only **support matrix** (`GetDbSupport`): every engine,
+  its version range, default port, recommended driver, and whether the engine is
+  detected running locally.
+- Below it, the per-app **database env** section has a live **search/filter**
+  (with a live count) over the per-app env chips, so you can find an app quickly
+  on a busy host.
+- Picking an app opens the **Configure database env** form: engine, host, port,
+  database, user, password, and an **SSL** checkbox. SSL **defaults off for
+  loopback hosts** (`127.0.0.1`/`localhost`/`::1`) and on for remote — so a local
+  DB connects out of the box. Submitting calls `SetDbEnv`; the UI then offers to
+  restart the app.
+- The drawer's **Database** tab shows the **current** connection env
+  (`GetDbEnv`): engine, the connection URL (host/port/db — **never** the
+  password), user, driver, and whether a password is set — or "No database env
+  configured".
+
+## SSL / `db_ssl`
+
+`SetDbEnv` honours an explicit `db_ssl` flag; with none it defaults SSL **off**
+for loopback hosts and **on** for remote. The rendered URL reflects this (e.g.
+`?sslmode=require` for PostgreSQL, `?sslMode=REQUIRED` for MySQL/MariaDB,
+`?tls=true` for Mongo).
+
 ## API
 
 - `GetDbSupport` → every engine, its version list, recommended driver, and any
   locally-detected server.
 - `SetDbEnv` with `db_engine` (postgresql|mysql|mariadb|mongodb), `db_host`,
   `db_port` (optional → engine default), `db_name`, `db_user`, `db_password`,
-  and optional `db_version` → writes `app.env`.
+  optional `db_version`, and optional `db_ssl` → writes `app.env` (secrets are
+  never echoed back).
+- `GetDbEnv{app}` → the current env, **secret-safe**: `{configured, engine, url,
+  user, driver, driver_maven, has_password}`. It returns whether a password is
+  set, **never** the password itself.

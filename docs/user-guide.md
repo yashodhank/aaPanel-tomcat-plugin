@@ -6,8 +6,20 @@ your behalf. JavaHost is **host-local**: everything it manages runs on the same
 server the plugin is installed on (see
 [Single-host vs. multi-server](single-vs-multi-mode.md)).
 
-> Screenshots referenced below live in [`images/`](images/) — that directory is a
-> placeholder; the maintainer drops the PNGs in and they render in place.
+> Screenshots referenced below live in [`images/`](images/); see that directory's
+> [shot-list](images/README.md) for exactly what each one captures. Most are best
+> taken in the plugin's **Fullscreen** mode (below).
+
+### Top tabs and Fullscreen
+
+The plugin's top bar has eight tabs — **Dashboard · Applications · Runtimes ·
+Databases · Tasks · Logs · Help · Settings** — implemented as an accessible
+WAI-ARIA Tabs pattern (arrow/Home/End navigation). The header also has a
+**Fullscreen** toggle that pops the plugin out of aaPanel's cramped modal to fill
+the whole viewport (own CSS only, no panel patching); **Esc** exits. Use it
+whenever you work with the Applications drawer, Tasks, or Logs.
+
+![Fullscreen mode](images/fullscreen.png)
 
 ---
 
@@ -47,7 +59,11 @@ state, total apps). Use the **Refresh** button in the top bar to re-poll
 
 #### Hardening banner
 
-![Hardening banner](images/hardening-banner.png)
+> _Screenshot pending — this banner only appears when aaPanel "System Hardening"
+> has locked the service directories (`/etc/systemd/system`, `/etc/init.d`). On a
+> non-hardened host it isn't shown._ When present, it reads: *"Service directories
+> are immutable (likely aaPanel 'System Hardening'). Disable it (or lift `chattr +i`)
+> so JavaHost can register Tomcat/JAR services."*
 
 If `GetStatus` reports `service_dirs_locked: true`, a red banner appears warning
 that **System hardening is active** and JavaHost cannot register services. It
@@ -62,29 +78,45 @@ because JavaHost manages hardening transparently.
 Open the **Runtimes** tab. It has two cards, both driven by the latest
 `GetStatus` data.
 
-![Runtimes](images/runtimes.png)
+![Runtimes — Java](images/runtimes-java.png)
 
-### Install Java
+### Install / reinstall / uninstall Java
 
-Java majors **8, 11, 17, 21** are listed. Detected JDKs show an *installed*
-badge; missing ones show an **Install** button.
+Java majors **8, 11, 17, 21** are listed. Detected JDKs show an *installed* badge;
+each row has **Install**, **Reinstall**, and **Uninstall** actions.
 
-- Clicking **Install** calls `InstallJava` with the major.
-- The server queries the Adoptium API for the latest Temurin build, verifies it
+- **Install** → `StartInstallJava` (async; sync `InstallJava` also exists). The
+  server queries the Adoptium API for the latest Temurin build, verifies it
   (**SHA-256**, refusing unverified artifacts), and extracts it to
-  `/www/server/javahost/runtimes/jdk-<major>`.
-- Each runtime keeps its own `JAVA_HOME`; it never mutates system `alternatives`,
-  so apps can run on different JDKs side by side
-  (see [Java runtime](java-runtime.md)).
+  `/www/server/javahost/runtimes/jdk-<major>`. Watch it finish in
+  [Tasks](#9-tasks--logs).
+- **Reinstall** → `StartReinstallJava` (async) reinstalls the same major.
+- **Uninstall** → `StartUninstallJava` (async; sync `UninstallJava` too). It is
+  **blocked while the JDK is in use** by deployed apps — JavaHost shows a **"Java N
+  is in use"** dialog listing the dependents (from `GetJavaUsage`). Choosing
+  **Force** overrides the block and **stops** those dependent apps so they go
+  cleanly DOWN.
+
+  ![Java in use dependents dialog](images/java-in-use.png)
+
+JavaHost is **self-contained**: it manages only its own JDKs under `runtimes/`
+(plus distro JDKs in `/usr/lib/jvm`) and no longer reuses aaPanel's
+`/usr/local/btjdk`. Each runtime keeps its own `JAVA_HOME`; it never mutates
+system `alternatives`, so apps can run on different JDKs side by side (see
+[Java runtime](java-runtime.md)).
 
 ### Install / update / uninstall Tomcat
+
+![Runtimes — Tomcat](images/runtimes-tomcat.png)
 
 Supported majors are **9** (legacy, `javax.*`), **10.1**, and **11** (both
 `jakarta.*`). Each row shows the patch, namespace, and **minimum Java**.
 
-- **Install** → `InstallTomcat`; **Update** → `UpdateTomcat` (resolves and stages
-  the latest patch, atomic with rollback); **Uninstall** → `UninstallTomcat`.
-- Downloads are **SHA-512 + OpenPGP verified** before use.
+- **Install** → `InstallTomcat` / `StartInstallTomcat` (async); **Update** →
+  `UpdateTomcat` (resolves and stages the latest patch, atomic with rollback);
+  **Uninstall** → `StartUninstallTomcat` (async) / `UninstallTomcat`.
+- Downloads are **SHA-512 + OpenPGP verified** before use. Watch installs finish
+  in [Tasks](#9-tasks--logs).
 
 **Java floors are enforced** ([Tomcat 10.1](tomcat-10.md),
 [Tomcat 11](tomcat-11.md)):
@@ -102,10 +134,27 @@ auto-installs a Temurin build that meets the floor (17 for floors ≤ 17, else 2
 
 ## 3. Applications — create, deploy WAR, manage
 
-Open the **Applications** tab. Empty state offers shortcuts to create an app or
-deploy a Spring Boot JAR.
+Open the **Applications** tab. It is a **rich list** with a slide-over **detail
+drawer**. The empty state offers shortcuts to create an app or deploy a JAR.
 
 ![Applications](images/applications.png)
+
+Each row shows: the app **type** (WAR / Spring Boot JAR / Tomcat), a **runtime
+chip** (e.g. Tomcat 11 · Java 17), a **status badge**, a **health pill** + port,
+and an inline **Start / Stop / Restart** control. Two states are flagged
+prominently:
+
+- A red **"runtime missing"** badge when the app's pinned JDK has been removed —
+  the app may still be running on its live JVM but **won't survive a restart**
+  (driven by `runtime_ok`; see [Java runtime](java-runtime.md#runtime_ok-and-the-runtime-missing-badge)).
+- An **Open ↗** link to the app's reverse-proxy domain (with copy-URL / copy-port
+  buttons) and a **per-site HTTPS toggle** — both covered in
+  [section 6](#6-reverse-proxy--per-site-https).
+
+The Start/Stop/Restart actions are **async**: they call `StartAppAction{app,
+action}`, which runs the lifecycle change as a background job so a slow systemd
+transition can't time out the panel (watch it in [Tasks](#9-tasks--logs)). The
+list and health auto-refresh (~5s) while the section is visible.
 
 ### Create a Tomcat app
 
@@ -117,11 +166,34 @@ Fill in:
 
 - **App name** — validated server-side as an identifier.
 - **Tomcat version** — chosen from installed majors.
+- **Java (JDK pin)** — optional; pin which installed JDK the app runs on. Left
+  unset, JavaHost uses the Tomcat line's baseline (9→Java 8, 10.1→11, 11→17).
 - **Port** (default `8080`) and **Memory MB** (default `512`).
 
-Submitting calls `CreateApp`, which provisions a dedicated `CATALINA_BASE` on the
-chosen major, pins its `JAVA_HOME`, allocates the port (auto-resolving a free one
-on the local host), and registers a `javahost-<app>` service.
+Submitting calls `CreateApp` (which accepts the `java` pin), provisions a
+dedicated `CATALINA_BASE` on the chosen major, pins its `JAVA_HOME`, allocates the
+port (auto-resolving a free one on the local host), and registers a
+`javahost-<app>` service. The Tomcat HTTP connector binds **`127.0.0.1`** by
+design — see [section 6](#6-reverse-proxy--per-site-https).
+
+### The detail drawer
+
+Clicking a row opens a focus-trapped, Esc-closable **drawer** with tabs:
+
+![App detail drawer — Overview](images/drawer-overview.png)
+
+- **Overview** — type/runtime/status/health, the Open link + HTTPS toggle, and a
+  **Site & SSL** block (`GetSiteStatus`): the configured domain, certificate
+  presence/validity/expiry (warns when <14 days, errors when expired), the
+  HTTP→HTTPS redirect, and live HTTPS reachability.
+
+  ![App detail drawer — Site & SSL](images/drawer-site-ssl.png)
+
+- **Logs** / **Metrics** / **Config** / **Database** — the per-app log tail
+  (`GetLogs`), JVM/process metrics (`GetMetrics`), the rendered config, and the
+  current DB env (`GetDbEnv`, secret-safe — see
+  [section 5](#5-databases--connect-a-java-app-to-a-database)). Only the visible
+  tab polls.
 
 ### Deploy a WAR
 
@@ -142,28 +214,30 @@ warning** if the WAR looks like `javax.*`.
 
 ### Lifecycle, repair, delete
 
-Each row has a quick **Restart** button and a **More actions** menu:
+Each row has an inline **Start / Stop / Restart** control and a **More actions**
+menu:
 
-- **Start / Stop / Restart** → `AppAction` with the corresponding action.
+- **Start / Stop / Restart** → `StartAppAction{app, action}` — runs as an **async
+  background job** (non-blocking; pollable in [Tasks](#9-tasks--logs)). The
+  synchronous `AppAction` is kept for CLI / back-compat.
 - **Repair** → `RepairApp` (re-renders the service/config; also the recovery step
-  after authorizing hardening).
+  after authorizing hardening). Available async via `StartAppAction{action:
+  repair}`.
 - **Delete app** → `DeleteApp` (removes the instance and its files; confirms
   first).
 
 ### Logs, health, metrics
 
-- **View logs** opens a monospace viewer (`GetLogs`) with a **lines** selector
-  (50/200/500/1000) and a **Refresh** button. Log bytes are never interpreted as
-  HTML.
+These live in the [detail drawer](#the-detail-drawer) tabs (and the row health
+pill):
 
-  ![Logs](images/logs.png)
-
-- **Check health** updates the row's health pill via `GetHealth` (`up`/`down`,
-  port, HTTP code). Health is auto-checked for every app on each refresh.
-- **Metrics** opens a panel (`GetMetrics`) reading PID, RSS memory, thread count,
-  and uptime from `/proc`. Use its **Refresh** to re-poll.
-
-  ![Metrics](images/metrics.png)
+- **Logs** tab — a monospace viewer (`GetLogs`) with a **lines** selector and a
+  **Refresh** button. Log bytes are never interpreted as HTML.
+- **Health** — the row's health pill is set from the **batched** `GetHealthAll`
+  (one round-trip per poll for all apps; `up`/`down`, port, HTTP code), refreshed
+  automatically while the section is visible.
+- **Metrics** tab — `GetMetrics` reads PID, RSS memory, thread count, and uptime
+  from `/proc`; auto-refreshes while open.
 
 ---
 
@@ -193,11 +267,14 @@ safely (full reference: [Connecting Java apps to databases](databases-java-apps.
 
 Open the **Databases** tab.
 
-![Databases](images/databases.png)
+![Databases — engines matrix](images/databases-engines.png)
 
 The top card is a read-only **support matrix** (`GetDbSupport`): engine, default
 port, version range, recommended driver, and whether the engine is detected
-locally.
+locally. The per-app DB-env section below it has a live **search/filter** (with a
+count) over the per-app env chips.
+
+![Databases — per-app env filter](images/databases-filter.png)
 
 | Engine | Versions | Default port | Driver coordinates |
 |--------|----------|--------------|--------------------|
@@ -214,10 +291,11 @@ Pick an app from the **Per-app database environment** picker (or use a row's
 ![Database environment](images/db-env.png)
 
 Choose the **engine** (the version list and default **port** auto-fill, and the
-recommended **driver** is shown), then enter **host**, **database**, **user**, and
-**password**. Clicking **Write DB env** calls `SetDbEnv`, which writes
+recommended **driver** is shown), then enter **host**, **database**, **user**,
+**password**, and toggle **SSL** (defaults **off** for loopback hosts, on for
+remote). Clicking **Write DB env** calls `SetDbEnv`, which writes
 `CATALINA_BASE/bin/app.env` (mode `0640`) — loaded by the service via
-`EnvironmentFile`. Your app reads:
+`EnvironmentFile` — then offers to restart the app. Your app reads:
 
 ```
 DB_URL           # connection URL/URI, no password embedded
@@ -231,9 +309,24 @@ DB_DRIVER_MAVEN  # coordinates for your build / CATALINA_HOME/lib
 appear in process listings, the connection URL, or logs. Never hardcode
 credentials in the WAR.
 
+### Viewing the current DB env
+
+The detail drawer's **Database** tab shows the app's configured connection
+(`GetDbEnv`): engine, the connection URL (host/port/db — **never** the password),
+user, driver, and whether a password is set — or "No database env configured".
+`GetDbEnv` is secret-safe and never returns the password.
+
+![Database current-env panel](images/db-current-env.png)
+
 ---
 
-## 6. Reverse proxy
+## 6. Reverse proxy &amp; per-site HTTPS
+
+> **Loopback invariant.** Every app connector (Tomcat and JAR) binds to
+> **`127.0.0.1:<port>` by design** — the raw app port is **not** exposed on the
+> public interface. You reach an app **only through a reverse-proxy domain**. On
+> the box, verify with `curl http://127.0.0.1:<port>/`; from anywhere, use the
+> site hostname.
 
 Open the **Help** tab. The **Reverse-proxy hint** card (`GetProxyHint`) shows an
 Nginx vhost **include snippet** that fronts a managed app via the panel's web
@@ -254,8 +347,10 @@ FQDN is ever guessed.
 
 ### Per-site HTTPS (Let's Encrypt)
 
-Once a reverse-proxy site exists, turn on TLS for it with
-**`SetSiteSSL{app, enable, email?}`**:
+Once a reverse-proxy site exists, turn on TLS for it with the **HTTPS toggle** on
+the app row / drawer Overview, which calls **`SetSiteSSL{app, enable, email?}`**:
+
+![Per-site HTTPS toggle](images/https-toggle.png)
 
 - **`enable` truthy** — issues a Let's Encrypt certificate and rewrites the vhost
   to terminate TLS on `:443`; the `:80` server keeps serving the ACME challenge
@@ -301,7 +396,58 @@ in **Security → bt_security**, then **Repair** the app.
 
 ---
 
-## 8. Troubleshooting & deployment scope
+## 9. Tasks & Logs
+
+Long operations — JDK/Tomcat install, reinstall, uninstall, and the async app
+lifecycle — run as **detached background jobs** so they can't time out the panel
+AJAX request (a slow download no longer flashes a false error).
+
+### Tasks
+
+The **Tasks** tab lists every job with its **status** (`running` / `done` /
+`failed`), target, elapsed time, and a **view-log** action. It's backed by
+`GetJobs` (list, auto-polled) and `GetJobLog` (one job's output). Only treat an
+install as failed when its task shows **failed**.
+
+![Tasks](images/tasks.png)
+
+### Logs
+
+The **Logs** tab is a unified viewer over both **app logs** (per-app Catalina /
+JAR output) and **task logs** (the per-job output). Look for the app's startup
+marker in app logs and download/verify lines in task logs.
+
+![Logs](images/logs.png)
+
+---
+
+## 10. Settings — config & Danger zone
+
+The **Settings** tab exposes plugin config (including the `site_suffix` used for
+reverse-proxy domains) and a **Danger zone** for tearing the plugin down
+granularly.
+
+![Settings — Danger zone](images/settings-danger.png)
+
+The Danger zone offers per-category removal — **deployed apps**, **plugin JDKs**,
+**Tomcats**, **reverse-proxy sites**, and a **full wipe**:
+
+- **Preview** (`WipePreview`) is a dry run that lists exactly what each selected
+  category would remove — nothing is deleted.
+- Removal (`Wipe`) requires a typed **`WIPE`** confirmation and a scope drawn from
+  `{apps, jdks, tomcats, sites, full}`. Apps are **stopped** before removal; a
+  wipe **skips any JDK/Tomcat still in use** by a deployed app (reported as
+  `skipped`), and a full/apps wipe removes apps first so everything still clears.
+- It **never** touches another plugin's configs or any database.
+
+`install.sh uninstall` honors an optional saved plan
+(`/www/server/javahost/.uninstall_plan`, written by the Danger zone) to wipe the
+chosen scope on uninstall; the **default is keep-data** (only the plugin code is
+removed).
+
+---
+
+## 11. Troubleshooting & deployment scope
 
 - Most failures are **fail-closed** — JavaHost refuses rather than do something
   unsafe. Errors surface in the `{status, msg}` envelope and as toasts.

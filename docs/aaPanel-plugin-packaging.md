@@ -49,11 +49,13 @@ module, the install hook, and the `checks` path. CI enforces
 `info.json["shell"]` points at `install.sh`, which the panel invokes as
 `install.sh install` (and `install.sh uninstall`). It:
 
-- creates the data root `/www/server/javahost/{runtimes,tomcat,instances,vhost/nginx,.keys}`
+- creates the data root `/www/server/javahost/{runtimes,tomcat,instances,vhost/nginx,jobs,.keys}`
   (`.keys` is `chmod 700`),
 - best-effort registers an icon,
-- on uninstall, removes only plugin code/icon and keeps managed runtimes/apps
-  unless `PURGE=1` is set.
+- on uninstall, **keeps data by default** (removes only plugin code/icon). The
+  Settings → Danger zone can write an optional `.uninstall_plan` that
+  `install.sh uninstall` honors to remove a chosen scope (apps / jdks / tomcats /
+  sites / full); a legacy `PURGE=1` still forces removal.
 
 ## How the panel dispatches requests
 
@@ -62,12 +64,14 @@ calls `instance.<Method>(get)`, where `get` is an attribute namespace of request
 parameters. Conventionally the panel routes by a method selector such as
 `s=<Method>`, which maps to the same-named method on the class.
 
-Each public method (`GetStatus`, `InstallJava`, `InstallTomcat`,
-`UninstallTomcat`, `UpdateTomcat`, `CreateApp`, `AppAction`, `DeleteApp`,
-`RepairApp`, `GetAppDetail`, `GetLogs`, `DeployWar`, `SetDbEnv`, `GetDbSupport`,
-`GetProxyHint`) follows the same pattern: read params via `panel.attr(get, ...)`,
-**validate every input** (`core/util/validate.py`), call into `core/`, and return
-`panel.ok(...)` / `panel.err(...)`.
+Each public method follows the same pattern: read params via
+`panel.attr(get, ...)`, **validate every input** (`core/util/validate.py`), call
+into `core/`, and return `panel.ok(...)` / `panel.err(...)`. The full surface —
+runtimes (install/reinstall/uninstall), Tomcat lifecycle, async jobs
+(`StartInstall*` / `StartAppAction` → `GetJobs` / `GetJobLog`), apps, deploy,
+reverse-proxy + SSL (`SetSite` / `SetSiteSSL` / `GetSiteStatus`), databases
+(`SetDbEnv` / `GetDbEnv` / `GetDbSupport`), and maintenance (`WipePreview` /
+`Wipe`) — is catalogued in [the endpoint reference](endpoints.md).
 
 The entrypoint is deliberately thin — all real logic is in `core/`, keeping the
 panel-facing surface small and auditable. The **only** module that touches panel

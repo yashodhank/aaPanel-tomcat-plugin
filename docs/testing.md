@@ -89,13 +89,16 @@ Open the **Applications** tab.
    **Deploy WAR** (`UploadWar`). The file uploads via the panel file API, stages
    under `/tmp`, and extracts zip-slip-safely into `webapps/ROOT`. No namespace
    warning is expected (`hello.war` is `jakarta.*`).
-3. **Start / Restart** the app via the row action (`AppAction`).
+3. **Start / Restart** the app via the row's inline control — `StartAppAction`
+   runs it as an **async job** (watch it in **Tasks**); the sync `AppAction` is
+   still available for CLI.
 
 > **Loopback / reverse-proxy gotcha.** Tomcat (and JAR) connectors bind to
 > **`127.0.0.1:<port>` by design** — the app is **not** reachable on the box's
 > raw public port. Verify on the box with `http://127.0.0.1:<port>/`; to reach it
 > from anywhere, create a reverse-proxy site (`SetSite{app, domain?}`, convention
-> `<app>.5d.bisotech.in`) and hit the hostname. See
+> `<app>.<site_suffix>` — the suffix is the plugin config, empty by default, so
+> you pass an explicit `domain` unless one is set) and hit the hostname. See
 > [Test campaign](testbed.md#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain).
 
 ### Verify health, logs, metrics
@@ -204,8 +207,11 @@ instance at `<base>/bin/site.ssl`.
 
 For each app created above, use the row's **More actions → Delete app**
 (`DeleteApp`); confirm the prompt. This removes the instance, its files, and the
-`javahost-<app>` service. Optionally uninstall Tomcat majors (`UninstallTomcat`)
-and remove the generated artifacts under `tests/fixtures/out/`.
+`javahost-<app>` service. Optionally uninstall Tomcat majors
+(`StartUninstallTomcat`, watch in **Tasks**) and Java majors
+(`StartUninstallJava` — blocked while in use unless `Force`), and remove the
+generated artifacts under `tests/fixtures/out/`. For a full plugin teardown use
+**Settings → Danger zone** (`WipePreview` then `Wipe`, typed `WIPE` confirm).
 
 ---
 

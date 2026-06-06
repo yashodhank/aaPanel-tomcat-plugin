@@ -11,16 +11,27 @@ Java majors **8, 11, 17, 21** are supported. `validate.java_major` rejects
 anything outside `{8, 11, 17, 21}` (fail closed). The install routine
 (`install_temurin`) accepts the same four majors.
 
+## Self-contained runtimes (no panel-JDK reuse)
+
+JavaHost manages **only its own JDKs**. As of v0.16.0 it **no longer detects or
+reuses aaPanel's shared `/usr/local/btjdk`** — that removed the confusing "panel
+JDK" rows and an un-removable shared runtime, and makes the plugin fully
+self-contained. It manages JDKs it installs under
+`/www/server/javahost/runtimes/` and recognises distro JDKs under `/usr/lib/jvm`.
+
+> **Migration note:** on an install that predates 0.16.0, repoint any app pinned
+> to `btjdk` at a plugin `runtimes/jdk-*` (recreate the app, or pin its JDK via
+> the Create-app form / `prefer_java`).
+
 ## Detection order
 
 `detect()` walks `_SEARCH` (newest first) and keeps the first hit per major:
 
 1. `/www/server/javahost/runtimes/jdk-21`, `jdk-17`, `jdk-11`, `jdk-8`
    (JavaHost-managed runtimes).
-2. `/usr/local/btjdk/jdk21`, `jdk17`, `jdk11`, `jdk8` (panel-provided JDKs).
-3. `/usr/lib/jvm/*` (distro JDKs; the directory is expanded and scanned
+2. `/usr/lib/jvm/*` (distro JDKs; the directory is expanded and scanned
    reverse-sorted).
-4. Finally `java` on `PATH` (resolved via `realpath`, two dirs up).
+3. Finally `java` on `PATH` (resolved via `realpath`, two dirs up).
 
 Each candidate is probed by running `<home>/bin/java -version` and parsing the
 banner. `parse_major` handles both the legacy `1.8.0_x` scheme (-> `8`) and the
@@ -50,6 +61,37 @@ for the latest build, then downloads, verifies, and extracts it into
 The installer's `ensure_java(major)` ties this to Tomcat: it calls
 `java.resolve(line.min_java)` and, if nothing satisfies the floor, installs
 Temurin 17 (for floors `<= 17`) or 21 (for floors `> 17`).
+
+## Install / reinstall / uninstall (async, dependency-aware)
+
+The Runtimes tab manages each Java major with **Install / Reinstall / Uninstall**
+buttons. The heavy download+extract runs as a **background job** (see
+[Tasks & Logs](user-guide.md#9-tasks--logs)) so a slow Adoptium download can't
+time out the panel request:
+
+- **Install** → `StartInstallJava` (or the sync `InstallJava`) → installs Temurin
+  for that major under `runtimes/jdk-<major>`.
+- **Reinstall** → `StartReinstallJava` → reinstalls the same major (job kind
+  `reinstall-java`).
+- **Uninstall** → `StartUninstallJava` (or the sync `UninstallJava`). It is
+  **blocked while the JDK is in use** by a deployed app: the endpoint returns the
+  dependent apps (`in_use_by`) so the UI can warn instead of silently breaking
+  them. Passing **`force`** overrides the block — and force-uninstall now also
+  **stops the dependent apps** so they go cleanly DOWN rather than lingering as
+  zombie JVMs that falsely report healthy.
+
+`GetJavaUsage{version}` returns `{version, in_use_by:[apps]}` so the UI can
+preview dependents before an uninstall. (Because JavaHost is self-contained, there
+is no longer an un-removable panel JDK; every managed JDK can be uninstalled.)
+
+## `runtime_ok` and the "runtime missing" badge
+
+Each app pins a `JAVA_HOME`. If that JDK is later removed (e.g. a force-uninstall),
+an already-running app keeps serving on its live JVM but **won't survive a
+restart**. `list_apps()` reports **`runtime_ok`** (true when the pinned
+`JAVA_HOME` still exists); when it's false the UI shows a red **"runtime missing"**
+badge so the misleading "up" status is called out. Recreate the JDK (Install /
+Reinstall) or repoint the app to a present runtime to clear it.
 
 ## Per-runtime JAVA_HOME
 

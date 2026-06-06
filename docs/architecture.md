@@ -32,10 +32,21 @@ attribute namespace of request params. The entry file is deliberately thin glue
   - `hardening.py` — strip risky webapps, AJP assertion, perms.
   - `instance.py` — per-app CATALINA_BASE lifecycle.
   - `templating.py` + `templates/*.tmpl` — `@@token@@` rendering.
-- `deploy/` — `war.py` (zip-slip-safe extract + namespace scan) and
-  `proxy.py` (JavaHost-owned Nginx vhost generation).
+- `deploy/` — app publishing & TLS:
+  - `war.py` — zip-slip-safe extract + `javax`→`jakarta` namespace scan + migrate.
+  - `proxy.py` — JavaHost-owned Nginx reverse-proxy vhost generation
+    (`<app>.<site_suffix>` → loopback port; aaPanel site API preferred).
+  - `ssl.py` — per-site Let's Encrypt provisioning: aaPanel-native ACME first,
+    `certbot --webroot` fallback, 443 vhost + 80→443 redirect + renewal hook.
+  - `sitestatus.py` — on-demand site/cert status (validity, expiry, http/https
+    reachability) behind `GetSiteStatus`.
 - `db/` — `engines.py` and per-engine `pg.py` / `mysql.py` / `mongo.py`,
   building app DB env files and a support matrix.
+- `jobs.py` — detached background-job system (double-fork + setsid) for the
+  async install/uninstall/lifecycle endpoints, with per-job state + live log.
+- `maintenance.py` — the granular Danger-zone wipe (preview + scoped removal,
+  skips in-use runtimes; never touches other plugins or databases).
+- `config.py` — plugin config (`manage_hardening`, `site_suffix`, …).
 
 ## The single compat boundary
 
@@ -48,10 +59,15 @@ different panel by swapping this one adapter.
 ## Data directories (`/www/server/javahost/`)
 
 - `runtimes/` — managed Temurin JDKs (`jdk-8`, `jdk-11`, `jdk-17`, `jdk-21`).
+  These are the **only** JDKs JavaHost manages (plus distro JDKs in
+  `/usr/lib/jvm` that it merely detects); it does not reuse `/usr/local/btjdk`.
 - `tomcat/<major>/` — shared **CATALINA_HOME** per major line (`9`/`10`/`11`).
 - `instances/<app>/` — per-app **CATALINA_BASE**.
 - `vhost/nginx/` — generated reverse-proxy vhosts.
+- `jobs/` — background-job state + per-job logs (running/done/failed).
 - `.keys/` — imported Apache KEYS and built GPG keyrings (mode `0700`).
+- `config.json` — plugin config; `.uninstall_plan` (optional) — saved Danger-zone
+  wipe scope honored by `install.sh uninstall`.
 
 `info.json` `checks` points at `/www/server/javahost` to detect install state.
 
