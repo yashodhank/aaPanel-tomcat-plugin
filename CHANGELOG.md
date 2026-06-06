@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.13.0] — 2026-06-06
+
+### Added
+- **Per-site HTTPS with a UI toggle.** Each published site (`<app>.5d.bisotech.in`)
+  gets an **HTTPS on/off switch** (row + drawer Overview). `SetSiteSSL{app,enable}`
+  provisions a cert and rewrites the vhost to a 443 server + 80→443 redirect (+ an
+  always-present ACME challenge location for renewal); disabling reverts to HTTP and
+  keeps the cert. Strategy: **aaPanel native first** (official API
+  `/acme?action=apply_cert_api`, `request_token = md5(request_time + md5(api_sk))`,
+  key from plugin config) → **certbot fallback** (`certonly --webroot`) — because
+  aaPanel's bundled LE (`sewer`) is broken against pyOpenSSL ≥24 on some hosts. A
+  certbot renewal deploy-hook reloads nginx. `list_apps()` now reports `ssl`, and
+  `appUrl()` uses `https://` when SSL is on.
+- **Database-env form for all engines:** the drawer Database tab now offers an
+  engine select (PostgreSQL/MySQL/MariaDB/MongoDB) + host/port/db/user/password and
+  an **SSL checkbox** (defaults off for loopback hosts), submitting `SetDbEnv` with
+  `db_ssl`, then offering to restart the app.
+
 ## [0.12.3] — 2026-06-06
 
 ### Performance

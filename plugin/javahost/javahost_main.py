@@ -26,7 +26,7 @@ from core.compat import aapanel as panel       # noqa: E402
 from core.util import validate                  # noqa: E402
 from core.runtime import java                   # noqa: E402
 from core.tomcat import registry, installer, service, instance  # noqa: E402
-from core.deploy import war, proxy              # noqa: E402
+from core.deploy import war, proxy, ssl         # noqa: E402
 from core.db import engines as dbengines        # noqa: E402
 from core import jobs                            # noqa: E402
 
@@ -193,6 +193,35 @@ class javahost_main(object):
             app = validate.identifier(panel.attr(get, "app"), "app")
             res = proxy.remove_site(app)
             panel.log("RemoveSite", app)
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetSiteSSL(self, get):
+        """Provision (or revoke) Let's Encrypt SSL for <app>'s reverse-proxy site.
+
+        `enable` truthy -> issue + switch the vhost to HTTPS (aaPanel native ACME
+        first, certbot fallback); falsy -> revert to plain HTTP (cert kept).
+        Returns {app, domain, ssl, url, via?}."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            domain = proxy.read_domain(app) or proxy.default_domain(app)
+            domain = validate.domain(domain)
+            port = instance.detail(app).get("port") or instance.health(app).get("port")
+            if not port:
+                return panel.err("cannot resolve port for app %r (is it created?)" % app)
+            enable_raw = panel.attr(get, "enable")
+            want = str(enable_raw).lower() not in ("0", "false", "no", "off", "", "none") \
+                if enable_raw is not None else False
+            if want:
+                email = panel.attr(get, "email", None) or None
+                res = ssl.enable(app, domain, int(port), email=email)
+            else:
+                res = ssl.disable(app, domain, int(port))
+            res = dict(res)
+            res.setdefault("app", app)
+            res.setdefault("domain", domain)
+            panel.log("SetSiteSSL", "%s ssl=%s via=%s" % (app, res.get("ssl"), res.get("via")))
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))

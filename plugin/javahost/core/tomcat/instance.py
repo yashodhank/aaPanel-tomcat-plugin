@@ -78,7 +78,7 @@ def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = 
 # Full key set every app dict carries, so the UI can render in one round-trip
 # without per-app follow-up calls. Order is also the documented return shape.
 _APP_KEYS = ("app", "type", "status", "runtime", "tomcat", "java", "port",
-             "context", "enabled", "backend", "uptime", "domain")
+             "context", "enabled", "backend", "uptime", "domain", "ssl")
 
 
 def _instance_backend(app: str) -> Optional[str]:
@@ -231,6 +231,12 @@ def _app_info(name: str) -> Dict:
             info["domain"] = _proxy.read_domain(name)
         except Exception:
             info["domain"] = None
+        # Whether SSL has been provisioned for this site (defensive: None on error).
+        try:
+            from ..deploy import ssl as _ssl
+            info["ssl"] = _ssl.read_ssl(name)
+        except Exception:
+            info["ssl"] = None
         # uptime intentionally left None here: parsing /proc per active app on
         # every 5s status poll is too heavy. The per-app Metrics drawer fetches
         # uptime on demand via GetMetrics. Key is kept (contract) with value None.

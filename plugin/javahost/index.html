@@ -325,6 +325,23 @@
   .jh-iconbtn.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,var(--line))}
   .jh-iconbtn.danger:hover{background:var(--danger-bg)}
 
+  /* HTTPS toggle (role=switch). 2-state pill + sliding thumb; busy => spinner. */
+  .jh-switch{position:relative;display:inline-flex;align-items:center;flex:none;
+    width:38px;height:22px;padding:0;border-radius:999px;cursor:pointer;
+    border:1px solid var(--line);background:var(--surface-2);
+    transition:background .14s,border-color .14s}
+  .jh-switch::before{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;
+    border-radius:50%;background:var(--muted);transition:transform .14s,background .14s}
+  .jh-switch[aria-checked="true"]{background:var(--ok-bg);border-color:var(--ok)}
+  .jh-switch[aria-checked="true"]::before{transform:translateX(16px);background:var(--ok)}
+  .jh-switch:hover{border-color:var(--accent-d)}
+  .jh-switch:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+  .jh-switch[disabled]{cursor:default;opacity:.6}
+  .jh-switch.busy::after{content:"";position:absolute;top:50%;left:50%;width:12px;height:12px;
+    margin:-6px 0 0 -6px;border:2px solid var(--accent-d);border-top-color:transparent;
+    border-radius:50%;animation:jh-spin .6s linear infinite}
+  .jh-switch.busy::before{opacity:0}
+
   @media (max-width:640px){
     .jh-approw{flex-wrap:wrap}
     .jh-approw-act{width:100%;justify-content:flex-start}
@@ -1195,7 +1212,9 @@
     if(/^\/ROOT\/?$/i.test(ctx)) ctx = '/';   // the ROOT webapp is served at /
     // domain may already include scheme; normalize to a bare host
     dom = dom.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    return 'http://' + dom + ctx;
+    // when SSL is provisioned for this site, the public URL is https://
+    var scheme = (x && x.ssl) ? 'https://' : 'http://';
+    return scheme + dom + ctx;
   }
   // default reverse-proxy host for an app per convention <app>.5d.bisotech.in
   function defaultDomain(app){ return cssId(app).toLowerCase() + '.5d.bisotech.in'; }
@@ -1210,10 +1229,20 @@
     if(url){
       return '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="Open '+esc(url)+'" aria-label="Open '+ec+' in a new tab" data-stop="1">'+ic('link')+'</a>'+
         '<button class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
-        portBtn;
+        portBtn + sslSwitchFor(x);
     }
     return '<button class="jh-btn ghost sm" data-setsite="'+ec+'" data-stop="1" title="Set up reverse proxy ('+esc(defaultDomain(x.app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
       portBtn;
+  }
+
+  // Accessible HTTPS switch for an app that HAS a domain (else ''). role=switch,
+  // aria-checked reflects x.ssl; toggled via the delegated data-ssltoggle hook.
+  function sslSwitchFor(x){
+    if(appDomain(x) == null) return '';
+    var ec = esc(x.app), on = !!(x && x.ssl);
+    return '<button type="button" class="jh-switch" role="switch" data-ssltoggle="'+ec+'" data-stop="1"'+
+      ' aria-checked="'+(on?'true':'false')+'" aria-label="HTTPS for '+ec+'"'+
+      ' title="'+(on?'HTTPS enabled':'Enable HTTPS')+' for '+ec+'"></button>';
   }
 
   // SetSite{app} — create the reverse-proxy vhost, then update the row/drawer
@@ -1231,6 +1260,44 @@
       refreshOpen(app);
       if(DRAWER.app === app) drawerOverview();   // rebuild the drawer Open row
       refresh();                                  // pick up the new domain server-side
+    });
+  }
+
+  // SetSiteSSL{app, enable} — issuance is slow (~15-30s): disable the switch +
+  // spinner while it runs, toast progress, then flip aria-checked + update the
+  // Open link on success, or revert on failure. Routed through call() for
+  // session-expiry handling. Tolerates a missing/partial response payload.
+  function toggleSsl(app, sw){
+    if(!sw || sw.disabled) return;
+    var want = sw.getAttribute('aria-checked') !== 'true';   // target state
+    // optimistic UI: show intended state, lock + spin while provisioning
+    sw.classList.add('busy'); sw.disabled = true;
+    sw.setAttribute('aria-checked', want ? 'true' : 'false');
+    toast((want ? 'Provisioning SSL for ' : 'Disabling SSL for ') + app + '…');
+    call('SetSiteSSL', {app:app, enable: want ? 1 : 0}, function(r){
+      var p = payload(r);
+      // resolve to the live switch node (the row/drawer may have re-rendered)
+      var live = (sw && sw.isConnected) ? sw
+        : document.querySelector('[data-ssltoggle="'+(window.CSS&&CSS.escape?CSS.escape(app):app)+'"]');
+      if(failed(r)){
+        if(live){ live.classList.remove('busy'); live.disabled = false;
+          live.setAttribute('aria-checked', (APPS_BY_NAME[app] && APPS_BY_NAME[app].ssl) ? 'true' : 'false'); }
+        toast(errText(p), 'err', 'SSL change failed');
+        return;
+      }
+      // trust the server's reported state where present, else fall back to want
+      var ssl = (p && typeof p.ssl === 'boolean') ? p.ssl : want;
+      if(APPS_BY_NAME[app]){
+        APPS_BY_NAME[app].ssl = ssl;
+        if(p && p.domain) APPS_BY_NAME[app].domain = String(p.domain).replace(/^https?:\/\//,'').replace(/\/+$/,'');
+      }
+      if(live){ live.classList.remove('busy'); live.disabled = false;
+        live.setAttribute('aria-checked', ssl ? 'true' : 'false');
+        live.setAttribute('title', (ssl?'HTTPS enabled':'Enable HTTPS')+' for '+app); }
+      toast('HTTPS ' + (ssl ? 'enabled' : 'disabled') + ' for ' + app, 'ok');
+      // update Open link(s) to the new scheme
+      refreshOpen(app);
+      if(DRAWER.app === app) drawerOverview();
     });
   }
 
@@ -1447,6 +1514,7 @@
     var p = $('dpanel-overview'); if(!p) return;
     var url = appUrl(x), ec = esc(app), port = appPort(x);
     var copyPortBtn = (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'');
+    var hasDomain = appDomain(x) != null;
     var openRow = url
       ? '<div class="jh-kv"><span>Open</span><span class="btns">'+
           '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(url)+'" aria-label="Open '+ec+'">'+ic('link')+'</a>'+
@@ -1457,6 +1525,10 @@
           '<button class="jh-btn ghost sm" data-setsite="'+ec+'" title="Set up reverse proxy ('+esc(defaultDomain(app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
           copyPortBtn+
         '</span></div>';
+    // HTTPS switch row — only once a reverse-proxy domain exists for the app
+    var sslRow = hasDomain
+      ? '<div class="jh-kv"><span>HTTPS</span><span class="btns">'+ sslSwitchFor(x) +'</span></div>'
+      : '';
     p.innerHTML = '<div class="jh-rows">'+
       '<div class="jh-kv"><span>Status</span><span class="jh-badge '+statusBadge(x.status).cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(statusBadge(x.status).label)+'</span></div>'+
       '<div class="jh-kv"><span>Health</span><span class="jh-badge neutral" id="dw-health"><span class="jh-dot"></span>Checking…</span></div>'+
@@ -1467,6 +1539,7 @@
       kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
       kv('Uptime', x.uptime!=null?x.uptime:'—')+
       openRow+
+      sslRow+
       '<div class="jh-kv"><span>Live CPU</span><span class="jh-muted" id="dw-cpu">—</span></div>'+
       '<div class="jh-kv"><span>Live memory</span><span class="jh-muted" id="dw-mem">—</span></div>'+
     '</div>';
@@ -1956,44 +2029,94 @@
   // =====================================================================
   // MODAL: DATABASE ENV (per app) — SetDbEnv
   // =====================================================================
+  // The four engines the form must always offer (values per the SetDbEnv
+  // contract), with their default ports. Used as a fallback when the backend's
+  // GetDbSupport reports nothing, and to backfill ports for any engine the
+  // server lists without a default_port. Keeps the form usable + testable for
+  // every engine regardless of server-side detection.
+  var DB_ENGINE_FALLBACK = [
+    {engine:'postgresql', label:'PostgreSQL', default_port:5432},
+    {engine:'mysql',      label:'MySQL',      default_port:3306},
+    {engine:'mariadb',    label:'MariaDB',    default_port:3306},
+    {engine:'mongodb',    label:'MongoDB',    default_port:27017}
+  ];
+  function dbDefaultPort(name){
+    for(var i=0;i<DB_ENGINE_FALLBACK.length;i++)
+      if(DB_ENGINE_FALLBACK[i].engine===name) return DB_ENGINE_FALLBACK[i].default_port;
+    return '';
+  }
+  // a localhost host means no transport encryption is needed -> SSL default OFF
+  function dbIsLocal(host){
+    var h = String(host||'').trim().toLowerCase().replace(/^https?:\/\//,'');
+    return h==='127.0.0.1' || h==='localhost' || h==='::1' || h==='';
+  }
   function openDbEnv(app){
+    // effective engine list: server-reported engines if any, else the fallback;
+    // each entry backfilled with a default port so placeholders always resolve.
+    function engines(){
+      var src = DB_ENGINES.length ? DB_ENGINES : DB_ENGINE_FALLBACK;
+      return src.map(function(e){
+        var dp = (e.default_port!=null && e.default_port!=='') ? e.default_port : dbDefaultPort(e.engine);
+        return {engine:e.engine, label:e.label||e.engine, versions:e.versions||[],
+          default_port:dp, driver:e.driver||e.driver_class||''};
+      });
+    }
+    var ENG = engines();
     function build(){
-      if(!DB_ENGINES.length){
-        return '<div class="jh-alert danger">'+ic('warn')+'<div>No database engines reported by the server.</div></div>';
-      }
-      var engOpts = DB_ENGINES.map(function(e){
-        return '<option value="'+esc(e.engine)+'">'+esc(e.label||e.engine)+'</option>';
+      var engOpts = ENG.map(function(e){
+        return '<option value="'+esc(e.engine)+'">'+esc(e.label)+'</option>';
       }).join('');
+      var first = ENG[0] || {};
       return '<div class="jh-form">'+
         '<div class="jh-field"><label for="d-engine">Engine</label><select id="d-engine">'+engOpts+'</select></div>'+
         '<div class="jh-field"><label for="d-version">Version</label><select id="d-version"></select></div>'+
         '<div class="jh-field"><label for="d-host">Host</label><input id="d-host" value="127.0.0.1"></div>'+
-        '<div class="jh-field"><label for="d-port">Port</label><input id="d-port" type="number"></div>'+
+        '<div class="jh-field"><label for="d-port">Port</label><input id="d-port" type="number" placeholder="'+esc(first.default_port||'')+'"></div>'+
         '<div class="jh-field"><label for="d-name">Database</label><input id="d-name" placeholder="appdb"></div>'+
         '<div class="jh-field"><label for="d-user">User</label><input id="d-user" placeholder="appuser"></div>'+
         '<div class="jh-field"><label for="d-pass">Password</label><input id="d-pass" type="password" autocomplete="new-password"></div>'+
+        '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)">'+
+          '<input id="d-ssl" type="checkbox" style="width:auto;flex:none">'+
+          '<label for="d-ssl" style="margin:0">Use SSL/TLS</label>'+
+        '</div>'+
       '</div>'+
       '<div class="jh-hint" id="d-driver"></div>'+
+      '<div class="jh-hint" id="d-ssl-hint"></div>'+
       '<div class="jh-hint">Secrets are written server-side and never echoed back to this UI.</div>';
     }
     function mount(){
-      if(!DB_ENGINES.length){ return; }
       var sel = $('d-engine');
-      sel.addEventListener('change', onEngine);
+      if(sel) sel.addEventListener('change', onEngine);
+      var host = $('d-host');
+      if(host) host.addEventListener('input', applySslDefault);
       onEngine();
+      applySslDefault();
     }
     function curEngine(){
-      var name = $('d-engine').value;
-      for(var i=0;i<DB_ENGINES.length;i++) if(DB_ENGINES[i].engine===name) return DB_ENGINES[i];
+      var name = $('d-engine') && $('d-engine').value;
+      for(var i=0;i<ENG.length;i++) if(ENG[i].engine===name) return ENG[i];
       return null;
+    }
+    // SSL defaults OFF for 127.0.0.1/localhost, ON otherwise — reflected live in
+    // both the checkbox and the helper text as the host field changes.
+    function applySslDefault(){
+      var host = $('d-host'), ssl = $('d-ssl'), hint = $('d-ssl-hint');
+      if(!ssl) return;
+      var local = dbIsLocal(host && host.value);
+      ssl.checked = !local;
+      if(hint) hint.textContent = local
+        ? 'SSL is off by default for loopback hosts (127.0.0.1 / localhost).'
+        : 'SSL is on by default for non-local hosts.';
     }
     function onEngine(){
       var e = curEngine(); if(!e) return;
-      $('d-version').innerHTML = (e.versions||[]).map(function(v){
+      var ver = $('d-version');
+      if(ver) ver.innerHTML = (e.versions||[]).map(function(v){
         return '<option value="'+esc(v)+'">'+esc(v)+'</option>'; }).join('') || '<option value="">(any)</option>';
-      if(e.default_port != null) $('d-port').value = e.default_port;
-      var drv = e.driver || e.driver_class || '';
-      $('d-driver').innerHTML = drv ? ('Recommended driver: <code>'+esc(drv)+'</code>') : '';
+      var port = $('d-port');
+      if(port){ port.placeholder = String(e.default_port||''); if(!port.value) port.value = e.default_port||''; }
+      var drv = $('d-driver');
+      if(drv) drv.innerHTML = e.driver ? ('Recommended driver: <code>'+esc(e.driver)+'</code>') : '';
     }
     var open = function(){
       openModal({
@@ -2009,20 +2132,34 @@
               app:app, db_engine:e.engine,
               db_host:$('d-host').value, db_port:$('d-port').value,
               db_name:$('d-name').value, db_user:$('d-user').value,
-              db_password:$('d-pass').value, db_version:$('d-version').value
+              db_password:$('d-pass').value, db_version:$('d-version').value,
+              db_ssl: ($('d-ssl') && $('d-ssl').checked) ? '1' : '0'
             }, function(r){
               busy(btn, false);
               var p = payload(r);
               if(failed(r)){ toast(errText(p), 'err', 'DB env failed'); return; }
-              toast('DB env written for '+(p.app||app)+' ('+(p.engine||e.engine)+')', 'ok');
+              toast('DB env written', 'ok', (p.app||app)+' ('+(p.engine||e.engine)+')');
               closeModal();
+              // env is read at process start: the app must be restarted to use it
+              if(confirm('DB env written. Restart "'+app+'" now so it picks up the new database settings?')){
+                toast('Restarting '+app+'…');
+                call('AppAction', {app:app, action:'restart'}, function(rr){
+                  var pp = payload(rr);
+                  if(failed(rr)) toast(errText(pp), 'err', 'Restart failed');
+                  else { toast('Restarted '+app, 'ok'); refresh(); }
+                });
+              } else {
+                toast('Restart '+app+' later to apply the new DB settings.');
+              }
             });
           }, 'check')
         ],
         onMount: mount
       });
     };
-    if(!DB_ENGINES.length){ loadDbSupport(open); } else { open(); }
+    // refresh DB_ENGINES if not loaded (for versions/drivers); the form already
+    // works from the fallback list, so don't block on it.
+    if(!DB_ENGINES.length){ loadDbSupport(function(){ ENG = engines(); open(); }); } else { open(); }
   }
 
   // =====================================================================
@@ -2506,6 +2643,8 @@
 
     // reverse-proxy setup for an app with no domain yet
     if(ds.setsite){ setupSite(ds.setsite, b); return; }
+    // per-site HTTPS toggle (role=switch) — slow issuance, busy state inside
+    if(ds.ssltoggle){ toggleSsl(ds.ssltoggle, b); return; }
 
     // app row: toggle action menu
     if(ds.menu){

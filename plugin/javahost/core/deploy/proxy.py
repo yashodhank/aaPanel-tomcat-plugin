@@ -14,14 +14,28 @@ from ..util import shell, fs, validate
 
 VHOST_DIR = "/www/server/javahost/vhost/nginx"
 NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
+# Shared ACME webroot for HTTP-01 challenge files (issuance + renewal). Both the
+# native (aaPanel) and certbot paths serve challenges from here, so the port-80
+# server ALWAYS exposes /.well-known/acme-challenge/ pointing at it.
+ACME_WEBROOT = "/www/wwwroot/acme"
 # Default public domain convention: <app>.5d.bisotech.in
 SITE_SUFFIX = "5d.bisotech.in"
 
+# The ACME challenge location is present in BOTH http-only and https vhosts so a
+# cert can be issued AND auto-renewed without ever taking the site down.
+_ACME_LOCATION = """    location ^~ /.well-known/acme-challenge/ {
+        root @@acme@@;
+        default_type "text/plain";
+        try_files $uri =404;
+    }"""
+
+# HTTP-only vhost: proxy everything to the backend + serve ACME challenges.
 _TEMPLATE = """# Managed by JavaHost — instance @@app@@ ($domain). Do not edit by hand.
 server {
     listen 80;
     listen [::]:80;
     server_name @@domain@@;
+@@acme_location@@
     location / {
         proxy_pass http://127.0.0.1:@@port@@;
         proxy_set_header Host $host;
@@ -34,17 +48,58 @@ server {
 }
 """
 
+# HTTPS vhost: port-80 server serves only ACME + redirects to https; the 443
+# server terminates TLS and proxies to the backend.
+_TEMPLATE_SSL = """# Managed by JavaHost — instance @@app@@ ($domain) [SSL]. Do not edit by hand.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name @@domain@@;
+@@acme_location@@
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name @@domain@@;
+    ssl_certificate /etc/letsencrypt/live/@@domain@@/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/@@domain@@/privkey.pem;
+    location / {
+        proxy_pass http://127.0.0.1:@@port@@;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_read_timeout 300;
+    }
+}
+"""
+
 
 def vhost_path(app: str) -> str:
     return os.path.join(VHOST_DIR, "%s.conf" % app)
 
 
-def write_vhost(app: str, domain: str, port: int) -> str:
+def write_vhost(app: str, domain: str, port: int, ssl: bool = False) -> str:
+    """Render the plugin-owned nginx vhost for <app>.
+
+    ssl=False (default, keeps old 2/3-arg callers working): an HTTP server that
+    proxies / to the backend AND serves the ACME challenge location.
+    ssl=True: the HTTP server serves the ACME location and 301-redirects to
+    https; a 443 server terminates TLS (LE live cert) and proxies to the backend.
+    """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
     fs.ensure_dir(VHOST_DIR)
-    body = (_TEMPLATE
+    acme = _ACME_LOCATION.replace("@@acme@@", ACME_WEBROOT)
+    template = _TEMPLATE_SSL if ssl else _TEMPLATE
+    body = (template
+            .replace("@@acme_location@@", acme)
             .replace("@@app@@", app)
             .replace("@@domain@@", domain)
             .replace("@@port@@", str(port)))

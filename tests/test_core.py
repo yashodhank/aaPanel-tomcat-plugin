@@ -10,7 +10,7 @@ from core.util import validate, immutable
 from core import config
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
-from core.deploy import war, jar
+from core.deploy import war, jar, proxy, ssl
 from core.db import pg, mysql, mongo, engines as dbengines
 
 
@@ -375,7 +375,7 @@ def test_list_apps_full_key_set(monkeypatch, tmp_path):
     (base / "app.jar").write_text("x")
     (base / "bin" / "app.env").write_text("SERVER_PORT=8091\n")
     expected = {"app", "type", "status", "runtime", "tomcat", "java",
-                "port", "context", "enabled", "backend", "uptime", "domain"}
+                "port", "context", "enabled", "backend", "uptime", "domain", "ssl"}
     for app in instance.list_apps():
         assert set(app) == expected
 
@@ -648,3 +648,87 @@ def test_namespace_warning(tmp_path):
     war_path.write_bytes(z.read())
     warn = war.namespace_warning(str(war_path), "jakarta")
     assert warn and "javax" in warn
+
+
+# ---- per-site SSL: vhost rendering, marker round-trip, enable orchestration ----
+def test_write_vhost_ssl_renders_443_and_redirect(monkeypatch, tmp_path):
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path))
+    path = proxy.write_vhost("site", "app.example.com", 8085, ssl=True)
+    conf = open(path).read()
+    # a 443 TLS server with the LE live cert
+    assert "listen 443 ssl;" in conf
+    assert "listen [::]:443 ssl;" in conf
+    assert "ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;" in conf
+    assert "ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;" in conf
+    # port-80 server redirects to https
+    assert "return 301 https://$host$request_uri;" in conf
+    # ACME challenge location is still present (renewal must keep working)
+    assert "location ^~ /.well-known/acme-challenge/" in conf
+    assert ("root %s;" % proxy.ACME_WEBROOT) in conf
+    # https proxy forwards the right scheme + targets the backend
+    assert "proxy_pass http://127.0.0.1:8085;" in conf
+    assert "proxy_set_header X-Forwarded-Proto https;" in conf
+
+
+def test_write_vhost_http_default_has_acme_no_443(monkeypatch, tmp_path):
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path))
+    path = proxy.write_vhost("site", "app.example.com", 8085)  # old 3-arg caller, ssl defaults False
+    conf = open(path).read()
+    assert "listen 80;" in conf and "listen [::]:80;" in conf
+    assert "listen 443 ssl;" not in conf
+    assert "location ^~ /.well-known/acme-challenge/" in conf
+    assert "proxy_pass http://127.0.0.1:8085;" in conf
+
+
+def test_ssl_read_marker_roundtrip(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    assert ssl.read_ssl("site") is False
+    ssl._mark_ssl("site", True)
+    assert ssl.read_ssl("site") is True
+    ssl._mark_ssl("site", False)
+    assert ssl.read_ssl("site") is False
+
+
+def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+
+    # never touch nginx / the panel / certbot / /etc
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(ssl, "_install_renewal_hook", lambda: None)
+    monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)   # native unavailable
+    monkeypatch.setattr(ssl, "_certbot_issue", lambda domain, email=None: True)  # certbot succeeds
+    monkeypatch.setattr(ssl, "_cert_exists", lambda domain: True)      # cert now present
+
+    res = ssl.enable("site", "app.example.com", 8085)
+    assert res == {"ssl": True, "url": "https://app.example.com/", "via": "certbot"}
+    assert ssl.read_ssl("site") is True
+    # vhost was rewritten to the SSL variant
+    conf = open(proxy.vhost_path("site")).read()
+    assert "listen 443 ssl;" in conf
+
+
+def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
+    (tmp_path / "site" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)
+    monkeypatch.setattr(ssl, "_certbot_issue", lambda domain, email=None: False)
+    monkeypatch.setattr(ssl, "_cert_exists", lambda domain: False)
+
+    res = ssl.enable("site", "app.example.com", 8085)
+    assert res["ssl"] is False and "error" in res
+    assert ssl.read_ssl("site") is False
+    # HTTP vhost left in place (no 443 server)
+    conf = open(proxy.vhost_path("site")).read()
+    assert "listen 443 ssl;" not in conf
