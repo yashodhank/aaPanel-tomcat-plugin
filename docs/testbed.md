@@ -35,7 +35,7 @@ below); requests arrive at the panel's web server on `:80/:443` and are proxied
 to the app's loopback port. So:
 
 - **Health/`JAVAHOST_OK` from on the box** → curl `http://127.0.0.1:<port>/`.
-- **Health/`JAVAHOST_OK` from anywhere** → curl `http://<app>.5d.bisotech.in/`.
+- **Health/`JAVAHOST_OK` from anywhere** → curl `http://<app>.example.com/`.
 - **Never** expect the app on `http://<public-ip>:<port>/`.
 
 ---
@@ -69,14 +69,14 @@ back to a service-less path on hardened hosts**. But for the canonical campaign:
 
 ### 2. DNS is already wired
 
-`*.5d.bisotech.in` (wildcard) and the apex `5d.bisotech.in` already resolve to
+`*.example.com` (wildcard) and the apex `example.com` already resolve to
 this box's public IP. You do **not** need to create DNS records — only the
 reverse-proxy **site** that maps a hostname to an app's loopback port. The
 convention is one hostname per app:
 
 ```
-<app>.5d.bisotech.in   ->   box IP   ->   nginx proxy   ->   127.0.0.1:<app-port>
-5d.bisotech.in         ->   box IP   ->   nginx proxy   ->   (apex / default app)
+<app>.example.com   ->   box IP   ->   nginx proxy   ->   127.0.0.1:<app-port>
+example.com         ->   box IP   ->   nginx proxy   ->   (apex / default app)
 ```
 
 ### 3. Databases: aaPanel-managed vs Docker
@@ -204,7 +204,7 @@ Flags:
 
 - `--db-source aapanel|docker` — where databases come from (both supported).
 - `--proxy` — also create the reverse-proxy site per app and assert reachability
-  via the **real hostname** `<app>.5d.bisotech.in`, not just loopback.
+  via the **real hostname** `<app>.example.com`, not just loopback.
 - `--dry-run` — print the planned cells (the cartesian plan) and exit without
   installing or deploying anything. Run this first to sanity-check scope.
 
@@ -219,8 +219,8 @@ For each app, the canonical check is the **hostname**, not the port (remember th
 [loopback invariant](#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain)):
 
 ```bash
-curl -s http://hello.5d.bisotech.in/      | grep JAVAHOST_OK
-curl -s http://dbcheck.5d.bisotech.in/    | grep DB_OK
+curl -s http://hello.example.com/      | grep JAVAHOST_OK
+curl -s http://dbcheck.example.com/    | grep DB_OK
 ```
 
 With `--proxy`, the matrix does these hostname asserts for you. Without it, you
@@ -257,11 +257,11 @@ If a cell fails, open its app log (marker missing? namespace warning? driver
 ## Reverse proxy & domains
 
 JavaHost can create the reverse-proxy site that fronts an app's loopback port,
-following the convention `<app>.5d.bisotech.in` (with the apex `5d.bisotech.in`
+following the convention `<app>.example.com` (with the apex `example.com`
 for a default/apex app). Endpoints:
 
 - **`SetSite{app, domain?}`** — create a reverse-proxy site for `app`. With no
-  `domain`, it uses `<app>.5d.bisotech.in`; pass `domain` to override. It targets
+  `domain`, it uses `<app>.example.com`; pass `domain` to override. It targets
   the app's **loopback** port (`127.0.0.1:<port>`) and is created through the
   **aaPanel site API**, falling back to writing an **nginx vhost** directly if
   the site API is unavailable.
@@ -271,8 +271,9 @@ for a default/apex app). Endpoints:
 > `<app>.<suffix>` convention reads the suffix from the plugin config key
 > **`site_suffix`** (`/www/server/javahost/config.json`), which is **empty by
 > default**. With no suffix set, JavaHost never guesses an FQDN — you must pass an
-> explicit `domain`. This guide uses `5d.bisotech.in` because that is the suffix
-> configured on the campaign box (`site_suffix: "5d.bisotech.in"`).
+> explicit `domain`. This guide uses `example.com` as a stand-in for whatever
+> suffix you configure on your box (`site_suffix: "example.com"`); substitute your
+> own domain throughout.
 
 This is what makes an app reachable at all from outside the box — see the
 [loopback invariant](#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain).
@@ -309,8 +310,8 @@ Once SSL is on, an app's `request scheme` reads `https` end-to-end (the proxy se
 Verify after enabling:
 
 ```bash
-curl -s https://hello.5d.bisotech.in/ | grep JAVAHOST_OK
-curl -sI http://hello.5d.bisotech.in/ | grep '301'   # http -> https redirect
+curl -s https://hello.example.com/ | grep JAVAHOST_OK
+curl -sI http://hello.example.com/ | grep '301'   # http -> https redirect
 ```
 
 ---
