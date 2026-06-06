@@ -34,7 +34,10 @@
 
     font:var(--fs)/1.5 var(--font); color:var(--text);
     background:var(--bg); box-sizing:border-box;
-    padding:var(--s4); min-height:100%; -webkit-font-smoothing:antialiased;
+    padding:var(--s4); -webkit-font-smoothing:antialiased;
+    /* aaPanel injects the plugin into a fixed modal — contain to the viewport and
+       scroll internally so the content never overflows off-screen. */
+    max-height:100vh; overflow-y:auto; overflow-x:hidden;
   }
   .jh *,.jh *::before,.jh *::after{box-sizing:border-box}
 
@@ -69,7 +72,7 @@
     padding:3px 10px;border-radius:999px;white-space:nowrap}
 
   /* in-plugin body: left section nav + content pane (aaPanel idiom) */
-  .jh-body{display:grid;grid-template-columns:212px 1fr;gap:var(--s4);
+  .jh-body{display:grid;grid-template-columns:212px minmax(0,1fr);gap:var(--s4);
     margin-top:var(--s4);align-items:start}
 
   /* left vertical section menu */
