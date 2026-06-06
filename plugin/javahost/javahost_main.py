@@ -32,6 +32,7 @@ from core import jobs                            # noqa: E402
 from core import config                          # noqa: E402
 from core import maintenance                      # noqa: E402
 from core import dashboard                        # noqa: E402
+from core.backup import store as backupstore      # noqa: E402
 
 
 class javahost_main(object):
@@ -388,6 +389,61 @@ class javahost_main(object):
         try:
             res = instance.delete(panel.attr(get, "app"))
             panel.log("DeleteApp", res["app"])
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- backup / restore ----
+    def ListBackups(self, get=None):
+        try:
+            app = panel.attr(get, "app", None) if get is not None else None
+            app = validate.identifier(app, "app") if app else None
+            return panel.ok({"backups": backupstore.list_backups(app=app)})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartBackup(self, get):
+        """Archive an app as a detached job (tar of a webapp can be slow). Returns
+        {job_id}; the UI polls GetJobs/GetJobLog. Set remote=1 to also upload."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            remote = str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on")
+            body = ("from core.backup import store\n"
+                    "r = store.backup_app(%r, remote=%r)\n"
+                    "print('backup:', r['name'], r['size_mb'], 'MB', 'remote=' + str(r.get('remote')))\n"
+                    % (app, remote))
+            job_id = jobs.start("backup", app, jobs.python_work(body))
+            panel.log("StartBackup", "%s remote=%s -> job %s" % (app, remote, job_id))
+            return panel.ok({"job_id": job_id, "app": app})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartRestore(self, get):
+        """Restore an app from a backup archive as a detached job. `archive` is a
+        backup name in the store; `as_name` (optional) restores as a NEW app on a
+        reallocated port; `domain` (optional) remaps the site. Returns {job_id}."""
+        try:
+            name = panel.attr(get, "archive")
+            archive_path = backupstore._backup_path(name)  # validates name + containment
+            as_raw = panel.attr(get, "as_name", None)
+            as_name = validate.identifier(as_raw, "as_name") if as_raw else None
+            dom = panel.attr(get, "domain", None) or None
+            body = ("from core.backup import store\n"
+                    "r = store.restore(%r, as_name=%r, domain=%r)\n"
+                    "print('restore:', r['app'], r['mode'], 'port=' + str(r.get('port')),"
+                    " 'status=' + str(r.get('status')))\n"
+                    "print('ssl_warning:', r['ssl_warning']) if r.get('ssl_warning') else None\n"
+                    % (archive_path, as_name, dom))
+            job_id = jobs.start("restore", as_name or name, jobs.python_work(body))
+            panel.log("StartRestore", "%s as=%s -> job %s" % (name, as_name or "(overwrite)", job_id))
+            return panel.ok({"job_id": job_id, "archive": name, "as_name": as_name})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def DeleteBackup(self, get):
+        try:
+            res = backupstore.delete_backup(panel.attr(get, "archive"))
+            panel.log("DeleteBackup", res["name"])
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))

@@ -639,6 +639,18 @@
           <div class="jh-loading">Loading applications…</div>
         </div>
       </div>
+      <div class="jh-card" style="margin-top:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Backups</h3><p>Archive an app (config, webapp, DB env) and restore it here or as a new app</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-backup-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn accent sm" id="jh-open-backup" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Back up now</button>
+          </div>
+        </div>
+        <div id="jh-backups-body">
+          <div class="jh-loading">Loading backups…</div>
+        </div>
+      </div>
     </section>
 
     <!-- ================== PAGE: RUNTIMES ================== -->
@@ -1024,6 +1036,7 @@
         if(b.cls === 'danger') toast(errText(p.message || p.log) || (label+' failed'), 'err', label + ' failed');
         else toast(label + ' completed', 'ok');
         refresh();                       // re-run the runtimes/status refresh
+        if(activeSection === 'apps') refreshBackups();   // backup/restore may have changed the list
         if(activeSection === 'tasks') refreshTasks();
       });
     }
@@ -1486,6 +1499,89 @@
           '<span class="jh-badge '+b.cls+'"><span class="jh-dot"></span>'+esc(b.label)+'</span></div>';
       }).join('') : emptyInline('No recent tasks', 'Background jobs will appear here.');
     }
+  }
+
+  // =====================================================================
+  // BACKUPS (Applications tab) — list / create / restore / delete
+  // =====================================================================
+  function refreshBackups(btn){
+    busy(btn, true);
+    call('ListBackups', {}, function(r){
+      busy(btn, false);
+      var bd = $('jh-backups-body'); if(!bd) return;
+      if(failed(r)){
+        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>Backups are not available on this server build.</div></div>';
+        return;
+      }
+      renderBackups((payload(r)||{}).backups || []);
+    });
+  }
+  function renderBackups(list){
+    var bd = $('jh-backups-body'); if(!bd) return;
+    if(!list.length){
+      bd.innerHTML = emptyInline('No backups yet', 'Use “Back up now” to archive an app.');
+      return;
+    }
+    bd.innerHTML = '<div class="jh-table-wrap"><table>'+
+      '<thead><tr><th>App</th><th>Created</th><th>Size</th><th>SSL</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(function(bk){
+        var ssl = bk.ssl_enabled ? '<span class="jh-badge ok"><span class="jh-dot"></span>yes</span>'
+                                 : '<span class="jh-badge neutral">no</span>';
+        return '<tr>'+
+          '<td><div class="app-name">'+esc(bk.app||'—')+'</div><div class="jh-muted">'+esc(bk.type||'')+'</div></td>'+
+          '<td class="jh-muted">'+esc(bk.created_at||'—')+'</td>'+
+          '<td class="jh-muted">'+esc((bk.size_mb!=null?bk.size_mb:'?')+' MB')+'</td>'+
+          '<td>'+ssl+'</td>'+
+          '<td><button type="button" class="jh-btn ghost sm" data-backup-restore="'+esc(bk.name)+'" data-backup-app="'+esc(bk.app||'')+'">'+ic('refresh')+'Restore</button> '+
+              '<button type="button" class="jh-btn ghost sm" data-backup-delete="'+esc(bk.name)+'">'+ic('trash')+'Delete</button></td>'+
+        '</tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  function openBackupModal(){
+    var apps = (STATE && STATE.apps) || [];
+    if(!apps.length){ toast('No apps to back up', 'err'); return; }
+    var opts = apps.map(function(a){ return '<option value="'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('');
+    openModal({
+      title:'Back up an app', sub:'Archives config, the deployed webapp and DB env (logs excluded)',
+      body:'<div class="jh-form"><div class="jh-field wide"><label for="bk-app">App</label>'+
+        '<select id="bk-app">'+opts+'</select></div></div>',
+      footer:[ mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Back up', 'accent', function(b){
+          var app = $('bk-app').value; closeModal();
+          startJob('Backup', {app:app}, 'Backup '+app, b);
+        }, 'upload') ]
+    });
+  }
+  function openRestoreModal(name, app){
+    openModal({
+      title:'Restore backup', sub:name,
+      body:'<div class="jh-alert info" style="margin-bottom:var(--s4)">'+ic('info')+
+        '<div>Leave <b>Restore as new name</b> empty to <b>overwrite</b> the original app '+
+        '(it is stopped and replaced). Enter a name to restore as a <b>separate</b> app on a new port.</div></div>'+
+        '<div class="jh-form">'+
+          '<div class="jh-field wide"><label for="rs-name">Restore as new name (optional)</label>'+
+            '<input id="rs-name" type="text" placeholder="'+esc((app||'app')+'-copy')+'" autocomplete="off"></div>'+
+          '<div class="jh-field wide"><label for="rs-domain">Domain for the new app (optional)</label>'+
+            '<input id="rs-domain" type="text" placeholder="app.example.com" autocomplete="off"></div>'+
+        '</div>',
+      footer:[ mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Restore', 'accent', function(b){
+          var as = $('rs-name').value.trim(), dom = $('rs-domain').value.trim();
+          var data = {archive:name}; if(as) data.as_name = as; if(dom) data.domain = dom;
+          closeModal();
+          startJob('Restore', data, 'Restore '+(as||app||name), b);
+        }, 'refresh') ]
+    });
+  }
+  function deleteBackup(name, btn){
+    if(!confirm('Delete backup '+name+'? This cannot be undone.')) return;
+    busy(btn, true);
+    call('DeleteBackup', {archive:name}, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)), 'err', 'Delete failed'); return; }
+      toast('Backup deleted', 'ok'); refreshBackups();
+    });
   }
 
   // =====================================================================
@@ -3154,7 +3250,7 @@
     stopTasksPoll();                   // (defined below; both clear on any switch)
     stopLogsAuto();
     if(name === 'dashboard') refreshDashboardOps();
-    if(name === 'apps') startAppsPoll();
+    if(name === 'apps'){ startAppsPoll(); refreshBackups(); }
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
     if(name === 'settings') refreshDangerZone();
@@ -3376,6 +3472,11 @@
     if(b.id === 'jh-open-create' || b.id === 'jh-empty-create'){ openCreate(); return; }
     if(b.id === 'jh-open-jar'){ openJar(); return; }
     if(b.id === 'jh-open-war'){ openWar(null); return; }
+    // backups
+    if(b.id === 'jh-open-backup'){ openBackupModal(); return; }
+    if(b.id === 'jh-backup-refresh'){ refreshBackups(b); return; }
+    if(ds.backupRestore){ openRestoreModal(ds.backupRestore, ds.backupApp); return; }
+    if(ds.backupDelete){ deleteBackup(ds.backupDelete, b); return; }
     if(b.id === 'jh-allow-services'){
       if(!confirm('Lift hardening on service directories so JavaHost can register services?')) return;
       busy(b, true); toast('Allowing services…');
