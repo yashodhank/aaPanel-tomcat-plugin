@@ -19,7 +19,8 @@ JAVA_OPTS="@@java_opts@@"
 
 start() {
   [ -f "$APP_DIR/bin/app.env" ] && . "$APP_DIR/bin/app.env"
-  su -s /bin/bash -c "cd '$APP_DIR' && exec '$JAVA_HOME/bin/java' $JAVA_OPTS -jar '$JAR' >> '$APP_DIR/logs/app.out' 2>&1 & echo \$! > '$PIDFILE'" "$RUNAS"
+  # runuser (not the aaPanel-jailed `su`) to drop privileges.
+  runuser -u "$RUNAS" -- bash -c "cd '$APP_DIR' && exec '$JAVA_HOME/bin/java' $JAVA_OPTS -jar '$JAR' >> '$APP_DIR/logs/app.out' 2>&1 & echo \$! > '$PIDFILE'"
 }
 case "$1" in
   start)   start ;;

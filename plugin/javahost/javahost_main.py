@@ -44,11 +44,12 @@ class javahost_main(object):
                         "min_java": registry.get_line(major).min_java,
                         "namespace": registry.get_line(major).namespace,
                     }
-            # Detect locked service dirs (e.g. aaPanel System Hardening chattr +i)
-            # so the UI can warn before a CreateApp fails.
-            sysd_locked = service.have_systemd() and not service._can_write(service.SYSTEMD_DIR)
-            initd_locked = not service._can_write(service.INITD_DIR)
-            hardening_locked = sysd_locked and initd_locked
+            # service_dirs_locked is true ONLY when the plugin genuinely cannot
+            # manage services — i.e. neither backend is writable nor safely
+            # lift-and-relock manageable (manage_hardening off / chattr absent).
+            can_sysd = service.have_systemd() and service.can_manage(service.SYSTEMD_DIR)
+            can_initd = service.can_manage(service.INITD_DIR)
+            hardening_locked = not (can_sysd or can_initd)
             return panel.ok({
                 "java": jdks,
                 "tomcat": tomcats,

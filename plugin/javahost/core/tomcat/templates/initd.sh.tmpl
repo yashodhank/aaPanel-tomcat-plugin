@@ -15,7 +15,8 @@ export CATALINA_BASE="@@catalina_base@@"
 export CATALINA_PID="@@catalina_base@@/temp/tomcat.pid"
 RUNAS="@@user@@"
 
-run() { su -s /bin/bash -c "$1" "$RUNAS"; }
+# Use runuser (not the aaPanel-jailed `su`) to drop privileges.
+run() { runuser -u "$RUNAS" -- bash -c "$1"; }
 case "$1" in
   start)   run "$CATALINA_HOME/bin/catalina.sh start" ;;
   stop)    run "$CATALINA_HOME/bin/catalina.sh stop" ;;

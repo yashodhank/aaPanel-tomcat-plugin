@@ -35,6 +35,13 @@ are **downloaded and integrity-verified at runtime**, not bundled.
 | Databases | **PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0)** — connection-URL builder, JVM→driver matrix, secret-safe `app.env` (no creds in WAR or logs) |
 | Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall |
 
+## Documentation
+
+- [System Hardening](docs/system-hardening.md) — runs safely under aaPanel
+  System Hardening; auto lift/re-lock with the `manage_hardening` toggle.
+- [Single-host vs. multi-server](docs/single-vs-multi-mode.md) — JavaHost is
+  host-local; install it on each host that should run Java apps.
+
 ## Compatibility
 
 - Panels: aaPanel / BaoTa-style (Python 3 plugin runtime).

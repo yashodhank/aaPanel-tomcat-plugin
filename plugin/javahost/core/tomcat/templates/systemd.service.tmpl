@@ -11,6 +11,7 @@ Environment=CATALINA_HOME=@@catalina_home@@
 Environment=CATALINA_BASE=@@catalina_base@@
 Environment=CATALINA_PID=@@catalina_base@@/temp/tomcat.pid
 EnvironmentFile=-@@catalina_base@@/bin/app.env
+PIDFile=@@catalina_base@@/temp/tomcat.pid
 ExecStart=@@catalina_home@@/bin/catalina.sh start
 ExecStop=@@catalina_home@@/bin/catalina.sh stop
 SuccessExitStatus=143

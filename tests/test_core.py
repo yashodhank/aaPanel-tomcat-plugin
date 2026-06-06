@@ -6,7 +6,8 @@ import zipfile
 
 import pytest
 
-from core.util import validate
+from core.util import validate, immutable
+from core import config
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
 from core.deploy import war, jar
@@ -339,6 +340,74 @@ def test_health_no_port(monkeypatch, tmp_path):
     (tmp_path / "dead").mkdir()
     h = instance.health("dead")
     assert h["up"] is False and h["port"] is None
+
+
+# ---- system-hardening safe handling ----
+def test_config_default_manage_hardening():
+    assert config.get("manage_hardening") is True
+
+
+def test_immutable_parse(monkeypatch):
+    from core.util import shell as sh
+    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
+    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "----i---------e------- /d\n", ""))
+    assert immutable.is_immutable("/d") is True
+    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "-------------e------- /d\n", ""))
+    assert immutable.is_immutable("/d") is False
+
+
+def test_immutable_writable_noop_when_not_immutable(monkeypatch):
+    calls = []
+    monkeypatch.setattr(immutable, "is_immutable", lambda p: False)
+    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
+    with immutable.writable("/x") as lifted:
+        assert lifted is False
+    assert calls == []  # chattr never invoked
+
+
+def test_immutable_writable_lifts_and_relocks(monkeypatch):
+    calls = []
+    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
+    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
+    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
+    with immutable.writable("/x") as lifted:
+        assert lifted is True
+        assert calls == [("-i", "/x")]      # lifted inside the block
+    assert calls == [("-i", "/x"), ("+i", "/x")]  # re-locked on exit
+
+
+def test_immutable_writable_disabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
+    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
+    with immutable.writable("/x", enabled=False) as lifted:
+        assert lifted is False
+    assert calls == []  # respects manage_hardening=false
+
+
+# ---- aaPanel daemon/exec protection (layer 2) detection ----
+def test_verify_detects_bt_daemon_block(monkeypatch):
+    from core.tomcat import service as svc
+    monkeypatch.setattr(svc.time, "sleep", lambda s: None)
+
+    def fake_run(argv, **k):
+        if "is-active" in argv:
+            return (3, "activating\n", "")
+        if argv and argv[0] == "journalctl":
+            return (0, "javahost-x.service: ... status=203/EXEC\nTips from BT security !!!\n", "")
+        return (0, "", "")
+    monkeypatch.setattr(svc.shell, "run", fake_run)
+    with pytest.raises(RuntimeError) as e:
+        svc._verify_systemd_started("x")
+    assert "203/EXEC" in str(e.value) or "process/daemon protection" in str(e.value)
+
+
+def test_verify_ok_when_active(monkeypatch):
+    from core.tomcat import service as svc
+    monkeypatch.setattr(svc.time, "sleep", lambda s: None)
+    monkeypatch.setattr(svc.shell, "run",
+                        lambda argv, **k: (0, "active\n", "") if "is-active" in argv else (0, "", ""))
+    svc._verify_systemd_started("x")  # must not raise
 
 
 # ---- engine registry ----
