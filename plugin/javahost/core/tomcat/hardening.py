@@ -7,8 +7,11 @@ and to each per-instance CATALINA_BASE. Stricter than the legacy plugin's
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from typing import List
+
+_XML_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
 # Bundled webapps to remove unless explicitly opted in.
 _DROP_WEBAPPS = ["examples", "docs", "host-manager"]
@@ -32,15 +35,16 @@ def harden_home(catalina_home: str, *, keep_manager: bool = False) -> List[str]:
 
 
 def assert_no_ajp(server_xml: str) -> None:
-    """Fail if an AJP connector is active (defense in depth; our template omits it)."""
+    """Fail if an *active* AJP connector exists. Stock Tomcat ships the AJP
+    connector inside a multi-line XML comment, so comments are stripped before
+    checking (a naive per-line check false-positives on the commented block)."""
     if not os.path.isfile(server_xml):
         return
     with open(server_xml, "r", errors="replace") as f:
         text = f.read()
-    for line in text.splitlines():
-        s = line.strip()
-        if "AJP/1.3" in s and not s.startswith("<!--"):
-            raise RuntimeError("active AJP connector detected in %s" % server_xml)
+    uncommented = _XML_COMMENT.sub("", text)
+    if "AJP/1.3" in uncommented:
+        raise RuntimeError("active AJP connector detected in %s" % server_xml)
 
 
 def secure_perms(catalina_base: str, user: str = "www") -> None:

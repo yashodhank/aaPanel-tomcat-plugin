@@ -8,7 +8,7 @@ import pytest
 
 from core.util import validate
 from core.runtime import java, jvm_opts
-from core.tomcat import registry, templating
+from core.tomcat import registry, templating, hardening
 from core.deploy import war
 
 
@@ -102,6 +102,25 @@ def test_server_xml_template_hardened():
     assert 'address="127.0.0.1"' in xml
     assert 'shutdown="DISABLED"' in xml
     assert "AJP/1.3" not in xml
+
+
+def test_assert_no_ajp_ignores_commented_block(tmp_path):
+    # Stock-style: AJP connector inside a multi-line comment -> must NOT raise.
+    stock = tmp_path / "server.xml"
+    stock.write_text(
+        '<Server>\n'
+        '  <!-- Define an AJP 1.3 Connector on port 8009\n'
+        '  <Connector protocol="AJP/1.3" port="8009" redirectPort="8443" />\n'
+        '  -->\n'
+        '  <Connector port="8080" protocol="HTTP/1.1"/>\n'
+        '</Server>\n'
+    )
+    hardening.assert_no_ajp(str(stock))  # no exception
+
+    active = tmp_path / "active.xml"
+    active.write_text('<Server><Connector protocol="AJP/1.3" port="8009"/></Server>')
+    with pytest.raises(RuntimeError):
+        hardening.assert_no_ajp(str(active))
 
 
 # ---- zip-slip safety ----
