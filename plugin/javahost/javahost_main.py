@@ -445,6 +445,31 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def StartRestoreUpload(self, get):
+        """Restore from an UPLOADED archive the panel staged to a temp path (`tmp`).
+        This is the untrusted-input path — the archive is unpacked only through the
+        hardened safe_extract_tar (symlink/traversal/device rejection)."""
+        try:
+            tmp = panel.attr(get, "tmp") or panel.attr(get, "archive")
+            rp = os.path.realpath(str(tmp or ""))
+            ok = (os.path.isfile(rp) and rp.endswith(".tar.gz")
+                  and (rp.startswith("/tmp/") or rp.startswith(os.path.realpath(maintenance.DATA_ROOT) + os.sep)))
+            if not ok:
+                return panel.err("uploaded archive not found at a valid staged path: %r" % tmp)
+            as_raw = panel.attr(get, "as_name", None)
+            as_name = validate.identifier(as_raw, "as_name") if as_raw else None
+            dom = panel.attr(get, "domain", None) or None
+            body = ("from core.backup import store\n"
+                    "r = store.restore(%r, as_name=%r, domain=%r)\n"
+                    "print('restore:', r['app'], r['mode'], 'port=' + str(r.get('port')))\n"
+                    "print('ssl_warning:', r['ssl_warning']) if r.get('ssl_warning') else None\n"
+                    % (rp, as_name, dom))
+            job_id = jobs.start("restore", as_name or os.path.basename(rp), jobs.python_work(body))
+            panel.log("StartRestoreUpload", "%s as=%s -> job %s" % (os.path.basename(rp), as_name or "(overwrite)", job_id))
+            return panel.ok({"job_id": job_id, "as_name": as_name})
+        except Exception as e:
+            return panel.err(str(e))
+
     def DeleteBackup(self, get):
         try:
             res = backupstore.delete_backup(panel.attr(get, "archive"))
@@ -711,7 +736,7 @@ class javahost_main(object):
     # docs bundled with the plugin, served on-the-fly to the Help viewer
     _DOCS_DIR = os.path.join(_HERE, "docs")
     _ALLOWED_DOCS = ("user-guide", "system-hardening", "single-vs-multi-mode",
-                     "databases-java-apps", "troubleshooting")
+                     "databases-java-apps", "backup-restore", "troubleshooting")
 
     def GetDoc(self, get):
         """Return a bundled doc's markdown for in-UI rendering (no 404 file links)."""

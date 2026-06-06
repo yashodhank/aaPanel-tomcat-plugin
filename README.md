@@ -99,6 +99,8 @@ job flow, SSL decision, and the status-semantics model).
 | Deploy | zip-slip-safe WAR extraction; `javax`→`jakarta` namespace detection & warnings + one-click migrate for Tomcat 10/11; Spring Boot / executable-JAR apps run as services |
 | Proxy / SSL | plugin-owned Nginx vhost generator (never edits other plugins' configs); sites at `<app>.<site_suffix>` (the suffix is a **plugin config**, empty by default — the UI prompts, no FQDN hardcoded); **per-site Let's Encrypt HTTPS** via `SetSiteSSL` (aaPanel-native ACME → **certbot `--webroot` fallback**, 443 vhost + 80→443 redirect + auto-renew hook, cert kept on disable); on-demand cert/site status (`GetSiteStatus`) surfaced in the drawer's **Site & SSL** block |
 | Databases | **PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0)** — a support-matrix reference, per-app DB-env form with a live **search/filter**, connection-URL builder, JVM→driver matrix, secret-safe `app.env` (no creds in WAR/URL/logs); the drawer shows the current env (`GetDbEnv`, **never** the password) |
+| Backup / restore | Per-app **backup** (config + webapp + DB env + vhost + manifest; excludes logs and **never** LE private keys) and **restore** — in place or as a **new app** (reallocated port, domain remap, SSL re-issued). **Remote object storage** (Wasabi / MinIO / B2 / R2 / AWS) via a dependency-free S3 SigV4 client (custom endpoint; secret-safe `0600` config). **Scheduled backups** with local + remote **retention** (managed `cron.d`), and **restore-from-upload** through the hardened tar extractor (symlink/traversal/device rejection) |
+| Dashboard | Live operational aggregates (`GetDashboard`, lazy-loaded): apps running / down / **runtime-missing**, aggregate **CPU % + RSS**, **certs expiring <30 days**, instances/backups **disk usage**, and recent tasks |
 | Observability | **Tasks** (background-job status: install/uninstall/lifecycle — running/done/failed + view-log) and **Logs** (unified app + task log viewer) |
 | Maintenance | **Settings → Danger zone:** granular wipe (apps / jdks / tomcats / sites / full) with dry-run preview + typed `WIPE` confirm; wipe **skips runtimes still in use**; `install.sh uninstall` honors a saved plan (default keep-data) |
 | Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall; runs safely under aaPanel System Hardening (lift/re-lock the immutable bit) |
@@ -110,6 +112,9 @@ job flow, SSL decision, and the status-semantics model).
   Tasks/Logs, Settings/Danger zone, hardening).
 - [Endpoint reference](docs/endpoints.md) — every plugin method (params,
   returns, sync/async) the UI calls.
+- [Backup, restore & remote storage](docs/backup-restore.md) — what a backup
+  captures, overwrite vs restore-as-new, S3/Wasabi remote storage, scheduled
+  backups + retention, and restore-from-upload safety.
 - [Architecture](docs/architecture.md) — entrypoint, `core/` module map, the
   single panel-compat boundary, data directories.
 - [Java runtime](docs/java-runtime.md) — JDK detection, install/reinstall/
@@ -168,13 +173,13 @@ make zip      # build javahost.zip
 
 ## Status
 
-Active (`v0.16.2`). The core library, installer, runtimes, Tomcat lifecycle,
+Active (`v0.18.0`). The core library, installer, runtimes, Tomcat lifecycle,
 WAR/JAR deploy, multi-engine databases, reverse-proxy + per-site HTTPS, async
 jobs, the Tasks/Logs/Danger-zone UI, and the offline test suite are all in
-place. The latest cycle hardened the detail **drawer** — real CPU%/uptime/thread
-metrics, a **runtime-missing** signal when a pinned JDK is gone, and a neutral
-**Site & SSL** state for HTTP-only apps (see
-[status semantics](docs/user-guide.md#status--health-explained)). Deploy paths
+place. The latest cycle added a richer operational **Dashboard** and full
+**backup/restore** — local + remote (S3/Wasabi) object storage, scheduled
+backups with retention, and restore-from-upload through a hardened tar extractor
+(see [Backup, restore & remote storage](docs/backup-restore.md)). Deploy paths
 are validated on Ubuntu 24.04 (and via the opt-in CI deploy matrix / the on-box
 [Test campaign](docs/testbed.md)). Releases are tag-driven: pushing a `vX.Y.Z`
 tag runs `release.yml`, which builds and publishes `javahost.zip`. See

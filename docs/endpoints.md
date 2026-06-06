@@ -105,4 +105,40 @@ See [Reverse proxy & per-site HTTPS](user-guide.md#6-reverse-proxy--per-site-htt
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `GetDoc` | `name` (allowlisted: `user-guide`, `system-hardening`, `single-vs-multi-mode`, `databases-java-apps`, `troubleshooting`) | Returns a bundled doc's markdown for in-UI rendering (path-traversal-guarded). |
+| `GetDoc` | `name` (allowlisted: `user-guide`, `system-hardening`, `single-vs-multi-mode`, `databases-java-apps`, `backup-restore`, `troubleshooting`) | Returns a bundled doc's markdown for in-UI rendering (path-traversal-guarded). |
+
+## Dashboard aggregates
+
+| Method | Params | Returns / notes |
+|--------|--------|-----------------|
+| `GetDashboard` | — | Heavier operational aggregates kept off the fast `GetStatus` poll: `{apps:{total,running,down,runtime_missing}, resources:{cpu_pct_total,rss_mb_total,sampled}, ssl:{with_ssl,expiring_soon,expiring:[...]}, disk:{instances_mb,backups_mb}, recent_tasks:[...]}`. Cert expiry is read from the SSL marker (no openssl). Lazy-loaded by the UI. |
+
+## Backup & restore
+
+Long operations run as async jobs (`{job_id}`); poll `GetJobLog`. See
+[Backup, restore & remote storage](backup-restore.md).
+
+| Method | Params | Returns / notes |
+|--------|--------|-----------------|
+| `ListBackups` | `app?` | Newest-first backup records (merges remote when configured); each `{name, app, type, domain, ssl_enabled, created_at, size_mb, location}`. |
+| `StartBackup` | `app`, `remote?` | Async — archive the app (excludes logs and LE keys); `remote=1` also uploads. |
+| `StartRestore` | `archive` (store name), `as_name?`, `domain?` | Async — restore in place (no `as_name`) or as a new app (reallocated port). Downloads from remote first if needed. |
+| `StartRestoreUpload` | `tmp` (staged upload path), `as_name?`, `domain?` | Async — restore an **uploaded** `.tar.gz`; unpacked only via the hardened extractor. |
+| `DeleteBackup` | `archive` | Delete a backup (local, and the remote copy if configured). Name strictly validated. |
+
+## Remote object storage (S3-compatible)
+
+| Method | Params | Returns / notes |
+|--------|--------|-----------------|
+| `GetRemoteStorage` | — | Current config **without the secret key** (`secret_set` flag only): `{provider,endpoint,region,bucket,access_key,prefix,path_style,configured,secret_set}`. |
+| `SetRemoteStorage` | `provider`, `endpoint`, `region?`, `bucket`, `access_key`, `secret_key?`, `prefix?`, `path_style?` | Store `0600` `remote.json`. An empty `secret_key` keeps the stored one. |
+| `TestRemoteStorage` | — | `{ok, detail}` — HEADs the bucket. |
+| `RemoveRemoteStorage` | — | Delete the remote config. |
+
+## Scheduled backups
+
+| Method | Params | Returns / notes |
+|--------|--------|-----------------|
+| `GetBackupSchedules` | — | `{schedules: [{app, cron, remote, keep}]}`. |
+| `SetBackupSchedule` | `app`, `cron` (5-field), `remote?`, `keep?` | Upsert a schedule; regenerates the managed `/etc/cron.d/javahost-backups`. |
+| `RemoveBackupSchedule` | `app` | Remove the schedule (clears the cron file when empty). |

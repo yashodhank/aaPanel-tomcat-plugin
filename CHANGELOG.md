@@ -3,6 +3,37 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.18.0] — 2026-06-06
+
+### Added (backup & restore)
+- **Per-app backup/restore** (`core/backup/`). A backup archives the app's
+  `CATALINA_BASE` (conf, webapp, `bin/` incl. `setenv.sh`/`app.env`/site markers),
+  the nginx vhost, and a `manifest.json` — **excluding** `logs/work/temp`, the
+  service unit (re-rendered on restore), and **all of `/etc/letsencrypt`** (private
+  keys are never bundled; SSL is **re-issued** on restore, best-effort). Restore
+  works in place (**overwrite**) or as a **new app** (reallocated port,
+  `server.xml`/`app.env` rewrite, domain remap). Archives are `0600` (they contain
+  DB credentials). Endpoints: `ListBackups`, `StartBackup`, `StartRestore`,
+  `DeleteBackup` (long ops run as async jobs).
+- **Hardened tar layer** (`core/backup/archive.py`): the single extraction path
+  realpath-contains every member and rejects symlink/hardlink/device/fifo/absolute/
+  `..` entries — the defense for restore-from-file.
+- **Remote object storage** (`core/backup/s3.py`, `remote.py`): a dependency-free,
+  S3-compatible client (stdlib **SigV4**) for **Wasabi / MinIO / Backblaze B2 /
+  Cloudflare R2 / AWS** via a custom endpoint. Credentials live in a `0600`
+  `remote.json` and the secret key is never returned to the UI. Endpoints:
+  `GetRemoteStorage`, `SetRemoteStorage`, `TestRemoteStorage`, `RemoveRemoteStorage`.
+- **Scheduled backups + retention** (`core/backup/schedule.py`, `run.py`): per-app
+  cron schedules in a managed `/etc/cron.d/javahost-backups` (hardening-aware),
+  with local + remote retention. Endpoints: `GetBackupSchedules`,
+  `SetBackupSchedule`, `RemoveBackupSchedule`.
+- **Restore from upload**: upload a backup `.tar.gz` and restore it
+  (`StartRestoreUpload`) — the untrusted archive is unpacked only through the
+  hardened extractor.
+- **UI**: a **Backups** card on the Applications tab (back up now, restore, restore
+  from file, delete) and **Remote storage** + **Scheduled backups** cards in
+  Settings.
+
 ## [0.17.0] — 2026-06-06
 
 ### Added (richer Dashboard)

@@ -644,6 +644,7 @@
           <div><h3>Backups</h3><p>Archive an app (config, webapp, DB env) and restore it here or as a new app</p></div>
           <div class="jh-spread" style="gap:var(--s2)">
             <button class="jh-btn ghost sm" id="jh-backup-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn ghost sm" id="jh-restore-upload" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Restore from file</button>
             <button class="jh-btn accent sm" id="jh-open-backup" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Back up now</button>
           </div>
         </div>
@@ -1769,6 +1770,38 @@
       busy(btn, false);
       if(failed(r)){ toast(errText(payload(r)), 'err', 'Delete failed'); return; }
       toast('Backup deleted', 'ok'); refreshBackups();
+    });
+  }
+  function openRestoreUploadModal(){
+    openModal({
+      title:'Restore from file', sub:'Upload a JavaHost backup .tar.gz',
+      body:'<div class="jh-alert info" style="margin-bottom:var(--s4)">'+ic('info')+
+        '<div>The archive is validated and unpacked safely (path-traversal, symlink and '+
+        'device entries are rejected). Leave the name empty to overwrite the original app, '+
+        'or enter a name to restore as a new app.</div></div>'+
+        '<div class="jh-form">'+
+          '<div class="jh-field wide"><label for="ru-file">Backup archive (.tar.gz)</label><input id="ru-file" type="file" accept=".gz,.tar.gz,application/gzip"></div>'+
+          '<div class="jh-field wide"><label for="ru-name">Restore as new name (optional)</label><input id="ru-name" type="text" placeholder="restored-app" autocomplete="off"></div>'+
+          '<div class="jh-field wide"><label for="ru-domain">Domain for the new app (optional)</label><input id="ru-domain" type="text" placeholder="app.example.com" autocomplete="off"></div>'+
+        '</div>',
+      footer:[ mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Upload & restore', 'accent', function(b){
+          var fi = $('ru-file');
+          if(!fi || !fi.files || !fi.files[0]){ toast('Choose a .tar.gz file', 'err'); return; }
+          var as = $('ru-name').value.trim(), dom = $('ru-domain').value.trim();
+          busy(b, true);
+          stageUpload(fi, function(tmp, err){
+            if(err || !tmp){ busy(b, false); toast(err || 'Upload failed', 'err'); return; }
+            var data = {tmp:tmp}; if(as) data.as_name = as; if(dom) data.domain = dom;
+            call('StartRestoreUpload', data, function(r){
+              busy(b, false);
+              var p = payload(r); var jid = p && (p.job_id || p.id);
+              if(failed(r) && !jid){ toast(errText(p), 'err', 'Restore failed'); return; }
+              toast('Restore started', 'ok'); closeModal();
+              if(jid) trackJob(jid, 'Restore '+(as||'upload'));
+            });
+          });
+        }, 'upload') ]
     });
   }
 
@@ -3277,6 +3310,7 @@
     ['system-hardening', 'System hardening & service directories'],
     ['single-vs-multi-mode', 'Single vs. multi-host mode'],
     ['databases-java-apps', 'Connecting Java apps to databases'],
+    ['backup-restore', 'Backup, restore & remote storage'],
     ['troubleshooting', 'Troubleshooting']
   ];
   function renderHelpDocs(){
@@ -3662,6 +3696,7 @@
     if(b.id === 'jh-open-war'){ openWar(null); return; }
     // backups
     if(b.id === 'jh-open-backup'){ openBackupModal(); return; }
+    if(b.id === 'jh-restore-upload'){ openRestoreUploadModal(); return; }
     if(b.id === 'jh-backup-refresh'){ refreshBackups(b); return; }
     if(ds.backupRestore){ openRestoreModal(ds.backupRestore, ds.backupApp); return; }
     if(ds.backupDelete){ deleteBackup(ds.backupDelete, b); return; }

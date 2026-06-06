@@ -167,6 +167,20 @@ def test_restore_ssl_reissue_is_best_effort(env, monkeypatch):
     assert "ssl_warning" in res
 
 
+def test_restore_rejects_malicious_archive(env, tmp_path):
+    """An uploaded archive with a path-traversal member must be refused by the
+    same restore path the upload endpoint uses (defense = safe_extract_tar)."""
+    import json
+    man = json.dumps({"app": "x", "type": "war", "format": 1}).encode()
+    bad = str(tmp_path / "evil.tar.gz")
+    with tarfile.open(bad, "w:gz") as tf:
+        ti = tarfile.TarInfo("manifest.json"); ti.size = len(man); tf.addfile(ti, io.BytesIO(man))
+        ev = b"pwn"; ti2 = tarfile.TarInfo("base/../../escape"); ti2.size = len(ev); tf.addfile(ti2, io.BytesIO(ev))
+    with pytest.raises(UnsafeArchive):
+        store.restore(bad, as_name="clone")
+    assert not instance.exists("clone")          # nothing left half-created
+
+
 def test_delete_backup_refuses_escape(env):
     with pytest.raises(ValueError):
         store.delete_backup("../../etc/passwd")
