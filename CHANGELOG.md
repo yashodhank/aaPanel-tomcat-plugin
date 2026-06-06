@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.15.1] — 2026-06-06
+
+### Fixed
+- **JDK (re)install failed with HTTP 403:** the Adoptium API rejects the default
+  `python-urllib` User-Agent; the metadata request and the download helper now send
+  a real `User-Agent`.
+- **JDK install temp-dir cleanup crashed** (`refusing to remove path outside
+  managed roots: /tmp/...`): `install_temurin` cleaned its own `mkdtemp` download
+  dir via `safe_rmtree` (which only permits managed roots). It now removes that
+  private temp dir directly.
+
 ## [0.15.0] — 2026-06-06
 
 ### Added

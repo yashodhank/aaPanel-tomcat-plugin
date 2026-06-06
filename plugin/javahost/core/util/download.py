@@ -18,17 +18,23 @@ from . import shell
 from . import fs
 
 
+_UA = "JavaHost/1.0 (+https://github.com/yashodhank/aaPanel-tomcat-plugin)"
+
+
 def _http_get(url: str, dest: str, timeout: int = 300) -> None:
-    """Download url -> dest. Prefer curl (proxy/retry friendly), fall back to urllib."""
+    """Download url -> dest. Prefer curl (proxy/retry friendly), fall back to urllib.
+    A real User-Agent is sent — some CDNs/APIs (e.g. Adoptium) 403 the default
+    python-urllib agent."""
     curl = shell.which("curl")
     if curl:
         shell.run(
-            [curl, "-fSL", "--retry", "3", "--retry-delay", "5",
+            [curl, "-fSL", "-A", _UA, "--retry", "3", "--retry-delay", "5",
              "--max-time", str(timeout), "-o", dest, url],
             timeout=timeout + 30,
         )
         return
-    with urllib.request.urlopen(url, timeout=timeout) as r, open(dest, "wb") as f:  # noqa: S310
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:  # noqa: S310
         # url is composed from our own version registry (https Apache/Adoptium), not user input
         while True:
             chunk = r.read(1 << 16)

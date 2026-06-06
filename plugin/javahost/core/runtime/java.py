@@ -99,6 +99,9 @@ def resolve(min_major: int, prefer: Optional[int] = None) -> Optional[str]:
 
 # --- Temurin install metadata (verified via Adoptium API at runtime) ---
 _ADOPTIUM_API = "https://api.adoptium.net/v3"
+# Adoptium's API returns HTTP 403 for the default Python-urllib User-Agent; send
+# a real one on the metadata request.
+_UA = "JavaHost/1.0 (+https://github.com/yashodhank/aaPanel-tomcat-plugin)"
 
 
 def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
@@ -110,7 +113,8 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
 
     api = ("%s/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=%s"
            % (_ADOPTIUM_API, major, arch, os_name))
-    with urllib.request.urlopen(api, timeout=30) as r:  # noqa: S310 (constant Adoptium URL)
+    req = urllib.request.Request(api, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 (constant Adoptium URL)
         assets = _json.load(r)
     if not assets:
         raise RuntimeError("Adoptium returned no JDK %d asset" % major)
@@ -135,7 +139,10 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
         shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", dest])
         fs.mark_managed(dest)
     finally:
-        fs.safe_rmtree(tmp, require_marker=False) if tmp.startswith("/tmp") else None
+        # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
+        # directly: safe_rmtree only permits MANAGED_ROOTS and would refuse /tmp.
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
     got = probe(dest)
     if got != major:
         raise RuntimeError("installed JDK reports major %s, expected %s" % (got, major))
