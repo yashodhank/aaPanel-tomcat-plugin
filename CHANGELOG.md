@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.13.1] — 2026-06-06
+
+### Fixed
+- **CI:** bandit flagged the aaPanel-API `request_token` MD5 (B324). MD5 is mandated
+  by aaPanel's API token scheme, not a security primitive — marked `# nosec B324`
+  (kept cross-Python rather than the `usedforsecurity=` kwarg).
+
+### Changed
+- **`dbcheck` demo apps now print rich, secret-safe connection proof:** DB product
+  + version, driver name/version, JDBC version, redacted URL, user, catalog/schema,
+  connect latency, live `SELECT 1` + DB server time, and the serving stack
+  (servlet/Tomcat, Java vendor+version, OS) — `DB_OK` stays the first line so health
+  checks are unaffected. Mongo shows a live TCP-probe variant.
+
 ## [0.13.0] — 2026-06-06
 
 ### Added

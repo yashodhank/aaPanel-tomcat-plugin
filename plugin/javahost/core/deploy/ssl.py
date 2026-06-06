@@ -105,9 +105,12 @@ def _aapanel_apply(domain: str) -> Optional[bool]:
 
         port = config.aapanel_port()
         request_time = int(time.time())
+        # MD5 is mandated by aaPanel's API token scheme (request_token =
+        # md5(request_time + md5(api_sk))) — not a security primitive of ours.
+        sk_md5 = hashlib.md5(api_sk.encode()).hexdigest()  # nosec B324
         token = hashlib.md5(
-            (str(request_time) + hashlib.md5(api_sk.encode()).hexdigest()).encode()
-        ).hexdigest()
+            (str(request_time) + sk_md5).encode()
+        ).hexdigest()  # nosec B324
         params = {
             "request_time": str(request_time),
             "request_token": token,

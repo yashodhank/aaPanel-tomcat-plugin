@@ -151,15 +151,39 @@ if (driver == null || driver.isEmpty()) driver = "@@DRIVER@@";
 String engine = "@@ENGINE@@";
 try {
     Class.forName(driver);
+    long t0 = System.currentTimeMillis();
     Connection c = DriverManager.getConnection(url, user, pass);
-    String ver = c.getMetaData().getDatabaseProductVersion();
+    long connMs = System.currentTimeMillis() - t0;
+    DatabaseMetaData md = c.getMetaData();
+    String ver = md.getDatabaseProductVersion();
     Statement s = c.createStatement();
     ResultSet rs = s.executeQuery("SELECT 1");
-    rs.next();
-    int v = rs.getInt(1);
-    rs.close(); s.close(); c.close();
-    if (v == 1) { out.print("DB_OK " + engine + " " + ver); }
-    else { out.print("DB_FAIL:unexpected " + v); }
+    rs.next(); int v = rs.getInt(1); rs.close();
+    String dbtime = "";
+    try { ResultSet r2 = s.executeQuery("SELECT CURRENT_TIMESTAMP"); if (r2.next()) dbtime = r2.getString(1); r2.close(); } catch (Throwable ig) {}
+    s.close();
+    String mdUrl = md.getURL(); if (mdUrl == null) mdUrl = url;
+    String safeUrl = mdUrl.replaceAll("(?i)password=[^&;]*", "password=***");
+    String cat = ""; try { cat = c.getCatalog(); } catch (Throwable ig) {}
+    String sch = ""; try { sch = c.getSchema(); } catch (Throwable ig) {}
+    c.close();
+    if (v != 1) { out.print("DB_FAIL:unexpected " + v); return; }
+    out.println("DB_OK " + engine + " " + ver);
+    out.println("--- connection (live; secrets redacted) ---");
+    out.println("engine         : " + engine);
+    out.println("db product     : " + md.getDatabaseProductName() + " " + ver);
+    out.println("driver         : " + md.getDriverName() + " " + md.getDriverVersion());
+    out.println("jdbc version   : " + md.getJDBCMajorVersion() + "." + md.getJDBCMinorVersion());
+    out.println("url            : " + safeUrl);
+    out.println("user           : " + md.getUserName());
+    out.println("catalog/schema : " + cat + " / " + sch);
+    out.println("connect time   : " + connMs + " ms");
+    out.println("query SELECT 1 : " + v);
+    out.println("db server time : " + dbtime);
+    out.println("--- served by ---");
+    out.println("servlet        : " + application.getServerInfo());
+    out.println("java           : " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
+    out.println("os             : " + System.getProperty("os.name") + " " + System.getProperty("os.version") + " " + System.getProperty("os.arch"));
 } catch (Throwable t) {
     out.print("DB_FAIL:" + t.getClass().getSimpleName() + " " + t.getMessage());
 }
@@ -176,13 +200,26 @@ try {
     if (slash >= 0) hp = hp.substring(0, slash);
     int q = hp.indexOf('?');
     if (q >= 0) hp = hp.substring(0, q);
+    int at = hp.indexOf('@'); if (at >= 0) hp = hp.substring(at + 1);
     String host = hp; int port = 27017;
     int colon = hp.lastIndexOf(':');
     if (colon >= 0) { host = hp.substring(0, colon); port = Integer.parseInt(hp.substring(colon + 1)); }
+    long t0 = System.currentTimeMillis();
     Socket sock = new Socket();
     sock.connect(new InetSocketAddress(host, port), 3000);
+    long ms = System.currentTimeMillis() - t0;
+    String remote = String.valueOf(sock.getInetAddress());
     sock.close();
-    out.print("DB_OK " + engine);
+    out.println("DB_OK " + engine);
+    out.println("--- connection (live TCP probe; non-JDBC) ---");
+    out.println("engine         : " + engine);
+    out.println("endpoint       : " + host + ":" + port);
+    out.println("resolved       : " + remote);
+    out.println("connect time   : " + ms + " ms");
+    out.println("--- served by ---");
+    out.println("servlet        : " + application.getServerInfo());
+    out.println("java           : " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
+    out.println("os             : " + System.getProperty("os.name") + " " + System.getProperty("os.version") + " " + System.getProperty("os.arch"));
 } catch (Throwable t) {
     out.print("DB_FAIL:" + t.getClass().getSimpleName() + " " + t.getMessage());
 }
