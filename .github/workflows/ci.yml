@@ -79,6 +79,12 @@ jobs:
           find plugin/javahost -name '*.py' -print0 | xargs -0 python3 -m py_compile
           python3 -m pytest -q tests/
 
+      - name: UI a11y/CSP sanity
+        # Offline, stdlib-only static check of plugin/javahost/index.html
+        # (no axe/node/network). Covered by the wholesale `pytest tests/` above;
+        # kept as a named step so a11y/CSP regressions are obvious in CI logs.
+        run: python3 -m pytest -q tests/test_ui_a11y.py
+
   zip:
     needs: validate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

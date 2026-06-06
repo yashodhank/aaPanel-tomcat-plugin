@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.8.0] — 2026-06-06
+
+### Accessibility (WCAG 2.2 AA / WAI-ARIA APG)
+- Darkened secondary-text tokens (`--muted`, `--muted-2`) to meet 4.5:1 contrast.
+- Modal: focus trap + focus return to trigger, `aria-describedby` wired.
+- Row action menu is now a real `role="menu"` (10 `menuitem`s) with arrow/Home/End/Esc + focus return.
+- Sidebar converted from an invalid tablist/tab+aria-current mix to a `<nav>` landmark.
+- `prefers-reduced-motion` disables animation/blur; focus-visible on close/menu; aria-labels;
+  decorative SVGs `aria-hidden`; error toasts use a separate `role="alert"`/assertive region.
+
+### UX
+- Skeleton loaders for stat tiles; hardening "Allow services" is now a primary (not danger) button;
+  empty state offers "Deploy Spring Boot JAR"; structured error messages; removed `prompt()` fallback.
+
+### Theming / responsive
+- Contrast-safe dark-mode tokens; log/metrics viewer fills modal (single scroll).
+
+### Governance
+- New `.claude/skills/javahost-ui/SKILL.md` (clean-room WCAG 2.2 + APG) + offline CI a11y/CSP lint
+  (`tests/test_ui_a11y.py`).
+
+## [0.7.2] — 2026-06-06
+### Fixed
+- UI overflowed off-screen inside aaPanel's modal — root now caps to the viewport with internal
+  scroll and the body grid uses `minmax(0,1fr)`. Plugin icon confirmed served (200; hard-refresh past the 1-day cache).
+
+## [0.7.1] — 2026-06-06
+### Added
+- UI surfaces app metrics (per-app Metrics action) and a Spring profiles field in the JAR modal.
+
 ## [0.7.0] — 2026-06-06
 
 ### Added
