@@ -748,6 +748,16 @@
         </div>
         <div id="jh-remote-body"><div class="jh-loading">Loading…</div></div>
       </div>
+      <div class="jh-card" style="margin-bottom:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Scheduled backups</h3><p>Automatic per-app backups via cron, with retention</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-sched-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn accent sm" id="jh-open-sched" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Add schedule</button>
+          </div>
+        </div>
+        <div id="jh-schedules-body"><div class="jh-loading">Loading…</div></div>
+      </div>
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
@@ -1237,6 +1247,90 @@
       busy(btn, false);
       if(failed(r)){ toast(errText(payload(r)), 'err', 'Remove failed'); return; }
       toast('Remote storage removed', 'ok'); refreshRemoteStorage();
+    });
+  }
+
+  // =====================================================================
+  // SCHEDULED BACKUPS (Settings) — cron-driven per-app backups
+  // =====================================================================
+  var SCHED_FREQ = {
+    'Daily 02:00':'0 2 * * *', 'Weekly (Sun 03:00)':'0 3 * * 0',
+    'Hourly':'0 * * * *', 'Every 6 hours':'0 */6 * * *', 'Custom…':''
+  };
+  function refreshSchedules(btn){
+    busy(btn, true);
+    call('GetBackupSchedules', {}, function(r){
+      busy(btn, false);
+      var bd = $('jh-schedules-body'); if(!bd) return;
+      if(failed(r)){
+        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>Scheduled backups are not available on this server build.</div></div>';
+        return;
+      }
+      renderSchedules((payload(r)||{}).schedules || []);
+    });
+  }
+  function renderSchedules(list){
+    var bd = $('jh-schedules-body'); if(!bd) return;
+    if(!list.length){
+      bd.innerHTML = emptyInline('No schedules', 'Use “Add schedule” to back an app up automatically.');
+      return;
+    }
+    bd.innerHTML = '<div class="jh-table-wrap"><table>'+
+      '<thead><tr><th>App</th><th>Cron</th><th>Remote</th><th>Keep</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(function(s){
+        var rem = s.remote ? '<span class="jh-badge ok"><span class="jh-dot"></span>yes</span>' : '<span class="jh-badge neutral">no</span>';
+        return '<tr>'+
+          '<td><div class="app-name">'+esc(s.app)+'</div></td>'+
+          '<td class="jh-muted"><code>'+esc(s.cron)+'</code></td>'+
+          '<td>'+rem+'</td>'+
+          '<td class="jh-muted">'+esc(String(s.keep))+'</td>'+
+          '<td><button type="button" class="jh-btn ghost sm" data-sched-del="'+esc(s.app)+'">'+ic('trash')+'Remove</button></td>'+
+        '</tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  function openScheduleModal(){
+    var apps = (STATE && STATE.apps) || [];
+    if(!apps.length){ toast('No apps to schedule', 'err'); return; }
+    var appOpts = apps.map(function(a){ return '<option value="'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('');
+    var freqOpts = Object.keys(SCHED_FREQ).map(function(k){ return '<option value="'+esc(k)+'">'+esc(k)+'</option>'; }).join('');
+    openModal({
+      title:'Schedule backups', sub:'Runs core/backup/run.py via cron',
+      body:'<div class="jh-form">'+
+          '<div class="jh-field"><label for="sc-app">App</label><select id="sc-app">'+appOpts+'</select></div>'+
+          '<div class="jh-field"><label for="sc-freq">Frequency</label><select id="sc-freq">'+freqOpts+'</select></div>'+
+          '<div class="jh-field wide" id="sc-custom-wrap" style="display:none"><label for="sc-cron">Custom cron (5 fields)</label><input id="sc-cron" type="text" placeholder="0 2 * * *" autocomplete="off"></div>'+
+          '<div class="jh-field"><label for="sc-keep">Keep (retention)</label><input id="sc-keep" type="number" value="7" min="0" step="1"></div>'+
+          '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="sc-remote" type="checkbox"><label for="sc-remote" style="margin:0">Also upload to remote storage</label></div>'+
+        '</div>',
+      onMount: function(){
+        var fr = $('sc-freq');
+        if(fr) fr.addEventListener('change', function(){
+          $('sc-custom-wrap').style.display = (fr.value === 'Custom…') ? '' : 'none';
+        });
+      },
+      footer:[ mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Save schedule', 'accent', function(b){
+          var app = $('sc-app').value, freq = $('sc-freq').value;
+          var cron = (freq === 'Custom…') ? $('sc-cron').value.trim() : SCHED_FREQ[freq];
+          if(!cron){ toast('Enter a cron expression', 'err'); return; }
+          var data = {app:app, cron:cron, keep:$('sc-keep').value, remote:$('sc-remote').checked?'1':'0'};
+          busy(b, true);
+          call('SetBackupSchedule', data, function(r){
+            busy(b, false);
+            if(failed(r)){ toast(errText(payload(r)), 'err', 'Schedule failed'); return; }
+            toast('Schedule saved', 'ok'); closeModal(); refreshSchedules();
+          });
+        }, 'check') ]
+    });
+  }
+  function removeSchedule(app, btn){
+    if(!confirm('Remove the backup schedule for '+app+'?')) return;
+    busy(btn, true);
+    call('RemoveBackupSchedule', {app:app}, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)), 'err', 'Remove failed'); return; }
+      toast('Schedule removed', 'ok'); refreshSchedules();
     });
   }
 
@@ -3347,7 +3441,7 @@
     if(name === 'apps'){ startAppsPoll(); refreshBackups(); }
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
-    if(name === 'settings'){ refreshRemoteStorage(); refreshDangerZone(); }
+    if(name === 'settings'){ refreshRemoteStorage(); refreshSchedules(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -3608,6 +3702,10 @@
     if(b.id === 'jh-remote-save'){ saveRemoteStorage(b); return; }
     if(b.id === 'jh-remote-test'){ testRemoteStorage(b); return; }
     if(b.id === 'jh-remote-remove'){ removeRemoteStorage(b); return; }
+    // settings / scheduled backups
+    if(b.id === 'jh-sched-refresh'){ refreshSchedules(b); return; }
+    if(b.id === 'jh-open-sched'){ openScheduleModal(); return; }
+    if(ds.schedDel){ removeSchedule(ds.schedDel, b); return; }
     // settings / danger zone
     if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
     if(b.id === 'jh-wipe-run'){ runWipe(b); return; }

@@ -34,6 +34,7 @@ from core import maintenance                      # noqa: E402
 from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
+from core.backup import schedule as backupschedule  # noqa: E402
 
 
 class javahost_main(object):
@@ -489,6 +490,35 @@ class javahost_main(object):
         try:
             res = backupremote.remove()
             panel.log("RemoveRemoteStorage", "removed=%s" % res.get("removed"))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- scheduled backups ----
+    def GetBackupSchedules(self, get=None):
+        try:
+            return panel.ok({"schedules": backupschedule.list_schedules()})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetBackupSchedule(self, get):
+        try:
+            remote = str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on")
+            res = backupschedule.set_schedule(
+                app=validate.identifier(panel.attr(get, "app"), "app"),
+                cron_expr=panel.attr(get, "cron"),
+                remote=remote,
+                keep=int(panel.attr(get, "keep", 7)),
+            )
+            panel.log("SetBackupSchedule", "%s cron=%s keep=%s" % (res["app"], res["cron"], res["keep"]))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RemoveBackupSchedule(self, get):
+        try:
+            res = backupschedule.remove_schedule(validate.identifier(panel.attr(get, "app"), "app"))
+            panel.log("RemoveBackupSchedule", res["app"])
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))

@@ -40,6 +40,12 @@ MANIFEST_FORMAT = 1
 
 # backup-<app>-<YYYYmmddTHHMMSSZ>.tar.gz
 _NAME_RE = re.compile(r"^backup-[A-Za-z0-9._-]+-\d{8}T\d{6}Z\.tar\.gz$")
+_APP_FROM_NAME = re.compile(r"^backup-(?P<app>[A-Za-z0-9._-]+)-\d{8}T\d{6}Z\.tar\.gz$")
+
+
+def _app_from_name(name: str) -> Optional[str]:
+    m = _APP_FROM_NAME.match(name or "")
+    return m.group("app") if m else None
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -189,7 +195,8 @@ def list_backups(app: Optional[str] = None, include_remote: bool = False) -> Lis
             if not os.path.isfile(path):
                 continue
             man = _read_manifest_file(path)
-            if app and man.get("app") != app:
+            entry_app = man.get("app") or _app_from_name(name)
+            if app and entry_app != app:
                 continue
             try:
                 size = os.path.getsize(path)
@@ -198,7 +205,7 @@ def list_backups(app: Optional[str] = None, include_remote: bool = False) -> Lis
             seen.add(name)
             out.append({
                 "name": name,
-                "app": man.get("app"),
+                "app": entry_app,
                 "type": man.get("type"),
                 "domain": man.get("domain"),
                 "ssl_enabled": man.get("ssl_enabled"),
@@ -256,18 +263,33 @@ def delete_backup(name: str) -> Dict:
 
 
 def prune_backups(app: str, keep: int) -> Dict:
-    """Keep the newest `keep` local backups for <app>, delete the rest."""
+    """Keep the newest `keep` backups for <app>, deleting older local AND remote
+    copies. Backup names embed a sortable UTC timestamp, so name-sort = age-sort."""
     app = validate.identifier(app, "app")
     keep = max(0, int(keep))
-    backups = list_backups(app=app)  # newest-first
+    # local
+    local = list_backups(app=app)  # newest-first
     removed: List[str] = []
-    for b in backups[keep:]:
+    for b in local[keep:]:
         try:
             delete_backup(b["name"])
             removed.append(b["name"])
         except Exception:
             pass
-    return {"app": app, "kept": min(keep, len(backups)), "removed": removed}
+    # remote (if configured): prune independently by name (timestamp) order
+    remote_removed: List[str] = []
+    try:
+        from . import remote
+        if remote.configured():
+            robj = sorted(remote.list_remote(), key=lambda r: r.get("name") or "", reverse=True)
+            robj = [r for r in robj if r.get("app") == app]
+            for r in robj[keep:]:
+                if remote.delete(r["name"]).get("ok"):
+                    remote_removed.append(r["name"])
+    except Exception:
+        pass
+    return {"app": app, "kept": min(keep, len(local)),
+            "removed": removed, "remote_removed": remote_removed}
 
 
 # --------------------------------------------------------------------------- #
