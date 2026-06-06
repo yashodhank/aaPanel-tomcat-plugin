@@ -201,7 +201,9 @@ def _app_info(name: str) -> Dict:
         info["backend"] = backend
         info["enabled"] = _is_enabled(name, backend)
         if itype == "jar":
-            jmaj = _java_major_from_home(env.get("JAVA_HOME", ""))
+            # jar JAVA_HOME lives in bin/app.env (EnvironmentFile), not setenv.sh
+            jhome = _read_app_env(base).get("JAVA_HOME") or env.get("JAVA_HOME", "")
+            jmaj = _java_major_from_home(jhome)
             info["java"] = jmaj
             info["runtime"] = ("Java %d" % jmaj) if jmaj else None
             # jar apps have no servlet context
@@ -329,7 +331,16 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
     # app.env carries SERVER_PORT (Spring Boot honors it) — also the port marker for health()
     from ..util import fs as _fs
-    env_lines = ["SERVER_PORT=%d" % port]
+    env_lines = [
+        "SERVER_PORT=%d" % port,
+        # Bind to loopback ONLY: like the Tomcat connector, JAR apps must not face
+        # the public interface — they are reached through the reverse proxy. Spring
+        # Boot honors SERVER_ADDRESS (server.address); generic apps honor SERVER_HOST.
+        "SERVER_ADDRESS=127.0.0.1",
+        "SERVER_HOST=127.0.0.1",
+        # recorded so list_apps() can report the runtime without spawning java
+        "JAVA_HOME=%s" % java_home,
+    ]
     if profiles:
         # validate: comma-separated profile identifiers only
         prof = ",".join(p for p in re.split(r"[,\s]+", profiles.strip()) if p)
@@ -492,6 +503,19 @@ def _read_setenv(base: str) -> Dict[str, str]:
         with open(path) as f:
             for line in f:
                 m = re.match(r'\s*export\s+(\w+)="?(.*?)"?\s*$', line)
+                if m:
+                    env[m.group(1)] = m.group(2)
+    return env
+
+
+def _read_app_env(base: str) -> Dict[str, str]:
+    """Parse bin/app.env (KEY=val / KEY="val") — the JAR EnvironmentFile."""
+    env: Dict[str, str] = {}
+    path = os.path.join(base, "bin", "app.env")
+    if os.path.isfile(path):
+        with open(path, errors="replace") as f:
+            for line in f:
+                m = re.match(r'\s*(\w+)="?(.*?)"?\s*$', line)
                 if m:
                     env[m.group(1)] = m.group(2)
     return env

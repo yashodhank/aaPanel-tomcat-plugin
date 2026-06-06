@@ -121,7 +121,8 @@ public class App {
         if (p != null && !p.isEmpty()) {
             try { port = Integer.parseInt(p.trim()); } catch (NumberFormatException ignore) {}
         }
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        String __h = System.getenv("SERVER_HOST"); if (__h==null||__h.isEmpty()) __h=System.getenv("SERVER_ADDRESS"); if (__h==null||__h.isEmpty()) __h="127.0.0.1";
+        HttpServer server = HttpServer.create(new InetSocketAddress(__h, port), 0);
         server.createContext("/", new com.sun.net.httpserver.HttpHandler() {
             public void handle(HttpExchange ex) throws java.io.IOException {
                 byte[] body = ("JAVAHOST_OK java=" + System.getProperty("java.version"))
@@ -229,7 +230,8 @@ public class DbApp {
         if (p != null && !p.isEmpty()) {
             try { port = Integer.parseInt(p.trim()); } catch (NumberFormatException ignore) {}
         }
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        String __h = System.getenv("SERVER_HOST"); if (__h==null||__h.isEmpty()) __h=System.getenv("SERVER_ADDRESS"); if (__h==null||__h.isEmpty()) __h="127.0.0.1";
+        HttpServer server = HttpServer.create(new InetSocketAddress(__h, port), 0);
         server.createContext("/", new com.sun.net.httpserver.HttpHandler() {
             public void handle(HttpExchange ex) throws java.io.IOException {
                 byte[] body = check().getBytes(StandardCharsets.UTF_8);
@@ -281,7 +283,8 @@ public class DbApp {
         if (p != null && !p.isEmpty()) {
             try { port = Integer.parseInt(p.trim()); } catch (NumberFormatException ignore) {}
         }
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        String __h = System.getenv("SERVER_HOST"); if (__h==null||__h.isEmpty()) __h=System.getenv("SERVER_ADDRESS"); if (__h==null||__h.isEmpty()) __h="127.0.0.1";
+        HttpServer server = HttpServer.create(new InetSocketAddress(__h, port), 0);
         server.createContext("/", new com.sun.net.httpserver.HttpHandler() {
             public void handle(HttpExchange ex) throws java.io.IOException {
                 byte[] body = check().getBytes(StandardCharsets.UTF_8);

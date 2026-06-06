@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.12.2] — 2026-06-06
+
+### Security
+- **JAR apps now bind to loopback (127.0.0.1), not `0.0.0.0`.** Like the Tomcat
+  connector, executable/Spring-Boot JAR services must not face the public
+  interface — they're reached via the reverse proxy. `create_jar` now writes
+  `SERVER_ADDRESS`/`SERVER_HOST=127.0.0.1` into the app env (Spring Boot honors
+  `SERVER_ADDRESS`; generic apps honor `SERVER_HOST`), and the sample JAR fixtures
+  bind the resolved host. Previously a deployed JAR's port was reachable on the
+  public IP.
+
+### Fixed
+- **JAR app `java` version showed `None`** in the app list: the JAR's `JAVA_HOME`
+  lives in `bin/app.env`, which wasn't parsed. `create_jar` now records it there
+  and `list_apps()` reads it (new `_read_app_env`).
+
 ## [0.12.1] — 2026-06-06
 
 ### Fixed
