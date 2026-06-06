@@ -292,6 +292,10 @@
   /* status badge taxonomy */
   .jh-badge.starting{background:var(--surface-2);color:var(--accent-d);border:1px solid var(--line)}
   .jh-badge.danger{background:var(--danger-bg);color:var(--danger)}
+  /* running task: neutral badge with a gently pulsing dot (reduced-motion off) */
+  .jh-badge.running{color:var(--accent-d)}
+  .jh-badge.running .jh-dot{animation:jh-pulse 1.1s ease-in-out infinite}
+  @keyframes jh-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
   /* segmented start/stop/restart control */
   .jh-seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-sm);
@@ -455,6 +459,8 @@
       <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
       <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
       <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
       <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
       <symbol id="i-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
     </defs>
@@ -489,6 +495,8 @@
           <button class="jh-tab" role="tab" data-section="apps" aria-selected="false" aria-controls="page-apps" id="tab-apps" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
           <button class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
           <button class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
+          <button class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
+          <button class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
           <button class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
         </div>
       </nav>
@@ -566,6 +574,47 @@
         <div class="jh-card-h"><div><h3>Per-app database environment</h3><p>Pick a managed app to write its DB connection env</p></div></div>
         <div id="db-app-picker" class="jh-spread"><div class="jh-loading">Loading apps…</div></div>
         <div class="jh-hint">Secrets are written server-side and never echoed back to this UI.</div>
+      </div>
+    </section>
+
+    <!-- ================== PAGE: TASKS ================== -->
+    <section class="jh-page" id="page-tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="-1">
+      <div class="jh-card">
+        <div class="jh-card-h">
+          <div><h3>Background tasks</h3><p>Asynchronous installs, updates &amp; uninstalls</p></div>
+          <button class="jh-btn ghost sm" id="jh-tasks-refresh"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div class="jh-table-wrap">
+          <table>
+            <thead><tr><th>Task</th><th>Target</th><th>State</th><th>Elapsed</th><th>Log</th></tr></thead>
+            <tbody id="jh-tasks-body" aria-live="polite"><tr><td colspan="5" class="jh-loading">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================== PAGE: LOGS ================== -->
+    <section class="jh-page" id="page-logs" role="tabpanel" aria-labelledby="tab-logs" tabindex="-1">
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Log viewer</h3><p>Application logs and background-task output</p></div></div>
+        <div class="jh-spread" style="margin-bottom:var(--s3)">
+          <div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)">
+            <label for="lg-source" style="margin:0">Source</label>
+            <select id="lg-source" style="width:auto" aria-label="Log source">
+              <optgroup label="Applications" id="lg-grp-apps"></optgroup>
+              <optgroup label="Tasks" id="lg-grp-jobs"></optgroup>
+            </select>
+          </div>
+          <div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)">
+            <label for="lg-lines" style="margin:0">Lines</label>
+            <select id="lg-lines" style="width:auto" aria-label="Number of log lines"><option>50</option><option selected>200</option><option>500</option><option>1000</option></select>
+          </div>
+          <div class="jh-bar-spacer"></div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+            <input type="checkbox" id="lg-auto" style="width:auto;cursor:pointer"> Auto-tail</label>
+          <button class="jh-btn ghost sm" id="jh-logs-refresh"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <pre class="jh-pre" id="lg-pre" tabindex="0" role="region" aria-label="Log output" style="max-height:55vh">Pick a source to view its log.</pre>
       </div>
     </section>
 
@@ -705,6 +754,96 @@
   var STATE = {};        // last GetStatus payload
   var DB_ENGINES = [];   // cached GetDbSupport matrix
   var appMajor = {};     // app -> tomcat major (for WAR version param)
+  var JOBS = [];         // last GetJobs payload (background tasks)
+
+  // =====================================================================
+  // BACKGROUND JOB TRACKING (async installs / updates / uninstalls)
+  //   We POST Start* endpoints which return {job_id}; the work runs server-
+  //   side and we poll GetJobs/GetJobLog instead of blocking on a long AJAX
+  //   that would otherwise time out. Each tracked job is polled every ~2s
+  //   until state!=running; on completion we toast + refresh runtimes.
+  // =====================================================================
+  var JOB_POLL = 2000;
+  var trackedJobs = {};   // job_id -> {label, timer}
+
+  // elapsed time between two epoch-ish values (server may send seconds or ms
+  // or ISO strings); tolerate absence and render a friendly duration.
+  function epoch(v){
+    if(v == null || v === '') return null;
+    if(typeof v === 'number') return v < 1e12 ? v * 1000 : v;   // s -> ms heuristic
+    var n = Number(v);
+    if(!isNaN(n)) return n < 1e12 ? n * 1000 : n;
+    var t = Date.parse(v);
+    return isNaN(t) ? null : t;
+  }
+  function fmtElapsed(started, ended){
+    var s = epoch(started); if(s == null) return '—';
+    var e = epoch(ended); if(e == null) e = Date.now();
+    return fmtUptime(Math.max(0, Math.round((e - s) / 1000)));
+  }
+  function jobStateBadge(state){
+    var s = (state == null ? '' : String(state)).toLowerCase();
+    if(s === 'done' || s === 'success' || s === 'completed') return {cls:'ok', label:'done'};
+    if(s === 'failed' || s === 'error') return {cls:'danger', label:'failed'};
+    if(s === 'running' || s === 'active') return {cls:'neutral running', label:'running…'};
+    if(s === '') return {cls:'neutral', label:'unknown'};
+    return {cls:'neutral', label:s};
+  }
+  function jobIsRunning(state){
+    var s = (state == null ? '' : String(state)).toLowerCase();
+    return s === 'running' || s === 'active' || s === '';
+  }
+
+  // Start an async operation: try Start<Method> first; if the backend doesn't
+  // know it (older build) fall back to the blocking sync call via done().
+  // method: 'InstallJava' | 'InstallTomcat' | 'UpdateTomcat' | 'UninstallTomcat'
+  function startJob(method, data, label, btn){
+    var startName = 'Start' + method;   // e.g. StartInstallJava
+    call(startName, data, function(r){
+      var p = payload(r);
+      var jid = p && (p.job_id || p.id);
+      // Treat "unknown method"/missing-endpoint style failures as "fall back".
+      if(failed(r) && !jid){
+        var em = errText(p).toLowerCase();
+        var notImpl = em.indexOf('unknown') !== -1 || em.indexOf('not found') !== -1 ||
+          em.indexOf('no such') !== -1 || em.indexOf('not implemented') !== -1 ||
+          em.indexOf('attribute') !== -1 || em === '' || em.indexOf('404') !== -1;
+        if(notImpl){ call(method, data, done(label, btn)); return; }
+        busy(btn, false); toast(errText(p), 'err', label + ' failed'); return;
+      }
+      busy(btn, false);
+      if(!jid){
+        // success envelope but no job id — behave like a completed sync call
+        toast(label + ' started', 'ok'); refresh(); refreshTasks(); return;
+      }
+      toast('Started ' + label, 'ok');
+      trackJob(jid, label);
+      if(activeSection === 'tasks') refreshTasks();
+    });
+  }
+  // Poll one job id until it stops running, then toast + refresh.
+  function trackJob(jid, label){
+    if(trackedJobs[jid]) return;        // already tracking
+    var rec = { label: label, timer: null };
+    trackedJobs[jid] = rec;
+    function poll(){
+      call('GetJobLog', {job_id: jid, lines: 1}, function(r){
+        var p = payload(r);
+        if(failed(r)) return;            // transient; keep polling
+        if(jobIsRunning(p.state)) return;
+        // terminal
+        if(rec.timer){ clearInterval(rec.timer); rec.timer = null; }
+        delete trackedJobs[jid];
+        var b = jobStateBadge(p.state);
+        if(b.cls === 'danger') toast(errText(p.message || p.log) || (label+' failed'), 'err', label + ' failed');
+        else toast(label + ' completed', 'ok');
+        refresh();                       // re-run the runtimes/status refresh
+        if(activeSection === 'tasks') refreshTasks();
+      });
+    }
+    rec.timer = setInterval(poll, JOB_POLL);
+    poll();
+  }
 
   // =====================================================================
   // SECTION TABS (top horizontal tablist — WAI-ARIA Tabs pattern)
@@ -955,21 +1094,59 @@
     if(name != null && HEALTH_PORT[name] != null) return HEALTH_PORT[name];
     return (x && x.port != null && x.port !== '') ? x.port : null;
   }
-  // build the open-in-browser URL from the panel host + port + context
+  // resolve an app's configured reverse-proxy domain (null when not set up)
+  function appDomain(x){
+    if(!x) return null;
+    var d = x.domain;
+    return (d == null || d === '') ? null : String(d);
+  }
+  // build the open-in-browser URL. Connectors bind loopback, so a host:port
+  // link can NEVER work from a browser — the ONLY valid public URL is via the
+  // reverse-proxy domain. Returns null when no domain is configured.
   function appUrl(x){
-    var port = appPort(x); if(port == null) return null;
+    var dom = appDomain(x); if(dom == null) return null;
     var ctx = (x && x.context) ? String(x.context) : '/';
     if(ctx.charAt(0) !== '/') ctx = '/' + ctx;
-    return 'http://' + location.hostname + ':' + port + ctx;
+    if(ctx === '/') ctx = '/';
+    // domain may already include scheme; normalize to a bare host
+    dom = dom.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    return 'http://' + dom + ctx;
+  }
+  // default reverse-proxy host for an app per convention <app>.5d.bisotech.in
+  function defaultDomain(app){ return cssId(app).toLowerCase() + '.5d.bisotech.in'; }
+
+  // Open affordances for one app. With a domain: a working Open link + copy
+  // URL + copy port. Without one: a "Set up reverse proxy" action (no dead
+  // host:port link is ever rendered). Copy-port stays available either way.
+  function openHtmlFor(x){
+    var ec = esc(x.app), port = appPort(x);
+    var url = appUrl(x);
+    var portBtn = (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" data-stop="1" title="Copy port" aria-label="Copy port for '+ec+'">'+ic('layers')+'</button>':'');
+    if(url){
+      return '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="Open '+esc(url)+'" aria-label="Open '+ec+' in a new tab" data-stop="1">'+ic('link')+'</a>'+
+        '<button class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
+        portBtn;
+    }
+    return '<button class="jh-btn ghost sm" data-setsite="'+ec+'" data-stop="1" title="Set up reverse proxy ('+esc(defaultDomain(x.app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
+      portBtn;
   }
 
-  // open-in-browser link + copy URL + copy port affordances for one app
-  function openHtmlFor(x){
-    var url = appUrl(x); if(!url) return '';
-    var ec = esc(x.app), port = appPort(x);
-    return '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="Open '+esc(url)+'" aria-label="Open '+ec+' in a new tab" data-stop="1">'+ic('link')+'</a>'+
-      '<button class="jh-iconbtn" data-copyurl="'+ec+'" data-stop="1" title="Copy URL" aria-label="Copy URL for '+ec+'">'+ic('doc')+'</button>'+
-      (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" data-stop="1" title="Copy port" aria-label="Copy port for '+ec+'">'+ic('layers')+'</button>':'');
+  // SetSite{app} — create the reverse-proxy vhost, then update the row/drawer
+  // so the working Open link appears. Tolerates absence of the endpoint.
+  function setupSite(app, btn){
+    busy(btn, true);
+    toast('Setting up reverse proxy for '+app+'…');
+    call('SetSite', {app:app, domain:defaultDomain(app)}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p), 'err', 'Reverse proxy setup failed'); return; }
+      var dom = (p && (p.domain || p.url)) || defaultDomain(app);
+      if(APPS_BY_NAME[app]){ APPS_BY_NAME[app].domain = (p && p.domain) || dom.replace(/^https?:\/\//,'').replace(/\/+$/,''); }
+      toast('Reverse proxy ready: '+((p&&p.domain)||dom), 'ok');
+      refreshOpen(app);
+      if(DRAWER.app === app) drawerOverview();   // rebuild the drawer Open row
+      refresh();                                  // pick up the new domain server-side
+    });
   }
 
   function renderApps(apps){
@@ -1153,13 +1330,17 @@
     var app = DRAWER.app, x = APPS_BY_NAME[app] || {app:app};
     var p = $('dpanel-overview'); if(!p) return;
     var url = appUrl(x), ec = esc(app), port = appPort(x);
+    var copyPortBtn = (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'');
     var openRow = url
       ? '<div class="jh-kv"><span>Open</span><span class="btns">'+
           '<a class="jh-iconbtn" href="'+esc(url)+'" target="_blank" rel="noopener" title="'+esc(url)+'" aria-label="Open '+ec+'">'+ic('link')+'</a>'+
           '<button class="jh-iconbtn" data-copyurl="'+ec+'" title="Copy URL" aria-label="Copy URL">'+ic('doc')+'</button>'+
-          (port!=null?'<button class="jh-iconbtn" data-copyport="'+ec+'" title="Copy port" aria-label="Copy port">'+ic('layers')+'</button>':'')+
+          copyPortBtn+
         '</span></div>'
-      : '';
+      : '<div class="jh-kv"><span>Open</span><span class="btns">'+
+          '<button class="jh-btn ghost sm" data-setsite="'+ec+'" title="Set up reverse proxy ('+esc(defaultDomain(app))+')" aria-label="Set up reverse proxy for '+ec+'">'+ic('globe')+'Set up reverse proxy</button>'+
+          copyPortBtn+
+        '</span></div>';
     p.innerHTML = '<div class="jh-rows">'+
       '<div class="jh-kv"><span>Status</span><span class="jh-badge '+statusBadge(x.status).cls+'" title="'+esc(x.status==null?'unknown':x.status)+'"><span class="jh-dot"></span>'+esc(statusBadge(x.status).label)+'</span></div>'+
       '<div class="jh-kv"><span>Health</span><span class="jh-badge neutral" id="dw-health"><span class="jh-dot"></span>Checking…</span></div>'+
@@ -1975,14 +2156,176 @@
   function onSectionChange(name){
     if(!APPS) return;                  // not yet initialised (load-time call)
     stopAppsPoll();                    // clear first so timers never stack
+    stopTasksPoll();                   // (defined below; both clear on any switch)
+    stopLogsAuto();
     if(name === 'apps') startAppsPoll();
+    if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
+    if(name === 'logs') initLogsSection();
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
-    if(activeSection !== 'apps') return;
-    if(document.hidden) stopAppsPoll();
-    else startAppsPoll();
+    if(document.hidden){ stopAppsPoll(); stopTasksPoll(); }
+    else {
+      if(activeSection === 'apps') startAppsPoll();
+      if(activeSection === 'tasks') startTasksPoll();
+    }
   });
+
+  // =====================================================================
+  // TASKS SECTION — list background jobs, auto-poll while any run, view log
+  // =====================================================================
+  var TASKS = { timer:null, inflight:false };
+  var TASKS_INTERVAL = 2000;
+  function renderTasks(jobs){
+    JOBS = jobs || [];
+    var tb = $('jh-tasks-body'); if(!tb) return;
+    if(!JOBS.length){
+      tb.innerHTML = '<tr><td colspan="5"><div class="jh-empty" style="padding:var(--s4)">'+ic('clock')+
+        '<b>No background tasks</b><div>Installs, updates and uninstalls you start will appear here.</div></div></td></tr>';
+      return;
+    }
+    tb.innerHTML = JOBS.map(function(j){
+      var b = jobStateBadge(j.state);
+      var kind = j.kind != null ? j.kind : '—';
+      var target = j.target != null ? j.target : '—';
+      return '<tr>'+
+        '<td><div class="app-name">'+esc(kind)+'</div></td>'+
+        '<td>'+esc(target)+'</td>'+
+        '<td><span class="jh-badge '+b.cls+'"><span class="jh-dot"></span>'+esc(b.label)+'</span></td>'+
+        '<td class="jh-muted">'+esc(fmtElapsed(j.started, j.ended))+'</td>'+
+        '<td><button class="jh-btn ghost sm" data-joblog="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('doc')+'View log</button></td>'+
+      '</tr>';
+    }).join('');
+  }
+  function refreshTasks(btn){
+    busy(btn, true);
+    call('GetJobs', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){
+        var tb = $('jh-tasks-body');
+        if(tb) tb.innerHTML = '<tr><td colspan="5"><div class="jh-alert info">'+ic('info')+
+          '<div>Background tasks are not available on this server build.</div></div></td></tr>';
+        return;
+      }
+      renderTasks((p && p.jobs) || []);
+    });
+  }
+  function tasksTick(){
+    if(document.hidden || activeSection !== 'tasks') return;
+    if(TASKS.inflight) return;
+    var anyRunning = JOBS.some(function(j){ return jobIsRunning(j.state); }) ||
+      Object.keys(trackedJobs).length > 0;
+    if(!anyRunning) return;            // idle: stop hitting the server
+    TASKS.inflight = true;
+    call('GetJobs', {}, function(r){
+      TASKS.inflight = false;
+      if(activeSection !== 'tasks') return;
+      var p = payload(r);
+      if(failed(r)) return;
+      renderTasks((p && p.jobs) || []);
+    });
+  }
+  function startTasksPoll(){ stopTasksPoll(); TASKS.timer = setInterval(tasksTick, TASKS_INTERVAL); }
+  function stopTasksPoll(){ if(TASKS && TASKS.timer){ clearInterval(TASKS.timer); TASKS.timer = null; } }
+
+  // job-log modal — streams GetJobLog (tail), auto-refreshing while running
+  var JOBLOG = { id:null, timer:null };
+  function openJobLog(jid, label){
+    JOBLOG.id = jid;
+    openModal({
+      title:'Task log', sub:label || jid, large:true, fill:true,
+      body: '<pre class="jh-pre" id="jl-pre" tabindex="0" role="region" aria-label="Task log output">Loading…</pre>',
+      footer: [ mkBtn('Refresh', 'ghost', function(b){ loadJobLog(jid, b); }, 'refresh'), mkBtn('Close', 'ghost', closeModal) ],
+      onMount: function(){
+        loadJobLog(jid);
+        JOBLOG.timer = setInterval(function(){
+          if(document.hidden) return;
+          loadJobLog(jid);
+        }, JOB_POLL);
+      },
+      onClose: function(){
+        if(JOBLOG.timer){ clearInterval(JOBLOG.timer); JOBLOG.timer = null; }
+        JOBLOG.id = null;
+      }
+    });
+  }
+  function loadJobLog(jid, btn){
+    var pre = $('jl-pre'); if(!pre) return;
+    busy(btn, true);
+    call('GetJobLog', {job_id: jid, lines: 1000}, function(r){
+      busy(btn, false);
+      var pr = $('jl-pre'); if(!pr) return;
+      var p = payload(r);
+      if(failed(r)){ pr.textContent = 'error: ' + errText(p); return; }
+      pr.textContent = (p && p.log != null && p.log !== '') ? p.log
+        : (p && p.message != null ? p.message : '(no output)');
+      pr.scrollTop = pr.scrollHeight;
+      // once the job stops, stop auto-refreshing the modal
+      if(!jobIsRunning(p && p.state) && JOBLOG.timer){
+        clearInterval(JOBLOG.timer); JOBLOG.timer = null;
+      }
+    });
+  }
+
+  // =====================================================================
+  // LOGS SECTION — unified viewer over app logs (GetLogs) + task logs (GetJobLog)
+  // =====================================================================
+  var LOGS = { timer:null };
+  // populate the source picker from the current apps + jobs lists
+  function populateLogSources(){
+    var sel = $('lg-source'); if(!sel) return;
+    var prev = sel.value;
+    var apps = (STATE.apps || []);
+    var ga = $('lg-grp-apps'), gj = $('lg-grp-jobs');
+    if(ga) ga.innerHTML = apps.length
+      ? apps.map(function(a){ return '<option value="app:'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('')
+      : '<option value="" disabled>(no apps)</option>';
+    if(gj) gj.innerHTML = JOBS.length
+      ? JOBS.map(function(j){ return '<option value="job:'+esc(j.id)+'">'+esc((j.kind||'task')+' '+(j.target||''))+'</option>'; }).join('')
+      : '<option value="" disabled>(no tasks)</option>';
+    // keep the previous selection if it still exists
+    if(prev){
+      var keep = Array.prototype.some.call(sel.options, function(o){ return o.value === prev; });
+      if(keep) sel.value = prev;
+    }
+  }
+  function initLogsSection(){
+    // pull fresh jobs so the task picker is current, then populate + load
+    call('GetJobs', {}, function(r){
+      if(activeSection !== 'logs') return;
+      var p = payload(r);
+      if(!failed(r)) JOBS = (p && p.jobs) || [];
+      populateLogSources();
+      loadUnifiedLog();
+    });
+  }
+  function loadUnifiedLog(btn){
+    var sel = $('lg-source'), pre = $('lg-pre'); if(!sel || !pre) return;
+    var v = sel.value;
+    if(!v){ pre.textContent = 'Pick a source to view its log.'; return; }
+    var lines = ($('lg-lines') && $('lg-lines').value) || 200;
+    busy(btn, true);
+    var kind = v.slice(0, v.indexOf(':')), key = v.slice(v.indexOf(':') + 1);
+    function show(r){
+      busy(btn, false);
+      var pr = $('lg-pre'); if(!pr) return;
+      var p = payload(r);
+      if(failed(r)){ pr.textContent = 'error: ' + errText(p); return; }
+      pr.textContent = (p && p.log != null && p.log !== '') ? p.log
+        : (p && p.message != null ? p.message : '(no output)');
+      pr.scrollTop = pr.scrollHeight;
+    }
+    if(kind === 'app') call('GetLogs', {app:key, lines:lines}, show);
+    else if(kind === 'job') call('GetJobLog', {job_id:key, lines:lines}, show);
+    else { busy(btn, false); pre.textContent = 'Pick a source to view its log.'; }
+  }
+  function logsAutoTick(){
+    if(document.hidden || activeSection !== 'logs') return;
+    loadUnifiedLog();
+  }
+  function startLogsAuto(){ stopLogsAuto(); LOGS.timer = setInterval(logsAutoTick, JOB_POLL); }
+  function stopLogsAuto(){ if(LOGS && LOGS.timer){ clearInterval(LOGS.timer); LOGS.timer = null; } }
 
   // =====================================================================
   // EVENT WIRING — one delegated handler for the whole UI
@@ -2025,20 +2368,28 @@
       call('AllowServices', {}, done('Allow services', b)); return;
     }
 
-    // runtimes — Java
+    // runtimes — Java (async: Start* + job poll, sync fallback inside startJob)
     if(ds.jdk){
-      busy(b, true); toast('Installing JDK '+ds.jdk+'…');
-      call('InstallJava', {version:ds.jdk}, done('JDK '+ds.jdk+' install', b)); return;
+      busy(b, true);
+      startJob('InstallJava', {version:ds.jdk}, 'JDK '+ds.jdk+' install', b); return;
     }
-    // runtimes — Tomcat
-    if(ds.tcInstall){ busy(b, true); toast('Installing Tomcat '+ds.tcInstall+'… (verified download)');
-      call('InstallTomcat', {version:ds.tcInstall}, done('Tomcat '+ds.tcInstall+' install', b)); return; }
-    if(ds.tcUpdate){ busy(b, true); toast('Updating Tomcat '+ds.tcUpdate+'…');
-      call('UpdateTomcat', {version:ds.tcUpdate}, done('Tomcat '+ds.tcUpdate+' update', b)); return; }
+    // runtimes — Tomcat (async)
+    if(ds.tcInstall){ busy(b, true);
+      startJob('InstallTomcat', {version:ds.tcInstall}, 'Tomcat '+ds.tcInstall+' install', b); return; }
+    if(ds.tcUpdate){ busy(b, true);
+      startJob('UpdateTomcat', {version:ds.tcUpdate}, 'Tomcat '+ds.tcUpdate+' update', b); return; }
     if(ds.tcUninstall){
       if(!confirm('Uninstall Tomcat '+ds.tcUninstall+'? Apps on this major may break.')) return;
-      busy(b, true); call('UninstallTomcat', {version:ds.tcUninstall}, done('Tomcat '+ds.tcUninstall+' uninstall', b)); return;
+      busy(b, true); startJob('UninstallTomcat', {version:ds.tcUninstall}, 'Tomcat '+ds.tcUninstall+' uninstall', b); return;
     }
+
+    // tasks / logs sections
+    if(b.id === 'jh-tasks-refresh'){ refreshTasks(b); return; }
+    if(ds.joblog){ openJobLog(ds.joblog, ds.joblabel); return; }
+    if(b.id === 'jh-logs-refresh'){ loadUnifiedLog(b); return; }
+
+    // reverse-proxy setup for an app with no domain yet
+    if(ds.setsite){ setupSite(ds.setsite, b); return; }
 
     // app row: toggle action menu
     if(ds.menu){
@@ -2061,6 +2412,15 @@
     if(ds.metrics){ openMetrics(ds.metrics); return; }
     if(ds.health){ checkHealth(ds.health); toast('Re-checking health…'); return; }
     if(ds.dbenv){ openDbEnv(ds.dbenv); return; }
+  });
+
+  // Logs section controls (source / lines selectors + auto-tail toggle).
+  // Delegated change handler so it survives DOM that's static here anyway.
+  $('jh-root').addEventListener('change', function(e){
+    var t = e.target;
+    if(!t || !t.id) return;
+    if(t.id === 'lg-source' || t.id === 'lg-lines'){ loadUnifiedLog(); return; }
+    if(t.id === 'lg-auto'){ if(t.checked){ startLogsAuto(); loadUnifiedLog(); } else stopLogsAuto(); return; }
   });
 
   // keyboard activation for app rows (role="button"): Enter / Space open drawer

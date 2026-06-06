@@ -55,6 +55,22 @@ red hardening banner on a default host. Then open **Runtimes**.
 
 Expected: Dashboard now shows both Java and Tomcat majors with patch levels.
 
+### Tasks & Logs (observability)
+
+Long operations like **Install Java** and **Install Tomcat** now run as
+**background jobs**: the UI calls `StartInstallJava` / `StartInstallTomcat` (and
+`StartUninstallTomcat`) and gets a **`{job_id}`** back immediately instead of
+blocking. A slow Adoptium/Apache download therefore **no longer "false-errors"**
+the request — watch it finish in the UI instead of assuming it failed.
+
+- **Tasks** section — lists each job with status (`running` / `done` / `failed`),
+  elapsed time, and **view-log**. Backed by `GetJobs` (list) and `GetJobLog`
+  (one job's output). Only treat an install as failed when its task shows
+  **failed**.
+- **Logs** section — shows both **app logs** (per-app Catalina / JAR output) and
+  **task logs** (the per-job output). Look for `JAVAHOST_OK` / `DB_OK` in app
+  logs and download/verify lines in task logs.
+
 ---
 
 ## 2. Applications — create + deploy `hello.war`
@@ -69,6 +85,13 @@ Open the **Applications** tab.
    under `/tmp`, and extracts zip-slip-safely into `webapps/ROOT`. No namespace
    warning is expected (`hello.war` is `jakarta.*`).
 3. **Start / Restart** the app via the row action (`AppAction`).
+
+> **Loopback / reverse-proxy gotcha.** Tomcat (and JAR) connectors bind to
+> **`127.0.0.1:<port>` by design** — the app is **not** reachable on the box's
+> raw public port. Verify on the box with `http://127.0.0.1:<port>/`; to reach it
+> from anywhere, create a reverse-proxy site (`SetSite{app, domain?}`, convention
+> `<app>.5d.bisotech.in`) and hit the hostname. See
+> [Test campaign](testbed.md#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain).
 
 ### Verify health, logs, metrics
 
@@ -171,3 +194,11 @@ opt-in CI workflow `.github/workflows/deploy-matrix.yml` runs the same harness o
 `workflow_dispatch` and on a weekly schedule, including a `--with-db` matrix that
 stands up PostgreSQL, MySQL, MariaDB, and MongoDB as service containers and
 asserts the `DB_OK` marker. It never runs on push.
+
+### Full compatibility sweep on a box
+
+For the **complete** Tomcat × eligible-Java × DB cartesian campaign on a real
+host (`make matrix` / `tests/e2e/matrix_full.py`, the `--db-source` choice,
+`--proxy` real-hostname asserts, and the `--release N` bytecode pinning that
+proves per-app Java binding), see the dedicated
+[Test campaign](testbed.md) guide.

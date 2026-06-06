@@ -3,6 +3,39 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.12.0] — 2026-06-06
+
+### Fixed
+- **Install "false error":** Install Java/Tomcat ran the large download+extract
+  *synchronously* inside the panel AJAX request, so it timed out and flashed an
+  error even though the install succeeded. Long ops now run as **detached
+  background jobs** (`core/jobs.py`, double-fork + setsid) that return instantly;
+  the UI polls status. (The JDKs were always installing correctly.)
+- **Dead "Open" link:** app rows linked `http://host:port/`, which can never work
+  because connectors bind to **127.0.0.1** by design. "Open ↗" now targets the
+  app's reverse-proxy domain; with no domain it offers **Set up reverse proxy**
+  instead of a dead link.
+
+### Added
+- **Background-job system + endpoints:** `StartInstallJava` / `StartInstallTomcat`
+  / `StartUninstallTomcat` → `{job_id}`, `GetJobs`, `GetJobLog`. Jobs persist under
+  `/www/server/javahost/jobs/` with state (running/done/failed) + live log.
+- **Tasks & Logs UI sections:** a **Tasks** tab (job state · target · elapsed ·
+  view-log, auto-polled) and a **Logs** tab (unified app + task log viewer) — full
+  WAI-ARIA Tabs wiring, CSP-safe.
+- **Reverse-proxy sites:** `SetSite{app,domain?}` / `RemoveSite{app}` create a
+  `<app>.5d.bisotech.in` → loopback-port site (aaPanel site API preferred, clean
+  nginx-vhost fallback). `list_apps()` now returns the configured `domain`.
+- **Full Tomcat×Java×DB testbed:** `tests/e2e/matrix_full.py` (`make matrix`) —
+  full cartesian sweep (Tomcat 9/10.1/11 × eligible Java × {none,PG,MySQL,MariaDB,
+  Mongo} + JAR×Java×DB = 65 cells), systemd path with service-less fallback,
+  `--db-source aapanel|docker`, `--proxy` real-hostname asserts, `--dry-run`.
+- **DB demo apps + bytecode pinning:** per-engine `dbcheck.war` (now prints
+  `DB_OK <engine> <version>`) and a runnable JDBC `dbapp.jar`; `make_samples.py
+  --release {8,11,17,21}` pins `javac --release` to prove Java/runtime binding.
+- **Docs:** `docs/testbed.md` on-box campaign guide + testing/skill updates,
+  documenting the loopback→reverse-proxy invariant.
+
 ## [0.11.0] — 2026-06-06
 
 ### Changed

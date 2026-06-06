@@ -1,0 +1,312 @@
+# coding: utf-8
+"""
+Detached background-job runner (stdlib only).
+
+WHY: InstallJava/InstallTomcat do a large verified download + extract. Running
+that synchronously inside the panel's AJAX worker makes the request time out and
+the UI flashes a false error even though the install actually succeeded. This
+module runs those long operations as detached children the UI can poll.
+
+DESIGN (lifecycle):
+  start(kind, target, argv)
+    1. mint job_id = "<kind>-<UTC-stamp>-<6hex>" (os.urandom hex, no PRNG seeding)
+    2. create JOBS_ROOT/<job_id>/ and write meta.json {state="running", ...}
+    3. DOUBLE-FORK + setsid a detached child whose only job is to exec the
+       supervisor entrypoint:  python3 <this file> exec <job_dir> -- <argv...>
+       with stdout/stderr redirected into <job_dir>/output.log.
+    4. return job_id immediately (the panel request returns at once).
+
+  The supervisor (`exec` subcommand, runs in the detached child):
+    - re-opens output.log as fd 1/2, runs argv via subprocess,
+    - on completion writes state=done|failed + ended + message + pid back into
+      meta.json. The child is fully detached (setsid, no controlling tty, parent
+      reaped) so it survives the panel worker that spawned it.
+
+  States: "running" -> ("done" | "failed"). No queue: jobs run concurrently and
+  are self-finalizing; the store IS the state.
+
+SECURITY: job_id is validated against ^[A-Za-z0-9_.-]+$ and every path is
+realpath-contained under JOBS_ROOT before any open/join (closes traversal).
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from typing import Dict, List, Optional, Sequence
+
+JOBS_ROOT = "/www/server/javahost/jobs"
+
+# Plugin root (…/plugin/javahost) so the detached child can `import core.*`.
+_PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_VALID_STATES = ("running", "done", "failed")
+
+
+# --------------------------------------------------------------------------- #
+# id / path helpers (security boundary)
+# --------------------------------------------------------------------------- #
+def _new_job_id(kind: str) -> str:
+    kind = re.sub(r"[^A-Za-z0-9_-]+", "-", str(kind or "job")).strip("-") or "job"
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    rand = os.urandom(3).hex()  # 6 hex chars, CSPRNG (no Math.random pitfalls)
+    return "%s-%s-%s" % (kind, stamp, rand)
+
+
+def _validate_job_id(job_id: str) -> str:
+    job_id = str(job_id or "")
+    if not _JOB_ID_RE.match(job_id) or job_id in (".", ".."):
+        raise ValueError("invalid job_id: %r" % job_id)
+    return job_id
+
+
+def job_dir(job_id: str) -> str:
+    """Realpath-contained job directory under JOBS_ROOT (raises on traversal)."""
+    job_id = _validate_job_id(job_id)
+    root = os.path.realpath(JOBS_ROOT)
+    path = os.path.realpath(os.path.join(root, job_id))
+    if path != root and not path.startswith(root + os.sep):
+        raise ValueError("job path escapes JOBS_ROOT: %r" % job_id)
+    return path
+
+
+def _meta_path(jdir: str) -> str:
+    return os.path.join(jdir, "meta.json")
+
+
+def _log_path(jdir: str) -> str:
+    return os.path.join(jdir, "output.log")
+
+
+def _read_meta(jdir: str) -> Dict:
+    with open(_meta_path(jdir), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_meta(jdir: str, meta: Dict) -> None:
+    """Atomic meta write (temp + rename) so a poller never reads a half file."""
+    os.makedirs(jdir, exist_ok=True)
+    tmp = _meta_path(jdir) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    os.replace(tmp, _meta_path(jdir))
+
+
+# --------------------------------------------------------------------------- #
+# public API
+# --------------------------------------------------------------------------- #
+def start(kind: str, target, argv: Sequence[str]) -> str:
+    """Create a job, write running meta, spawn a detached child to run `argv`.
+
+    Returns the job_id immediately; the caller's request does NOT block on the
+    work. `argv` is a plain command list executed with no shell.
+    """
+    if isinstance(argv, str):
+        raise TypeError("argv must be a list, not a shell string")
+    argv = [str(a) for a in argv]
+    job_id = _new_job_id(kind)
+    jdir = job_dir(job_id)
+    os.makedirs(jdir, exist_ok=True)
+    now = time.time()
+    _write_meta(jdir, {
+        "id": job_id,
+        "kind": str(kind),
+        "target": None if target is None else str(target),
+        "state": "running",
+        "started": now,
+        "ended": None,
+        "message": "",
+        "pid": None,
+    })
+    # touch the log so read_log works before the child opens it
+    open(_log_path(jdir), "a").close()
+    _spawn_detached(jdir, argv)
+    return job_id
+
+
+def python_work(code: str) -> List[str]:
+    """Build an argv that runs `code` in a fresh interpreter with the plugin on
+    sys.path. Used by the panel to express the long op (java.install_temurin /
+    installer.install/uninstall) as a self-contained command for start()."""
+    bootstrap = (
+        "import sys; sys.path.insert(0, %r)\n" % _PLUGIN_DIR
+    ) + code
+    return [sys.executable or "python3", "-c", bootstrap]
+
+
+def _spawn_detached(jdir: str, argv: Sequence[str]) -> None:
+    """Double-fork + setsid so the supervisor outlives the panel request worker.
+
+    The grandchild execs the `exec` subcommand of this module, which runs the
+    real work and finalizes meta.json. We reap the intermediate child so no
+    zombie is left in the panel process.
+    """
+    supervisor = [sys.executable or "python3", os.path.abspath(__file__),
+                  "exec", jdir, "--"] + list(argv)
+    pid = os.fork()
+    if pid > 0:
+        os.waitpid(pid, 0)  # reap the short-lived intermediate child
+        return
+    # --- intermediate child ---
+    try:
+        os.setsid()
+        pid2 = os.fork()
+        if pid2 > 0:
+            os._exit(0)  # parent of grandchild exits; grandchild is reparented to init
+        # --- grandchild (the detached supervisor launcher) ---
+        # Redirect std streams into the job log; close inherited stdin.
+        devnull = os.open(os.devnull, os.O_RDONLY)
+        logfd = os.open(_log_path(jdir), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640)
+        os.dup2(devnull, 0)
+        os.dup2(logfd, 1)
+        os.dup2(logfd, 2)
+        env = dict(os.environ)
+        # Ensure the supervisor (and the work it imports) can `import core.*`.
+        env["PYTHONPATH"] = _PLUGIN_DIR + os.pathsep + env.get("PYTHONPATH", "")
+        os.execve(supervisor[0], supervisor, env) \
+            if os.path.isabs(supervisor[0]) else os.execvpe(supervisor[0], supervisor, env)
+    except BaseException:
+        os._exit(127)
+
+
+def list_jobs(limit: int = 50) -> List[Dict]:
+    """Newest-first meta dicts. Tolerates malformed/partial job dirs."""
+    out: List[Dict] = []
+    if not os.path.isdir(JOBS_ROOT):
+        return out
+    try:
+        names = os.listdir(JOBS_ROOT)
+    except OSError:
+        return out
+    metas: List[Dict] = []
+    for name in names:
+        if not _JOB_ID_RE.match(name):
+            continue
+        jdir = os.path.join(JOBS_ROOT, name)
+        if not os.path.isdir(jdir):
+            continue
+        try:
+            meta = _read_meta(jdir)
+        except Exception:
+            continue  # malformed: skip rather than crash the list
+        meta.setdefault("id", name)
+        metas.append(meta)
+    metas.sort(key=lambda m: m.get("started") or 0, reverse=True)
+    return metas[: max(0, int(limit))]
+
+
+def read_log(job_id: str, lines: int = 200) -> Dict:
+    """Tail of a job's combined output plus its current state/message."""
+    jdir = job_dir(job_id)
+    state, message = "unknown", ""
+    try:
+        meta = _read_meta(jdir)
+        state = meta.get("state", "unknown")
+        message = meta.get("message", "")
+    except Exception:
+        pass
+    log = _tail(_log_path(jdir), max(1, min(int(lines), 5000)))
+    return {"id": _validate_job_id(job_id), "state": state,
+            "message": message, "log": log}
+
+
+def prune(keep: int = 50) -> int:
+    """Remove all but the newest `keep` job dirs. Returns count removed."""
+    import shutil
+    metas = list_jobs(limit=10 ** 9)
+    removed = 0
+    for meta in metas[max(0, int(keep)):]:
+        try:
+            jdir = job_dir(meta.get("id", ""))
+        except ValueError:
+            continue
+        try:
+            shutil.rmtree(jdir)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _tail(path: str, lines: int) -> str:
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            block, data, found, pos = 4096, b"", 0, end
+            while pos > 0 and found <= lines:
+                step = min(block, pos)
+                pos -= step
+                f.seek(pos)
+                data = f.read(step) + data
+                found = data.count(b"\n")
+        return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+# --------------------------------------------------------------------------- #
+# supervisor entrypoint (runs in the detached child)
+# --------------------------------------------------------------------------- #
+def _supervise(jdir: str, argv: Sequence[str]) -> int:
+    """Run `argv`, capture rc, finalize meta.json. stdout/stderr already point at
+    output.log (the grandchild dup2'd them), so we let the child inherit them."""
+    jdir = os.path.realpath(jdir)
+    try:
+        meta = _read_meta(jdir)
+    except Exception:
+        meta = {"id": os.path.basename(jdir), "kind": "", "target": None,
+                "state": "running", "started": time.time(), "ended": None,
+                "message": "", "pid": None}
+    meta["pid"] = os.getpid()
+    meta["state"] = "running"
+    _write_meta(jdir, meta)
+
+    rc, message = 1, ""
+    try:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = _PLUGIN_DIR + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(list(argv), stdout=1, stderr=2, env=env)
+        rc = proc.returncode
+        message = "completed (rc=0)" if rc == 0 else "exited rc=%d" % rc
+    except Exception as e:  # spawn failure etc.
+        rc = 127
+        message = "supervisor error: %s" % e
+        try:
+            sys.stderr.write(message + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+    meta["state"] = "done" if rc == 0 else "failed"
+    meta["ended"] = time.time()
+    meta["message"] = message
+    try:
+        _write_meta(jdir, meta)
+    except Exception:
+        pass
+    return rc
+
+
+def _main(argv: List[str]) -> int:
+    # usage: jobs.py exec <job_dir> -- <argv...>
+    if len(argv) >= 4 and argv[1] == "exec" and "--" in argv:
+        sep = argv.index("--")
+        jdir = argv[2]
+        work = argv[sep + 1:]
+        if not work:
+            sys.stderr.write("no work argv after --\n")
+            return 2
+        return _supervise(jdir, work)
+    sys.stderr.write("usage: jobs.py exec <job_dir> -- <argv...>\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv))

@@ -78,7 +78,7 @@ def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = 
 # Full key set every app dict carries, so the UI can render in one round-trip
 # without per-app follow-up calls. Order is also the documented return shape.
 _APP_KEYS = ("app", "type", "status", "runtime", "tomcat", "java", "port",
-             "context", "enabled", "backend", "uptime")
+             "context", "enabled", "backend", "uptime", "domain")
 
 
 def _instance_backend(app: str) -> Optional[str]:
@@ -211,6 +211,12 @@ def _app_info(name: str) -> Dict:
             info["java"] = _java_major_from_home(env.get("JAVA_HOME", ""))
             info["runtime"] = ("Tomcat %d" % tmaj) if tmaj else None
             info["context"] = _read_context(base)
+        # Public reverse-proxy domain, if a site was published (defensive: None).
+        try:
+            from ..deploy import proxy as _proxy
+            info["domain"] = _proxy.read_domain(name)
+        except Exception:
+            info["domain"] = None
         if info["status"] == "active":
             try:
                 m = metrics(name)

@@ -28,6 +28,7 @@ from core.runtime import java                   # noqa: E402
 from core.tomcat import registry, installer, service, instance  # noqa: E402
 from core.deploy import war, proxy              # noqa: E402
 from core.db import engines as dbengines        # noqa: E402
+from core import jobs                            # noqa: E402
 
 
 class javahost_main(object):
@@ -109,6 +110,89 @@ class javahost_main(object):
             major = validate.tomcat_version(panel.attr(get, "version"))
             res = installer.install(major)  # resolves latest patch; staged + verified
             panel.log("UpdateTomcat", "tomcat %s -> %s" % (major, res["patch"]))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- async background jobs ----------------------------------------------
+    # The download+extract in InstallJava/InstallTomcat is too long for a single
+    # panel AJAX request (it times out and the UI flashes a false error). These
+    # endpoints return a job_id at once and run the work in a detached child the
+    # UI polls via GetJobs / GetJobLog. The synchronous endpoints above stay for
+    # CLI / back-compat.
+    def StartInstallJava(self, get):
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            argv = jobs.python_work(
+                "from core.runtime import java\n"
+                "java.install_temurin(%d)\n" % major)
+            job_id = jobs.start("install-java", major, argv)
+            panel.log("StartInstallJava", "jdk %d -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartInstallTomcat(self, get):
+        try:
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            argv = jobs.python_work(
+                "from core.tomcat import installer\n"
+                "installer.install(%r)\n" % major)
+            job_id = jobs.start("install-tomcat", major, argv)
+            panel.log("StartInstallTomcat", "tomcat %s -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartUninstallTomcat(self, get):
+        try:
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            argv = jobs.python_work(
+                "from core.tomcat import installer\n"
+                "installer.uninstall(%r)\n" % major)
+            job_id = jobs.start("uninstall-tomcat", major, argv)
+            panel.log("StartUninstallTomcat", "tomcat %s -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetJobs(self, get=None):
+        try:
+            return panel.ok({"jobs": jobs.list_jobs()})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetJobLog(self, get):
+        try:
+            job_id = panel.attr(get, "job_id")
+            lines = int(panel.attr(get, "lines", 200))
+            return panel.ok(jobs.read_log(job_id, lines))
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- reverse-proxy sites ------------------------------------------------
+    def SetSite(self, get):
+        """Publish <app> at <domain> (default <app>.5d.bisotech.in) reverse-proxied
+        to its loopback port. Tries aaPanel's site API, falls back to our nginx
+        vhost. Returns {domain, url}."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            domain = panel.attr(get, "domain") or proxy.default_domain(app)
+            domain = validate.domain(domain)
+            port = instance.detail(app).get("port") or instance.health(app).get("port")
+            if not port:
+                return panel.err("cannot resolve port for app %r (is it created?)" % app)
+            res = proxy.set_site(app, domain, int(port))
+            panel.log("SetSite", "%s -> %s (%s)" % (app, res["domain"], res.get("via")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RemoveSite(self, get):
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            res = proxy.remove_site(app)
+            panel.log("RemoveSite", app)
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))

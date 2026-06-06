@@ -86,11 +86,84 @@ Env knobs:
 The matrix maps each container's port onto a free loopback host port and waits
 for TCP readiness (plus a grace period for server init) before deploying.
 
+## 4. Full compatibility matrix (real host, cartesian sweep)
+
+`deploy_matrix.py` (section 3) is the quick path. For the **complete** campaign —
+every Tomcat line × every eligible Java major × every DB engine, plus the
+JAR×Java×DB leg — use `tests/e2e/matrix_full.py`. Full guide:
+[`docs/testbed.md`](../../../docs/testbed.md).
+
+```bash
+make samples                 # WAR/JAR fixtures
+make samples-db              # add dbcheck.war + dbapp.jar (DB probes)
+make matrix                  # full cartesian sweep, defaults
+python3 tests/e2e/matrix_full.py --dry-run        # print the plan, run nothing
+python3 tests/e2e/matrix_full.py --db-source docker
+python3 tests/e2e/matrix_full.py --db-source aapanel --proxy
+```
+
+Sweeps **Tomcat 9 / 10.1 / 11 × eligible Java × DB{none,postgresql,mysql,mariadb,
+mongodb}** + JAR×Java×DB. Eligible Java is gated by the per-line floor:
+
+| Tomcat | namespace | eligible Java |
+|--------|-----------|---------------|
+| 9      | `javax`   | 8, 11, 17, 21 |
+| 10.1   | `jakarta` | 11, 17, 21    |
+| 11     | `jakarta` | 17, 21        |
+
+Ineligible cells (e.g. Tomcat 11 / Java 11) are **skipped**, not failed.
+
+Flags:
+- `--db-source aapanel|docker` — both supported. `aapanel`: panel-managed DBs
+  (install + create db/user via the App Store). `docker`: ephemeral throwaway
+  containers (same recipes as section "Docker DB recipes", `docker rm -f` on exit).
+- `--proxy` — also create a reverse-proxy site per app and assert the **real
+  hostname** `<app>.5d.bisotech.in`, not just loopback.
+- `--dry-run` — print the planned cells and exit (run this first to check scope).
+
+**Bytecode pinning to prove Java binding:** `make samples`/`make_samples.py` take
+`--release N` to compile a fixture to a specific bytecode level. A `--release 21`
+artifact only runs on Java 21+, so `JAVAHOST_OK` on a Tomcat-9/Java-21 cell
+*proves* the app actually bound to Java 21 (not a lower default JDK).
+
+**Service path:** the runner **prefers the systemd path** (`javahost-<app>`
+units); on a hardened host where it cannot register services it **falls back to a
+service-less run** automatically. For an unattended full sweep, prefer hardening
+**OFF** (re-enable at teardown) — see `docs/testbed.md` and `docs/system-hardening.md`.
+
+## 5. Reverse-proxy / domains (`*.5d.bisotech.in`)
+
+Tomcat/JAR connectors bind to **`127.0.0.1:<port>` by design** — apps are **NOT**
+reachable on their raw public port. You reach them through a reverse-proxy domain.
+DNS `*.5d.bisotech.in` (and apex `5d.bisotech.in`) already points to the box.
+
+- **`SetSite{app, domain?}`** — create a reverse-proxy site → app's loopback port.
+  No `domain` ⇒ `<app>.5d.bisotech.in`. Uses the aaPanel site API, falls back to
+  writing an nginx vhost. `--proxy` does this and asserts the hostname for you.
+- **`RemoveSite{app}`** — remove that site (teardown).
+
+Verify: `curl http://<app>.5d.bisotech.in/ | grep JAVAHOST_OK` (off-box) or
+`curl http://127.0.0.1:<port>/` (on-box). Never expect the app on `public-ip:port`.
+
+## 6. Tasks & Logs (observability)
+
+Long ops (Install Java/Tomcat) run as **background jobs** —
+`StartInstallJava` / `StartInstallTomcat` / `StartUninstallTomcat` return a
+`{job_id}` immediately, so slow downloads **do not "false-error"** the request.
+
+- **Tasks** UI section: job status `running`/`done`/`failed` + elapsed + view-log.
+  Endpoints: `GetJobs` (list), `GetJobLog` (one job). Only treat an install as
+  failed when its task shows **failed**.
+- **Logs** UI section: **app logs** (per-app Catalina/JAR) + **task logs**
+  (per-job output). Look for `JAVAHOST_OK`/`DB_OK` in app logs, download/verify
+  lines in task logs.
+
 ## Expected markers
 - App served OK: response body contains `JAVAHOST_OK`
 - DB reachable: response body contains `DB_OK`; failures read `DB_FAIL:<reason>`
 - Namespace: `detect_namespace` returns `javax` (legacy) / `jakarta` (migrated)
 - Spring Boot: `detect_springboot` returns `True` for `boot.jar`
+- Java binding: a `--release N`-pinned fixture serving `JAVAHOST_OK` proves Java ≥ N
 
 ## Cleanup
 Both tools self-clean: instances are removed via `fs.safe_rmtree`, JAR processes
