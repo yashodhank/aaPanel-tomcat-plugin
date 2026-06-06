@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.6.0] — 2026-06-06
+
+### Added
+- **`AllowServices`** — one-click auto-whitelist that registers JavaHost in aaPanel
+  System Hardening's (`syssafe`) own process allowlist (`process_white` /
+  `process_white_rule`): append-only, config backed up, reversible. Registers via
+  the sanctioned allowlist — never bypasses (`core/compat/syssafe.py`).
+- **Execve-filter detection** — detects the global LD_PRELOAD anti-persistence
+  agent (aaPanel `bt_security` / `usranalyse` via `/etc/ld.so.preload`) that causes
+  `203/EXEC` "Tips from BT security", and surfaces it (`GetStatus.exec_filter_active`
+  + guidance). JavaHost will not disable/patch a global security preload; it reports
+  the operator's sanctioned toggle (`usranalyse-disable`/`-enable`).
+- `docs/system-hardening.md` rewritten to the full three-layer model.
+
+### Fixed
+- Plugin icon: registered at the correct `BTPanel/static/img/soft_ico` path (the
+  old path didn't exist); `install.sh` now handles both layouts + ships `ico-javahost.png`.
+
 ## [0.5.0] — 2026-06-06
 
 ### Added

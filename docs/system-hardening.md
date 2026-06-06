@@ -104,19 +104,28 @@ If you turn auto-handling off, pick one of these to let JavaHost manage services
 
 3. **Run on a host without tamper-protection** if your policy allows it.
 
-## Two hardening layers — what JavaHost handles vs. what you must allow
+## Three hardening layers — what JavaHost automates vs. what you authorize
 
-Aggressive aaPanel hardening has **two** separate controls:
+Aggressive aaPanel hardening has **three** independent controls. JavaHost
+automates the first two and **detects** the third:
 
-1. **Immutable service directories** (`chattr +i`) — JavaHost handles this
-   automatically (lift → write → re-lock, above). No action needed.
-2. **Daemon / process protection** (`daemon_service_lock` / "BT security") —
-   actively **blocks newly-created services from *executing*** their binary. You'll
-   see `status=203/EXEC` and `Tips from BT security !!!` in the journal, and the
-   service stays `activating (auto-restart)`.
+1. **Immutable service directories** (`chattr +i` on `/etc/systemd/system`,
+   `/etc/init.d`) — **auto-handled**: lift → write → re-lock (above). No action.
+2. **syssafe "Abnormal process" killer** (`process_white` / `process_white_rule`
+   allowlist) — **auto-registered**: call **`AllowServices`** (a one-click action /
+   endpoint) and JavaHost *appends* its markers (`/www/server/javahost`,
+   `catalina.sh`, `jsvc`) to syssafe's own allowlist (append-only, backed up,
+   reversible). This registers — it never bypasses.
+3. **Global LD_PRELOAD execve filter** (aaPanel **bt_security** / **usranalyse**,
+   via `/etc/ld.so.preload`) — this is what emits `status=203/EXEC` +
+   `Tips from BT security !!!` and keeps a new service in `activating (auto-restart)`.
+   It is a host-level anti-persistence agent with its **own** enable/disable
+   (`/usr/local/usranalyse/sbin/usranalyse-{disable,enable}`) and config — **not**
+   governed by syssafe's allowlist.
 
-JavaHost **detects layer 2 and stops with a clear error** — it deliberately does
-**not** try to bypass it:
+JavaHost **detects layer 3 and stops with a clear error** (also surfaced via
+`GetStatus.exec_filter_active`). It deliberately does **not** disable or patch a
+global security preload:
 
 > service installed but aaPanel process/daemon protection blocked it from
 > executing (status 203/EXEC, 'Tips from BT security'). … JavaHost will NOT bypass
@@ -126,16 +135,18 @@ JavaHost **detects layer 2 and stops with a clear error** — it deliberately do
 is exactly what malware does. A legitimate management plugin must not, so JavaHost
 asks *you* to authorize it instead.
 
-**To allow JavaHost services to run under layer 2**, do one of:
+**To allow JavaHost services to run under layer 3 (the execve filter)**, do one of:
 
-- In aaPanel **Security → daemon/process protection**, **whitelist** the
-  `javahost-*` services (or the `/www/server/javahost` path), then **Repair** the app.
-- Temporarily disable that specific protection while creating apps, then re-enable it.
-- Run JavaHost on a host without daemon-exec protection.
+- Run **`AllowServices`** first (registers JavaHost in syssafe's allowlist — layer
+  2), then in aaPanel **Security → bt_security** authorize JavaHost (or the
+  `/www/server/javahost` path) and **Repair** the app.
+- Temporarily disable the exec filter while creating apps, then re-enable it:
+  `/usr/local/usranalyse/sbin/usranalyse-disable` … `usranalyse-enable`.
+- Run JavaHost on a host without the LD_PRELOAD exec filter.
 
 Note: Tomcat/JDK **install**, **WAR/JAR deploy**, **port allocation**, **config
-rendering**, and even **direct foreground execution** all work under both layers —
-only *registering and auto-starting a managed service* requires layer-2 approval.
+rendering**, and even **direct foreground execution** all work under every layer —
+only *registering and auto-starting a managed service* requires layer-3 approval.
 
 ## Related installer behaviour (works regardless of hardening)
 

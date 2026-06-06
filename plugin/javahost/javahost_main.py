@@ -50,6 +50,13 @@ class javahost_main(object):
             can_sysd = service.have_systemd() and service.can_manage(service.SYSTEMD_DIR)
             can_initd = service.can_manage(service.INITD_DIR)
             hardening_locked = not (can_sysd or can_initd)
+            # Detect the global LD_PRELOAD execve filter (bt_security/usranalyse)
+            # that blocks new daemons — separate from the immutable-dir layer.
+            try:
+                from core.compat import syssafe
+                exec_filter = syssafe.exec_filter()
+            except Exception:
+                exec_filter = {"active": False, "guidance": ""}
             return panel.ok({
                 "java": jdks,
                 "tomcat": tomcats,
@@ -61,6 +68,8 @@ class javahost_main(object):
                     "Service directories are immutable (likely aaPanel 'System "
                     "Hardening'). Disable it (or lift chattr +i on /etc/systemd/system) "
                     "so JavaHost can register Tomcat/JAR services." if hardening_locked else ""),
+                "exec_filter_active": exec_filter.get("active", False),
+                "exec_filter_hint": exec_filter.get("guidance", ""),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -158,6 +167,17 @@ class javahost_main(object):
     def GetHealth(self, get):
         try:
             return panel.ok(instance.health(panel.attr(get, "app")))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def AllowServices(self, get=None):
+        """One-click: register JavaHost in aaPanel System Hardening's process
+        allowlist (append-only, reversible). Registers — never bypasses."""
+        try:
+            from core.compat import syssafe
+            res = syssafe.whitelist_javahost()
+            panel.log("AllowServices", "added=%s" % res.get("added"))
+            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 

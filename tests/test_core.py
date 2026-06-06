@@ -410,6 +410,36 @@ def test_verify_ok_when_active(monkeypatch):
     svc._verify_systemd_started("x")  # must not raise
 
 
+# ---- syssafe allowlist merge (auto-whitelist) ----
+def test_syssafe_merge_appends_missing():
+    from core.compat import syssafe
+    cfg = {"process": {"process_white": ["java"], "process_white_rule": ["/www/server/"]}}
+    out, added = syssafe.merge_whitelist(cfg)
+    assert "/www/server/javahost" in out["process"]["process_white_rule"]
+    assert "catalina.sh" in out["process"]["process_white"]
+    assert "/www/server/" in out["process"]["process_white_rule"]  # existing kept
+    assert added  # reported what it added
+
+
+def test_syssafe_exec_filter_detection(monkeypatch, tmp_path):
+    from core.compat import syssafe
+    f = tmp_path / "ld.so.preload"
+    f.write_text("/usr/local/usranalyse/lib/libusranalyse.so\n")
+    monkeypatch.setattr(syssafe, "LD_PRELOAD", str(f))
+    r = syssafe.exec_filter()
+    assert r["active"] is True and "usranalyse" in r["library"] and r["guidance"]
+    f.write_text("")
+    assert syssafe.exec_filter()["active"] is False
+
+
+def test_syssafe_merge_idempotent():
+    from core.compat import syssafe
+    cfg = {"process": {}}
+    cfg, _ = syssafe.merge_whitelist(cfg)
+    cfg, added2 = syssafe.merge_whitelist(cfg)  # second pass
+    assert added2 == []  # nothing new the second time
+
+
 # ---- engine registry ----
 def test_engine_registry():
     assert dbengines.get("postgres").name == "postgresql"
