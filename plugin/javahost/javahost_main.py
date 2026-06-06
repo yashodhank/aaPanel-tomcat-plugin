@@ -31,6 +31,7 @@ from core.db import engines as dbengines        # noqa: E402
 from core import jobs                            # noqa: E402
 from core import config                          # noqa: E402
 from core import maintenance                      # noqa: E402
+from core import dashboard                        # noqa: E402
 
 
 class javahost_main(object):
@@ -77,6 +78,15 @@ class javahost_main(object):
                 # UI can offer "<app>.<suffix>" defaults; empty => UI must prompt.
                 "site_suffix": config.site_suffix(),
             })
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetDashboard(self, get=None):
+        """Heavier operational aggregates (per-app CPU/RSS, SSL expiry, disk,
+        recent tasks) for the Dashboard. Kept separate from GetStatus so the
+        fast status poll stays cheap; the UI lazy-loads this on tab activation."""
+        try:
+            return panel.ok(dashboard.summary())
         except Exception as e:
             return panel.err(str(e))
 

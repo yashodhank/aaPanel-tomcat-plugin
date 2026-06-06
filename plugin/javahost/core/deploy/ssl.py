@@ -114,6 +114,25 @@ def read_ssl(app: str) -> bool:
         return False
 
 
+def read_ssl_not_after(app: str) -> Optional[str]:
+    """The cert's notAfter (ISO 8601) recorded in the SSL marker body when SSL
+    was enabled, or None when SSL is off / the marker is the legacy "1" sentinel
+    (cert present but expiry unknown). Cheap: a single small file read, NO openssl
+    or network call — this is what lets the dashboard flag expiring certs on its
+    hot path. Defensive: never raises."""
+    try:
+        path = _ssl_marker(app)
+        if not os.path.isfile(path):
+            return None
+        body = open(path, errors="replace").read().strip()
+    except Exception:
+        return None
+    # "1" (or empty) = enabled-but-expiry-unknown; only an ISO date is useful here.
+    if not body or body == "1":
+        return None
+    return body
+
+
 # --- issuance backends -------------------------------------------------------
 def _aapanel_apply(domain: str) -> Optional[bool]:
     """Issue via aaPanel's native ACME HTTP API on the loopback panel.

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.17.0] — 2026-06-06
+
+### Added (richer Dashboard)
+- **Operational Dashboard aggregates** via a new `GetDashboard` endpoint
+  (`core/dashboard.py`), kept separate from the fast `GetStatus` poll so it stays
+  cheap. The Dashboard now shows live tiles — **apps running / down / runtime-missing**,
+  **aggregate CPU % + RSS** across running apps (parallel `/proc` sampling, capped),
+  **apps with SSL + certs expiring <30 days**, and **instances / backups disk usage** —
+  plus cards for **Certificates expiring soon** and **Recent tasks**.
+- Cert expiry is read from the per-app SSL marker body (new
+  `ssl.read_ssl_not_after()`), so the dashboard flags expiring certs with **no
+  openssl/network call**. The heavier aggregates lazy-load on dashboard activation
+  and manual Refresh only.
+
 ## [0.16.2] — 2026-06-06
 
 ### Fixed (detail drawer correctness)

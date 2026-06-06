@@ -145,6 +145,7 @@
   .jh-stat-ic svg{width:20px;height:20px}
   .jh-stat-ic.hi{background:color-mix(in srgb,var(--hi) 24%,transparent);color:var(--hi-d)}
   .jh-stat-ic.ok{background:var(--ok-bg);color:var(--ok)}
+  .jh-stat-ic.off{background:var(--danger-bg);color:var(--danger)}
   .jh-stat-b{min-width:0}
   .jh-stat-k{font-size:12px;color:var(--muted);font-weight:600}
   .jh-stat-v{font-size:24px;font-weight:750;letter-spacing:-.02em;line-height:1.1}
@@ -607,6 +608,18 @@
         <div class="jh-card">
           <div class="jh-card-h"><div><h3>Environment</h3><p>Service backend &amp; limits</p></div></div>
           <div class="jh-rows" id="dash-env"><div class="jh-loading">Loading…</div></div>
+        </div>
+      </div>
+      <!-- operational aggregates (GetDashboard; lazy-loaded, heavier) -->
+      <div class="jh-grid" style="margin:var(--s4) 0" id="jh-ops-stats" aria-hidden="true"></div>
+      <div class="jh-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+        <div class="jh-card">
+          <div class="jh-card-h"><div><h3>Certificates expiring soon</h3><p>Let's Encrypt certs within 30 days</p></div></div>
+          <div class="jh-rows" id="dash-ssl"><div class="jh-loading">Loading…</div></div>
+        </div>
+        <div class="jh-card">
+          <div class="jh-card-h"><div><h3>Recent tasks</h3><p>Latest background jobs</p></div></div>
+          <div class="jh-rows" id="dash-tasks"><div class="jh-loading">Loading…</div></div>
         </div>
       </div>
     </section>
@@ -1425,6 +1438,54 @@
   function emptyInline(title, sub){
     return '<div class="jh-empty" style="padding:var(--s4)">'+ic('info')+
       '<b>'+esc(title)+'</b>'+(sub?'<div>'+esc(sub)+'</div>':'')+'</div>';
+  }
+  // Operational aggregates (GetDashboard) — heavier than GetStatus, lazy-loaded
+  // on dashboard activation + manual Refresh. Silently skipped on older builds.
+  function refreshDashboardOps(){
+    call('GetDashboard', {}, function(r){
+      if(failed(r)) return;                 // server build without GetDashboard
+      renderDashboardOps(payload(r));
+    });
+  }
+  function renderDashboardOps(d){
+    d = d || {};
+    var apps = d.apps || {}, res = d.resources || {}, sslb = d.ssl || {}, disk = d.disk || {};
+    var os = $('jh-ops-stats');
+    if(os){
+      os.setAttribute('aria-hidden', 'false');
+      os.innerHTML =
+        statTile('box', (apps.down ? 'off' : 'ok'),
+          (apps.running||0) + ' / ' + (apps.total||0), 'Apps running',
+          (apps.down||0) + ' down' + (apps.runtime_missing ? ' · ' + apps.runtime_missing + ' runtime-missing' : '')) +
+        statTile('cpu', '', (res.cpu_pct_total!=null?res.cpu_pct_total:0) + '%', 'Aggregate CPU',
+          (res.rss_mb_total!=null?res.rss_mb_total:0) + ' MB RSS · ' + (res.sampled||0) + ' sampled') +
+        statTile('globe', (sslb.expiring_soon ? 'off' : 'ok'), (sslb.with_ssl||0), 'Apps with SSL',
+          (sslb.expiring_soon||0) + ' expiring <30d') +
+        statTile('layers', '', (disk.instances_mb!=null?disk.instances_mb:0) + ' MB', 'Instances disk',
+          (disk.backups_mb!=null?disk.backups_mb:0) + ' MB backups');
+    }
+    var sslEl = $('dash-ssl');
+    if(sslEl){
+      var ex = sslb.expiring || [];
+      sslEl.innerHTML = ex.length ? ex.map(function(c){
+        var dl = c.days_left;
+        var cls = (dl!=null && dl < 7) ? 'danger' : 'off';
+        var lbl = (dl!=null) ? (dl < 0 ? 'expired' : dl + 'd left') : 'unknown';
+        return '<div class="jh-kv"><span>'+esc(c.app)+(c.domain?' <span class="jh-muted">'+esc(c.domain)+'</span>':'')+'</span>'+
+          '<span class="jh-badge '+cls+'"><span class="jh-dot"></span>'+esc(lbl)+'</span></div>';
+      }).join('') : emptyInline('All certificates healthy', 'No SSL certs expiring within 30 days.');
+    }
+    var rt = $('dash-tasks');
+    if(rt){
+      var jobs = d.recent_tasks || [];
+      rt.innerHTML = jobs.length ? jobs.map(function(j){
+        var b = jobStateBadge(j.state);
+        var kind = j.kind!=null ? j.kind : '—';
+        var target = j.target!=null ? j.target : '';
+        return '<div class="jh-kv"><span>'+esc(kind)+(target?' <span class="jh-muted">'+esc(target)+'</span>':'')+'</span>'+
+          '<span class="jh-badge '+b.cls+'"><span class="jh-dot"></span>'+esc(b.label)+'</span></div>';
+      }).join('') : emptyInline('No recent tasks', 'Background jobs will appear here.');
+    }
   }
 
   // =====================================================================
@@ -3045,6 +3106,7 @@
       renderApps(d.apps);
       renderDbPicker(d.apps);
     });
+    refreshDashboardOps();   // heavier aggregates, separate endpoint
   }
 
   // =====================================================================
@@ -3091,6 +3153,7 @@
     stopAppsPoll();                    // clear first so timers never stack
     stopTasksPoll();                   // (defined below; both clear on any switch)
     stopLogsAuto();
+    if(name === 'dashboard') refreshDashboardOps();
     if(name === 'apps') startAppsPoll();
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
