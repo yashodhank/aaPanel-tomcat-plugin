@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# JavaHost opt-in pre-commit hook.
+#
+# Enable with:  make hooks   (sets core.hooksPath=.githooks)
+#
+# Behavior:
+#   * ALWAYS py_compile every staged-relevant plugin .py (fast) so broken
+#     Python never lands.
+#   * If plugin/javahost/index.html is staged, run the offline a11y/CSP check
+#     and block on failure, then print the WCAG pre-commit CHECKLIST reminder.
+#   * No-op (exit 0 fast) when nothing relevant changed.
+#
+set -euo pipefail
+
+PY="${PY:-python3}"
+INDEX_PATH="plugin/javahost/index.html"
+
+# Staged file list (added/copied/modified/renamed), NUL-safe not needed for
+# the membership test below since we only grep fixed paths.
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+# 1. ALWAYS: py_compile all plugin Python (fast, guards every commit).
+if [ -d plugin/javahost ]; then
+	if ! find plugin/javahost -name '*.py' -print0 | xargs -0 -r "$PY" -m py_compile; then
+		echo "pre-commit: BLOCKED — Python failed to compile (see py_compile errors above)." >&2
+		exit 1
+	fi
+fi
+
+# 2. If index.html is staged: run the offline a11y/CSP suite + show checklist.
+if printf '%s\n' "$staged" | grep -qxF "$INDEX_PATH"; then
+	echo "pre-commit: ${INDEX_PATH} changed — running offline a11y/CSP check..."
+	if ! "$PY" -m pytest -q tests/test_ui_a11y.py; then
+		echo "" >&2
+		echo "pre-commit: BLOCKED — a11y/CSP check failed (tests/test_ui_a11y.py)." >&2
+		echo "  Fix the reported WCAG/CSP regression, then re-stage and commit." >&2
+		echo "  Run locally:  ${PY} -m pytest -q tests/test_ui_a11y.py" >&2
+		exit 1
+	fi
+
+	cat <<'CHECKLIST'
+
+  javahost-ui pre-commit CHECKLIST (eyeball these — see .claude/skills/javahost-ui/SKILL.md):
+  [ ] No external requests (no CDN/font/<link>/remote img/3rd-party fetch); still one self-contained file.
+  [ ] Every new CSS selector is .jh-scoped; new custom props on .jh; dark-mode token added.
+  [ ] Root capped: max-height:100vh; overflow-y:auto; overflow-x:hidden.
+  [ ] Dialog: focus moves in on open, Tab trapped, Esc closes, focus returns to opener; labelled (+described).
+  [ ] Popovers/menus: real Menu OR Disclosure (not a fake menu); Esc closes; focus returns to trigger; one open.
+  [ ] Section nav: one model only — Tabs (aria-selected + roving tabindex + aria-controls) OR nav (aria-current).
+  [ ] Status: success/info role="status" (polite), errors role="alert" (assertive); focus never moves to them.
+  [ ] Keyboard-operable; visible :focus-visible kept; focus not obscured; targets >=24x24px (or >=24px spacing).
+  [ ] Icon-only buttons have aria-label; every input has <label for>; decorative SVG aria-hidden="true".
+  [ ] Contrast: text >=4.5:1 (large >=3:1), UI/non-text >=3:1, in light AND dark; bright --accent/--hi as fills only.
+  [ ] State by text/shape not color alone; reduced-motion respected; no h-scroll at 320px; plain-language errors.
+
+CHECKLIST
+fi
+
+exit 0

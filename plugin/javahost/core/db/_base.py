@@ -131,11 +131,12 @@ class Engine(object):
         return None
 
     def guidance(self, version: Optional[str] = None, java_major: int = 17) -> str:
-        ver = ("%s %s" % (self.label, self.normalize(version))) if version else \
-              ("any %s (%s)" % (self.label, "/".join([self.versions[0], self.versions[-1]]) if self.versions else ""))
+        rng = ("%s–%s" % (self.versions[0], self.versions[-1])) if self.versions else ""
+        ver = ("%s %s" % (self.label, self.normalize(version))) if version else ("%s %s" % (self.label, rng))
         return (
-            "%s + Tomcat: add the driver (%s) to the app or CATALINA_HOME/lib; read "
-            "credentials from the environment via the generated app.env (0640, injected "
-            "by systemd EnvironmentFile) — never hardcode them in the WAR or source."
-            % (ver, self.recommend_driver(java_major))
+            "%s: add the driver %s to your app (WEB-INF/lib) or CATALINA_HOME/lib. "
+            "Read DB_URL / DB_USER / DB_PASSWORD from the environment — JavaHost writes "
+            "them to app.env (mode 0640) and systemd injects it via EnvironmentFile, so "
+            "credentials stay out of process listings and logs. Never hardcode them in "
+            "the WAR or source." % (ver, self.recommend_driver(java_major))
         )

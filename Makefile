@@ -2,6 +2,7 @@
 #
 #   make test      — compile + run unit tests
 #   make lint      — shellcheck + py_compile
+#   make hooks     — opt in to the local git pre-commit hook (.githooks)
 #   make zip       — build distributable plugin zip (javahost.zip)
 #   make deploy    — rsync plugin/javahost -> VPS plugin dir + restart panel (YOUR OWN panel)
 #   make restart   — clear pycache + restart panel
@@ -14,7 +15,7 @@ PLUGIN_DST   = /www/server/panel/plugin/$(PLUGIN_NAME)
 SRC          = plugin/$(PLUGIN_NAME)
 PY          ?= python3
 
-.PHONY: test lint zip deploy restart clean release
+.PHONY: test lint hooks zip deploy restart clean release
 
 test:
 	find $(SRC) -name '*.py' -print0 | xargs -0 $(PY) -m py_compile
@@ -23,6 +24,10 @@ test:
 lint:
 	@command -v shellcheck >/dev/null 2>&1 && shellcheck -S warning $(SRC)/*.sh || echo "shellcheck not installed (skipped)"
 	find $(SRC) -name '*.py' -print0 | xargs -0 $(PY) -m py_compile && echo "py_compile OK"
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "Enabled .githooks (pre-commit). Disable with: git config --unset core.hooksPath"
 
 zip:
 	rm -f $(PLUGIN_NAME).zip

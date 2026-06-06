@@ -287,5 +287,12 @@ class javahost_main(object):
             return panel.err(str(e))
 
     def GetProxyHint(self, get=None):
-        eng = dbengines.get("postgresql")
-        return panel.ok({"include": proxy.include_hint(), "db": eng.guidance()})
+        dbs = []
+        for name in ("postgresql", "mysql", "mariadb", "mongodb"):
+            e = dbengines.get(name)
+            dbs.append({"engine": e.name, "label": e.label, "default_port": e.default_port,
+                        "versions": "%s–%s" % (e.versions[0], e.versions[-1]),
+                        "driver": e.recommend_driver(), "guidance": e.guidance()})
+        return panel.ok({"include": proxy.include_hint(),
+                         "databases": dbs,
+                         "db": dbengines.get("postgresql").guidance()})  # back-compat

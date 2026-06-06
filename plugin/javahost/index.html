@@ -306,6 +306,18 @@
   @keyframes jh-slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
   @keyframes jh-slideout{to{opacity:0;transform:translateX(20px)}}
 
+  /* multi-engine DB guidance cards (Help tab) */
+  .jh-dbcards{display:grid;gap:var(--s3);
+    grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:var(--s2)}
+  .jh-dbcard{background:var(--surface-2);border:1px solid var(--line);
+    border-radius:var(--r);padding:var(--s3)}
+  .jh-dbcard h4{margin:0 0 4px;font-size:13px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+  .jh-dbcard .meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--s2)}
+  .jh-dbcard dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px var(--s2);font-size:12px}
+  .jh-dbcard dt{color:var(--muted-2);font-weight:600}
+  .jh-dbcard dd{margin:0;color:var(--text);min-width:0;word-break:break-word}
+  .jh-dbcard .guide{margin-top:var(--s2);font-size:12.5px;color:var(--ink-2);line-height:1.5}
+
   .jh-spread{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center}
   .jh-spread .jh-bar-spacer{flex:1}
   .jh-muted{color:var(--muted)}
@@ -1122,44 +1134,106 @@
     if(!d && !h) parts.push(sec + 's');   // only show seconds for short uptimes
     return parts.join(' ') || '0s';
   }
+  // Metrics auto-refresh state. Single timer; cleared on modal close so no
+  // timers leak. Paused while document.hidden, resumed on visibility return.
+  var METRICS = { timer:null, app:null, on:true, refreshFn:null };
+  var METRICS_INTERVAL = 4000;
+  function metricsTick(){
+    // skip the network call while the tab is hidden (cheap pause)
+    if(document.hidden) return;
+    if(METRICS.refreshFn) METRICS.refreshFn();
+  }
+  function startMetricsTimer(){
+    stopMetricsTimer();
+    if(METRICS.on) METRICS.timer = setInterval(metricsTick, METRICS_INTERVAL);
+  }
+  function stopMetricsTimer(){
+    if(METRICS.timer){ clearInterval(METRICS.timer); METRICS.timer = null; }
+  }
+  // pause/resume the polling when the tab visibility changes
+  document.addEventListener('visibilitychange', function(){
+    if(!METRICS.app) return;                 // metrics modal not open
+    if(document.hidden) stopMetricsTimer();
+    else if(METRICS.on) startMetricsTimer();
+  });
   function openMetrics(app){
     var refreshBtn = mkBtn('Refresh', 'ghost', function(b){ loadMetrics(app, b); }, 'refresh');
+    METRICS.app = app; METRICS.on = true;
+    METRICS.refreshFn = function(){ loadMetrics(app); };
     openModal({
       title:'Metrics', sub:app,
       body: '<div id="m-body"><div class="jh-loading">Loading metrics…</div></div>',
       footer: [ refreshBtn, mkBtn('Close', 'ghost', closeModal) ],
-      onMount: function(){ loadMetrics(app); }
+      onMount: function(){
+        loadMetrics(app);          // initial draw builds the in-place node structure
+        startMetricsTimer();
+      },
+      onClose: function(){          // teardown: never leak the interval
+        stopMetricsTimer();
+        METRICS.app = null; METRICS.refreshFn = null;
+      }
     });
   }
-  function metricRow(key, value){
-    return '<div class="jh-kv"><span>'+esc(key)+'</span><span class="jh-muted">'+esc(value)+'</span></div>';
+  function metricRow(key, value, id){
+    return '<div class="jh-kv"><span>'+esc(key)+'</span>'+
+      '<span class="jh-muted"'+(id?' id="'+id+'"':'')+'>'+esc(value)+'</span></div>';
+  }
+  // Build the static metrics layout once; subsequent refreshes only update
+  // text nodes in place via textContent (no modal/DOM recreation).
+  function buildMetricsShell(){
+    return '<div class="jh-kv"><span>Status</span>'+
+        '<span class="jh-badge ok" id="m-status"><span class="jh-dot"></span>up</span></div>'+
+      metricRow('PID', '—', 'm-pid')+
+      metricRow('Memory', '—', 'm-mem')+
+      metricRow('Threads', '—', 'm-thr')+
+      metricRow('Uptime', '—', 'm-up')+
+      '<div class="jh-spread" style="margin-top:var(--s3);justify-content:space-between">'+
+        '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">'+
+          '<input type="checkbox" id="m-auto" checked style="width:auto;cursor:pointer"> Auto-refresh</label>'+
+        '<span class="jh-muted" id="m-ts" style="font-size:12px">updating…</span>'+
+      '</div>';
   }
   function loadMetrics(app, btn){
     var box = $('m-body'); if(!box) return;
     busy(btn, true);
-    box.innerHTML = '<div class="jh-loading">Loading metrics…</div>';
     call('GetMetrics', {app:app}, function(r){
       busy(btn, false);
       var box2 = $('m-body'); if(!box2) return;
       var p = payload(r);
       if(failed(r)){
+        stopMetricsTimer();
         box2.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
         return;
       }
       var up = !!p.up, pid = p.pid;
       if(!up || pid == null){
+        stopMetricsTimer();
         box2.innerHTML = '<div class="jh-empty" style="padding:var(--s4)">'+ic('stop')+
           '<b>Not running</b><div>This app has no live process to report metrics for.</div></div>';
         return;
       }
-      box2.innerHTML =
-        '<div class="jh-kv"><span>Status</span>'+
-          '<span class="jh-badge ok"><span class="jh-dot"></span>up</span></div>'+
-        metricRow('PID', pid)+
-        metricRow('Memory', (p.rss_mb != null ? p.rss_mb + ' MB' : '—'))+
-        metricRow('Threads', (p.threads != null ? p.threads : '—'))+
-        metricRow('Uptime', fmtUptime(p.uptime_s));
+      // first successful draw builds the shell + wires the toggle; later draws
+      // only touch text nodes (textContent) so the modal isn't recreated.
+      if(!$('m-pid')){
+        box2.innerHTML = buildMetricsShell();
+        var auto = $('m-auto');
+        if(auto) auto.addEventListener('change', function(){
+          METRICS.on = auto.checked;
+          if(METRICS.on){ startMetricsTimer(); metricsTick(); }
+          else stopMetricsTimer();
+        });
+      }
+      setText('m-pid', pid);
+      setText('m-mem', p.rss_mb != null ? p.rss_mb + ' MB' : '—');
+      setText('m-thr', p.threads != null ? p.threads : '—');
+      setText('m-up', fmtUptime(p.uptime_s));
+      var ts = $('m-ts'); if(ts) ts.textContent = 'updated just now · ' + nowTime();
     });
+  }
+  function setText(id, v){ var n = $(id); if(n) n.textContent = String(v == null ? '—' : v); }
+  function nowTime(){
+    var d = new Date(), p = function(x){ return (x<10?'0':'')+x; };
+    return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
   }
 
   // =====================================================================
@@ -1271,6 +1345,28 @@
   // =====================================================================
   // HELP TAB — proxy hint
   // =====================================================================
+  // Render one DB engine as an accessible mini-card: label heading, version
+  // range + default port badges, recommended driver in <code>, guidance text.
+  function dbGuideCard(e){
+    var label = e.label || e.engine || 'Database';
+    var vers = e.versions || [];
+    var range = vers.length ? (vers.length > 1 ? (vers[0] + '–' + vers[vers.length - 1]) : String(vers[0])) : '';
+    var port = (e.default_port != null && e.default_port !== '') ? String(e.default_port) : '—';
+    var drv = e.driver || e.driver_class || '';
+    return '<div class="jh-dbcard">'+
+      '<h4>'+ic('db')+esc(label)+'</h4>'+
+      '<div class="meta">'+
+        (range ? '<span class="jh-badge neutral">v '+esc(range)+'</span>' : '')+
+        '<span class="jh-badge neutral">port '+esc(port)+'</span>'+
+      '</div>'+
+      '<dl>'+
+        (vers.length ? '<dt>Versions</dt><dd>'+esc(vers.map(String).join(', '))+'</dd>' : '')+
+        '<dt>Default port</dt><dd>'+esc(port)+'</dd>'+
+        '<dt>Driver</dt><dd>'+(drv ? '<code>'+esc(drv)+'</code>' : '<span class="jh-muted">—</span>')+'</dd>'+
+      '</dl>'+
+      (e.guidance ? '<div class="guide">'+esc(e.guidance)+'</div>' : '')+
+    '</div>';
+  }
   function loadProxyHint(){
     call('GetProxyHint', {}, function(r){
       var p = payload(r), box = $('help-proxy');
@@ -1279,7 +1375,16 @@
       if(p.include){
         html += '<pre class="jh-pre">'+esc(p.include)+'</pre>';
       }
-      if(p.db){
+      // Multi-engine DB guidance — render ALL engines as stacked mini-cards.
+      var engines = (p.databases && p.databases.length) ? p.databases : null;
+      if(engines){
+        html += '<div style="margin-top:var(--s4)">'+
+          '<h3 style="margin:0 0 4px;font-size:13px;font-weight:700;letter-spacing:-.01em">Database connection guidance</h3>'+
+          '<p class="jh-muted" style="margin:0;font-size:12px">Recommended driver and defaults per supported engine.</p>'+
+          '<div class="jh-dbcards">'+ engines.map(dbGuideCard).join('') +'</div>'+
+        '</div>';
+      } else if(p.db){
+        // legacy single-string fallback
         html += '<div class="jh-alert info" style="margin-top:var(--s3)">'+ic('info')+'<div>'+esc(p.db)+'</div></div>';
       }
       box.innerHTML = html || '<div class="jh-muted">No hint available.</div>';

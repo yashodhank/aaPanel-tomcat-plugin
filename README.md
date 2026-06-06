@@ -37,6 +37,8 @@ are **downloaded and integrity-verified at runtime**, not bundled.
 
 ## Documentation
 
+- [User Guide](docs/user-guide.md) — task-oriented walkthrough of the UI
+  (install, runtimes, apps, WAR/JAR deploy, databases, proxy, hardening).
 - [System Hardening](docs/system-hardening.md) — runs safely under aaPanel
   System Hardening; auto lift/re-lock with the `manage_hardening` toggle.
 - [Single-host vs. multi-server](docs/single-vs-multi-mode.md) — JavaHost is

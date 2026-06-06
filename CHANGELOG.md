@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.0] — 2026-06-06
+
+### Added
+- **Auto-refreshing metrics:** the per-app Metrics modal now polls `GetMetrics`
+  every 4s (in-place updates, auto-refresh toggle, timestamp, pauses when hidden,
+  interval cleared on close).
+- **`docs/user-guide.md`** — task-oriented walkthrough of every UI section mapped to
+  its backend endpoint (+ `docs/images/` placeholder for screenshots).
+- **Opt-in git pre-commit hook** (`.githooks/pre-commit`, `make hooks`) — runs the
+  offline a11y/CSP lint + py_compile and prints the `javahost-ui` checklist when
+  `index.html` changes.
+
+### Changed
+- **Database guidance** rewritten and made multi-engine: Help now shows
+  PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0) —
+  each with version range, default port, recommended driver, and the secret-safe
+  `app.env` (DB_URL/DB_USER/DB_PASSWORD) pattern. `GetProxyHint` returns a
+  `databases[]` array.
+
 ## [0.8.0] — 2026-06-06
 
 ### Accessibility (WCAG 2.2 AA / WAI-ARIA APG)

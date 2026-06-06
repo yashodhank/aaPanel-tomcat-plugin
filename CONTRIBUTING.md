@@ -53,6 +53,21 @@ as argument lists via `core/util/shell.run` (never `shell=True`), and use
 `core/util/fs` for writes/removals so the managed-marker and managed-root
 guardrails stay intact.
 
+## Git hooks (optional)
+
+A local pre-commit hook lives in `.githooks/`. It is **opt-in** — enable it once
+per clone:
+
+```bash
+make hooks    # sets core.hooksPath=.githooks
+```
+
+Once enabled, the hook `py_compile`s the plugin Python on every commit, and when
+`plugin/javahost/index.html` is staged it runs the offline a11y/CSP check
+(`pytest -q tests/test_ui_a11y.py`) and prints the **javahost-ui** WCAG
+checklist. A failing check blocks the commit. Disable with
+`git config --unset core.hooksPath`.
+
 ## Branch + PR workflow
 
 1. Fork (or branch off `main` if you have access). Do not commit directly to
