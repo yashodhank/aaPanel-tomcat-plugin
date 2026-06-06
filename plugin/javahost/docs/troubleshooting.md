@@ -102,6 +102,31 @@ Reinstall) or repoint the app to a present JDK, then restart. Force-uninstalling
 JDK now also stops its dependents so they fail cleanly rather than lingering as
 zombie JVMs that falsely report healthy.
 
+## Drawer shows "runtime missing"
+
+The app's pinned `JAVA_HOME` no longer exists — a JDK the app uses was
+uninstalled (typically a `Force` uninstall). The app is **alive but will die on
+restart**. Reinstall that Java major (**Runtimes → Install / Reinstall**) or
+repoint the app to a present JDK, then restart. This is the `runtime_ok: false`
+state described above.
+
+## Site & SSL says "HTTP only / not enabled"
+
+This is **expected**, not an error: the site simply has no HTTPS configured. The
+drawer shows a neutral **"HTTP only" / "not enabled"** rather than a red alarm.
+To provision a certificate, enable the **per-site HTTPS toggle** (row / drawer
+Overview, `SetSiteSSL`). Red errors (no redirect, HTTPS unreachable, cert
+expired) appear only once HTTPS is actually on.
+
+## "Installed locally: no" for MongoDB (or any engine)
+
+The Databases support matrix' **Installed locally** column detects a DB
+**server/client binary on the host** (`detect_local` → e.g. `psql`, `mysql`,
+`mariadb`, `mongod`). A database that runs only in **Docker** or on a **remote**
+host shows **no** — yet apps still connect to it fine over TCP. It is a
+host-binary probe, **not** a connectivity check, so "no" is not a problem as long
+as your `SetDbEnv` host/port are reachable.
+
 ## A long install looks like it "failed" (it didn't)
 
 JDK/Tomcat install/reinstall/uninstall and the app lifecycle run as **async

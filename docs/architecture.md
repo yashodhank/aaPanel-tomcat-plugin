@@ -88,3 +88,95 @@ input) and returns the panel's standard envelope via `core.compat.aapanel`:
 `{status: False, msg: msg}`. All exceptions are caught at the method boundary
 and converted to `panel.err(str(e))`. Mutating actions also call `panel.log`.
 Secrets (DB passwords) are never echoed back in responses.
+
+## Diagrams
+
+These render natively on GitHub (Mermaid).
+
+### Component map
+
+The panel only ever touches the thin `javahost_main` glue; every real action is
+delegated to a `core/` module, which in turn drives a concrete system target.
+
+```mermaid
+flowchart TD
+    panel["aaPanel panel<br/>(POST /plugin)"] --> main["javahost_main<br/>(thin glue, core.compat.aapanel)"]
+
+    main --> runtime["runtime/java"]
+    main --> tomcat["tomcat/<br/>installer · instance · service · registry"]
+    main --> deploy["deploy/<br/>war · jar · proxy · ssl · sitestatus"]
+    main --> db["db/engines"]
+    main --> jobs["jobs"]
+    main --> maint["maintenance"]
+    main --> syssafe["compat/syssafe"]
+
+    runtime --> adoptium["Adoptium API + downloads<br/>runtimes/jdk-*"]
+    tomcat --> apache["Apache downloads<br/>tomcat/&lt;major&gt;"]
+    tomcat --> units["systemd units /<br/>init.d scripts"]
+    instanceData["/www/server/javahost<br/>(data root: instances · jobs · vhost)"]
+    tomcat --> instanceData
+    deploy --> nginx["nginx vhosts"]
+    deploy --> certbot["certbot / Let's Encrypt"]
+    deploy --> instanceData
+    db --> engines["4 DB engines<br/>PostgreSQL · MySQL · MariaDB · MongoDB"]
+    jobs --> instanceData
+    maint --> instanceData
+    syssafe --> units
+```
+
+### Request flow
+
+Synchronous endpoints return the `{status, msg}` envelope inline. Long-running
+endpoints (`StartInstallTomcat`, `StartAppAction`, …) return a `{job_id}` at once
+and the UI polls `GetJobs` / `GetJobLog` until the job state leaves `running`.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (index.html)
+    participant P as Panel /plugin
+    participant M as "javahost_main.Method"
+    participant C as core/ module
+
+    B->>P: POST /plugin?action=a&name=javahost&s=Method
+    P->>M: instance.Method(get)
+    M->>C: validated core call
+    C-->>M: result / raises
+    M-->>P: {status, msg}
+    P-->>B: {status, msg}
+
+    Note over B,C: Async variants return {job_id} immediately
+    B->>M: GetJobs / GetJobLog (poll)
+    M-->>B: state running → done|failed + log tail
+```
+
+### SSL provisioning decision (`SetSiteSSL`)
+
+aaPanel's bundled ACME (`sewer`) is broken against pyOpenSSL ≥24 on some hosts —
+that is why the certbot fallback exists.
+
+```mermaid
+flowchart TD
+    start["SetSiteSSL(enable=true)"] --> http["Write HTTP vhost +<br/>reachable ACME challenge"]
+    http --> native{"aaPanel native ACME?<br/>(/acme apply_cert_api,<br/>only if api_sk configured)"}
+    native -->|try| diskA{"Cert on disk?"}
+    diskA -->|yes| doneA["Done (via=aapanel)"]
+    diskA -->|no| cb["certbot --webroot"]
+    native -->|not configured| cb
+    cb --> diskB{"Cert on disk?"}
+    diskB -->|yes| https["Rewrite vhost ssl=True<br/>(443 + 80→443 redirect)<br/>+ install renewal deploy-hook"]
+    https --> doneB["Done (via=certbot)"]
+    diskB -->|no| keep["Keep HTTP, return error"]
+```
+
+### 3-layer hardening handling
+
+JavaHost coexists with three independent aaPanel protections. It manages the
+first two on the operator's behalf and only **detects** (never bypasses) the
+third.
+
+```mermaid
+flowchart TD
+    one["(1) Immutable service dirs<br/>(chattr +i)"] --> oneAct["lift → write unit → relock immediately"]
+    two["(2) syssafe process killer"] --> twoAct["AllowServices: append app to allowlist<br/>(append-only, reversible)"]
+    three["(3) LD_PRELOAD execve filter<br/>(bt_security / usranalyse)"] --> threeAct["DETECT only — surface guidance,<br/>never bypass"]
+```

@@ -156,6 +156,28 @@ action}`, which runs the lifecycle change as a background job so a slow systemd
 transition can't time out the panel (watch it in [Tasks](#9-tasks--logs)). The
 list and health auto-refresh (~5s) while the section is visible.
 
+#### The deploy lifecycle
+
+End to end, an app goes from creation to a published HTTPS endpoint with a
+database in five steps — each one a distinct endpoint:
+
+```mermaid
+sequenceDiagram
+    participant U as You (UI)
+    participant J as JavaHost
+
+    U->>J: Create app (CreateApp → instance.create)
+    Note over J: scaffold CATALINA_BASE → resolve JDK<br/>(default = Tomcat line min_java) → render<br/>server.xml (loopback connector) → setenv →<br/>systemd unit → start
+    U->>J: Deploy WAR (UploadWar)
+    Note over J: zip-slip-safe extract → webapps/ROOT
+    U->>J: Publish (SetSite)
+    Note over J: nginx vhost (app.site_suffix) → loopback port
+    U->>J: HTTPS (SetSiteSSL)
+    Note over J: issue cert + rewrite vhost to 443
+    U->>J: Database (SetDbEnv)
+    Note over J: secret-safe app.env
+```
+
 ### Create a Tomcat app
 
 Click **Create app**.
@@ -194,6 +216,37 @@ Clicking a row opens a focus-trapped, Esc-closable **drawer** with tabs:
   current DB env (`GetDbEnv`, secret-safe — see
   [section 5](#5-databases--connect-a-java-app-to-a-database)). Only the visible
   tab polls.
+
+### Status & health, explained
+
+The Applications list and drawer surface **four independent signals**. They are
+easy to conflate, so each means something specific:
+
+| Signal | Source | Means | "Bad" looks like |
+|--------|--------|-------|------------------|
+| **status** | systemd/init.d unit state | the service unit is `running` / `stopped` / `failed` | `failed` / `stopped` |
+| **health** | live `http://127.0.0.1:<port>/` loopback probe | the app actually answers HTTP (`up` / `down`) | `down` while status says running |
+| **runtime_ok** | the app's pinned `JAVA_HOME` still exists on disk | when `false`, a red **"runtime missing"** badge shows — the app may be **running + up** on an already-started JVM yet **won't survive a restart** | red **runtime missing** badge |
+| **Site & SSL** | on-demand `GetSiteStatus` (drawer) | domain + HTTP→HTTPS redirect + HTTPS reachability + cert validity/expiry | red errors *only when HTTPS is on* |
+
+Key nuance: for a site with **no SSL enabled**, the Site & SSL block shows a
+neutral **"HTTP only" / "not enabled"** — that is **expected, not an error**. Red
+errors (no redirect, HTTPS unreachable, cert expired) appear only when HTTPS is
+actually turned on for the site.
+
+The drawer also shows live metrics from `GetMetrics`: **CPU %** (sampled over a
+short interval), **Memory**, **Threads**, and **Uptime**.
+
+```mermaid
+flowchart LR
+    A["App row / drawer"] --> S["status<br/>(unit running/stopped/failed)"]
+    A --> H["health<br/>(loopback probe up/down)"]
+    A --> R["runtime_ok<br/>(pinned JAVA_HOME exists?)"]
+    A --> X["Site &amp; SSL<br/>(GetSiteStatus, on demand)"]
+    R -->|false| badge["red 'runtime missing':<br/>alive now, dies on restart"]
+    X -->|no SSL| neutral["neutral 'HTTP only / not enabled'<br/>(expected, not an error)"]
+    X -->|SSL on| err["red errors if redirect/HTTPS/cert fail"]
+```
 
 ### Deploy a WAR
 
@@ -236,8 +289,10 @@ pill):
 - **Health** — the row's health pill is set from the **batched** `GetHealthAll`
   (one round-trip per poll for all apps; `up`/`down`, port, HTTP code), refreshed
   automatically while the section is visible.
-- **Metrics** tab — `GetMetrics` reads PID, RSS memory, thread count, and uptime
-  from `/proc`; auto-refreshes while open.
+- **Metrics** tab — `GetMetrics` reads PID, **CPU %** (sampled), RSS memory,
+  thread count, and uptime from `/proc`; auto-refreshes while open.
+
+  ![Drawer — Metrics tab](images/metrics.png)
 
 ---
 
@@ -401,6 +456,24 @@ in **Security → bt_security**, then **Repair** the app.
 Long operations — JDK/Tomcat install, reinstall, uninstall, and the async app
 lifecycle — run as **detached background jobs** so they can't time out the panel
 AJAX request (a slow download no longer flashes a false error).
+
+#### How an async job runs
+
+```mermaid
+sequenceDiagram
+    participant U as UI
+    participant M as javahost_main
+    participant C as Detached child (jobs.start)
+
+    U->>M: StartInstallTomcat / StartAppAction / …
+    M->>C: jobs.start double-forks a detached child
+    M-->>U: {job_id} (immediately)
+    Note over C: child runs the work →<br/>writes meta.json state running → done|failed<br/>streams output.log
+    loop until state ≠ running
+        U->>M: GetJobLog(job_id)
+        M-->>U: state + log tail
+    end
+```
 
 ### Tasks
 

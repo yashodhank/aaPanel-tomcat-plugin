@@ -4,11 +4,14 @@ This directory holds the screenshots referenced by the docs (chiefly
 [`../user-guide.md`](../user-guide.md)). The Markdown links each file by the
 **exact** name below; keep filenames as listed so the links resolve.
 
-> **Status:** 21 of these were **captured against the live v0.16.1 UI in Fullscreen
-> mode** (2026-06-06) and are committed here. The one exception is
-> `hardening-banner.png`, which only appears when aaPanel "System Hardening" has
-> locked the service directories — capture it on a hardened host and drop it in.
-> To refresh any shot, follow the capture notes below (Fullscreen-first).
+> **Status:** captured against the live **v0.16.2 UI in Fullscreen mode**
+> (2026-06-06) and committed here. The `drawer-overview` / `drawer-site-ssl`
+> shots and the new `metrics.png` reflect the **v0.16.2 drawer fixes** (real
+> CPU%/uptime/threads, runtime-missing signal, neutral Site & SSL for HTTP-only
+> apps). The one exception is `hardening-banner.png`, which only appears when
+> aaPanel "System Hardening" has locked the service directories — capture it on a
+> hardened host and drop it in. To refresh any shot, follow the capture notes
+> below (Fullscreen-first).
 
 ## How to capture
 
@@ -33,8 +36,9 @@ This directory holds the screenshots referenced by the docs (chiefly
 | `java-in-use.png` | The **"Java N is in use"** dialog after attempting to uninstall an in-use JDK — count + scrollable dependents list + **Force**. | Uninstall blocked: the JDK's dependent apps, with a Force override. |
 | `applications.png` | **Applications** tab: the rich list — type, runtime chip, status badge, **health pill**, inline Start/Stop/Restart, Open ↗, HTTPS toggle. (Show one row with a **"runtime missing"** badge if available.) | The Applications list with health pills, runtime chips, and inline lifecycle. |
 | `create-app.png` | The **Create app** dialog: name / Tomcat version / **Java (JDK pin)** / port / memory. | Creating a Tomcat app, with the optional JDK pin. |
-| `drawer-overview.png` | An app row clicked open → the slide-over **drawer**, **Overview** tab (type/runtime/status/health, Open link, HTTPS toggle). | The app detail drawer — Overview. |
-| `drawer-site-ssl.png` | Same drawer, the **Site & SSL** block: domain, cert validity/expiry, HTTP→HTTPS redirect, HTTPS reachability (`GetSiteStatus`). | The drawer's Site & SSL block — certificate and reachability status. |
+| `drawer-overview.png` | An app row clicked open → the slide-over **drawer**, **Overview** tab (type/runtime/status/health, Live CPU%, uptime, threads, Open link, HTTPS toggle; a **runtime-missing** row if the pinned JDK is gone). | The app detail drawer — Overview with live metrics. |
+| `drawer-site-ssl.png` | Same drawer, the **Site & SSL** block (`GetSiteStatus`): domain, cert validity/expiry, HTTP→HTTPS redirect, HTTPS reachability — shown here in the **neutral HTTP-only** state (HTTP only / not enabled / no cert) for an app without SSL. | The drawer's Site & SSL block — neutral for an HTTP-only app. |
+| `metrics.png` | The drawer **Metrics** tab: PID, memory, **Live CPU %** (real `/proc` sampling), threads, and uptime. | The drawer's Metrics tab — live CPU%, memory, threads, uptime. |
 | `https-toggle.png` | The **per-site HTTPS toggle** (row or drawer Overview) mid-action — `SetSiteSSL`. | Per-site HTTPS toggle (Let's Encrypt, native ACME → certbot fallback). |
 | `deploy-war.png` | The **Deploy WAR** dialog: file picker + **Migrate & deploy** option. | Deploying a WAR (with the javax→jakarta migrate option). |
 | `deploy-jar.png` | The **Deploy JAR** dialog: Java major + Spring profiles + fat-JAR picker. | Deploying a Spring Boot / executable JAR. |

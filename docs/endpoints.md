@@ -62,7 +62,7 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 | `GetAppDetail` | `app` | Per-app detail (`instance.detail`). |
 | `GetLogs` | `app`, `lines?` (200, clamped) | Memory-safe per-app log tail. |
 | `GetHealth` | `app` | Single-app loopback health probe. |
-| `GetMetrics` | `app` | pid, RSS MB, threads, uptime from `/proc`. |
+| `GetMetrics` | `app` | `{pid, cpu_pct, rss_mb, threads, uptime_s}` from `/proc`. **`cpu_pct`** (new in v0.16.2) is sampled over a short interval — not the thread count. |
 
 ## Deploy
 

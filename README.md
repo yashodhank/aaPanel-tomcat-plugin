@@ -1,6 +1,15 @@
 # JavaHost — Tomcat & Java Runtime Manager for aaPanel/BaoTa
 
+[![CI](https://github.com/yashodhank/aaPanel-tomcat-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/yashodhank/aaPanel-tomcat-plugin/actions/workflows/ci.yml)
+[![Release](https://github.com/yashodhank/aaPanel-tomcat-plugin/actions/workflows/release.yml/badge.svg)](https://github.com/yashodhank/aaPanel-tomcat-plugin/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/yashodhank/aaPanel-tomcat-plugin?sort=semver)](https://github.com/yashodhank/aaPanel-tomcat-plugin/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+<br>
+![Tomcat 9 · 10.1 · 11](https://img.shields.io/badge/Tomcat-9%20%C2%B7%2010.1%20%C2%B7%2011-F8DC75?logo=apachetomcat&logoColor=black)
+![Java 8 · 11 · 17 · 21](https://img.shields.io/badge/Java-8%20%C2%B7%2011%20%C2%B7%2017%20%C2%B7%2021-007396?logo=openjdk&logoColor=white)
+![Databases: PostgreSQL · MySQL · MariaDB · MongoDB](https://img.shields.io/badge/DB-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB%20%C2%B7%20MongoDB-336791)
+![aaPanel / BaoTa](https://img.shields.io/badge/aaPanel%20%2F%20BaoTa-third--party%20plugin-20A53A)
+![clean-room](https://img.shields.io/badge/implementation-clean--room-success)
 
 An **independent, open-source** aaPanel/BaoTa-style plugin to install and manage
 **Apache Tomcat 9 / 10.1 / 11** and **Java 8 / 11 / 17 / 21**, deploy WAR and
@@ -25,6 +34,58 @@ independently-developed plugins). Licensed under **Apache-2.0** — see
 
 Third-party runtimes (Apache Tomcat, Eclipse Temurin/OpenJDK, PostgreSQL JDBC)
 are **downloaded and integrity-verified at runtime**, not bundled.
+
+## How it works
+
+JavaHost is **host-local**: a single-file UI (`index.html`) talks to a thin
+Python entrypoint (`javahost_main.py`) over the panel's documented convention
+`POST /plugin?action=a&name=javahost&s=<Method>`, which delegates to a
+panel-agnostic `core/` library. The only place that touches anything
+aaPanel-specific is `core/compat/` — everything else is portable Python that
+drives **systemd/init.d**, **Nginx**, **certbot**, and the **Adoptium/Apache**
+download mirrors.
+
+```mermaid
+flowchart LR
+    UI["index.html<br/>(Dashboard · Apps · Runtimes ·<br/>Databases · Tasks · Logs · Settings)"]
+    MAIN["javahost_main.py<br/>(thin endpoint glue → {status,msg})"]
+    subgraph core["core/ — portable library (no panel coupling)"]
+        RT["runtime/java<br/>detect · install · uninstall"]
+        TC["tomcat/<br/>installer · instance · service · registry"]
+        DP["deploy/<br/>war · jar · proxy · ssl · sitestatus"]
+        DB["db/engines<br/>support matrix · app.env"]
+        JOBS["jobs<br/>detached async runner"]
+        MNT["maintenance<br/>danger-zone wipe"]
+        CMP["compat/syssafe<br/>← only panel boundary"]
+    end
+    subgraph sys["host"]
+        SVC["systemd / init.d"]
+        NGX["Nginx vhosts"]
+        CB["certbot / aaPanel ACME"]
+        NET["Adoptium · Apache mirrors"]
+        FS["/www/server/javahost"]
+    end
+
+    UI -->|"POST /plugin?s=Method"| MAIN --> core
+    RT --> NET & FS
+    TC --> NET & SVC & FS
+    DP --> NGX & CB & SVC
+    JOBS --> FS
+    CMP --> SVC & NGX
+```
+
+An app goes from creation to a published, TLS-terminated endpoint with a database
+in five endpoint-backed steps — **Create** (`CreateApp` → scaffold
+`CATALINA_BASE`, resolve the JDK, render a loopback `server.xml`, write the
+systemd unit, start) → **Deploy** (`UploadWar`, zip-slip-safe) → **Publish**
+(`SetSite` → Nginx vhost at `<app>.<site_suffix>`) → **HTTPS** (`SetSiteSSL` →
+aaPanel-native ACME, **certbot `--webroot` fallback**) → **Connect**
+(`SetDbEnv` → secret-safe `app.env`). Long-running actions (installs,
+Start/Stop/Restart) run as **detached background jobs** so a slow systemd
+transition can't time out the panel; the UI polls `GetJobs`/`GetJobLog` and
+surfaces them in **Tasks**. See [Architecture](docs/architecture.md) and the
+[User Guide](docs/user-guide.md) for the full diagrams (deploy lifecycle, async
+job flow, SSL decision, and the status-semantics model).
 
 ## Features
 
@@ -107,11 +168,16 @@ make zip      # build javahost.zip
 
 ## Status
 
-Active (`v0.16.1`). The core library, installer, runtimes, Tomcat lifecycle,
+Active (`v0.16.2`). The core library, installer, runtimes, Tomcat lifecycle,
 WAR/JAR deploy, multi-engine databases, reverse-proxy + per-site HTTPS, async
 jobs, the Tasks/Logs/Danger-zone UI, and the offline test suite are all in
-place. Deploy paths are validated on Ubuntu 24.04 (and via the opt-in CI deploy
-matrix / the on-box [Test campaign](docs/testbed.md)). See
+place. The latest cycle hardened the detail **drawer** — real CPU%/uptime/thread
+metrics, a **runtime-missing** signal when a pinned JDK is gone, and a neutral
+**Site & SSL** state for HTTP-only apps (see
+[status semantics](docs/user-guide.md#status--health-explained)). Deploy paths
+are validated on Ubuntu 24.04 (and via the opt-in CI deploy matrix / the on-box
+[Test campaign](docs/testbed.md)). Releases are tag-driven: pushing a `vX.Y.Z`
+tag runs `release.yml`, which builds and publishes `javahost.zip`. See
 [`CHANGELOG.md`](CHANGELOG.md) for the full history and
 `docs/audit/Java_Manager_Plugin_Compatibility_Matrix.md` for the support matrix.
 

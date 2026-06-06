@@ -45,8 +45,16 @@ MongoDB    : mongodb://db:27017/appdb?tls=true      (user/password supplied via 
 ## In the Databases tab
 
 - The top card is a read-only **support matrix** (`GetDbSupport`): every engine,
-  its version range, default port, recommended driver, and whether the engine is
-  detected running locally.
+  its version range, default port, recommended driver, and an **Installed
+  locally** column.
+- **What "Installed locally" actually means.** It is **host-binary detection**
+  (`detect_local`, via each engine's `detect_cmds` — e.g. `psql`/`pg_config` for
+  PostgreSQL, `mysql`/`mysqld` for MySQL, `mariadb` for MariaDB, `mongod`/`mongosh`
+  for MongoDB). It reports whether a DB **server/client binary exists on this
+  host** — it is **independent** of whether an app can reach the database. A DB
+  running only in **Docker** or on a **remote** host shows **no**, yet apps still
+  connect to it fine over TCP. So "no" here is never, by itself, a connectivity
+  problem.
 - Below it, the per-app **database env** section has a live **search/filter**
   (with a live count) over the per-app env chips, so you can find an app quickly
   on a busy host.
