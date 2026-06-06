@@ -408,6 +408,32 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def GetDbEnv(self, get):
+        """Current DB connection env for <app>, SECRET-SAFE (never returns the
+        password — only whether one is set). Lets the UI show what's configured."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            env = instance._read_app_env(instance.base_path(app))
+            url = env.get("DB_URL", "") or ""
+            engine = None
+            if url.startswith("jdbc:"):
+                parts = url.split(":", 2)
+                engine = parts[1] if len(parts) > 1 else None
+            elif url.startswith("mongodb"):
+                engine = "mongodb"
+            return panel.ok({
+                "app": app,
+                "configured": bool(url),
+                "engine": engine,
+                "url": url or None,            # host/port/db only — never the password
+                "user": env.get("DB_USER") or None,
+                "driver": env.get("DB_DRIVER") or None,
+                "driver_maven": env.get("DB_DRIVER_MAVEN") or None,
+                "has_password": bool(env.get("DB_PASSWORD")),
+            })
+        except Exception as e:
+            return panel.err(str(e))
+
     def GetHealthAll(self, get=None):
         """Batched health for all apps in one round-trip (avoids the per-app
         GetHealth N+1 on each UI poll). -> {"health": {app: {up, code, port}}}."""

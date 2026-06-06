@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.15.2] — 2026-06-06
+
+### Fixed
+- **Oversized icons:** inline icon SVGs rendered huge outside buttons (the Danger-zone
+  "FULL WIPE" trash, the panel-JDK "info" badge) because they were only size-
+  constrained in button/tab contexts. `ic()` now emits a `.jh-ic` class
+  (`1em` square) so icons are consistent everywhere; decorative SVGs (logo,
+  empty-state) are untouched. Runtimes/Danger-zone row alignment polished.
+
+### Added
+- **Database tab shows the current connection env** (read-only, secret-safe): the
+  drawer Database tab now calls `GetDbEnv{app}` and displays engine, connection URL
+  (host/port/db — never the password), user, driver, and whether a password is set,
+  or "No database env configured". `GetDbEnv` returns no secret.
+
 ## [0.15.1] — 2026-06-06
 
 ### Fixed

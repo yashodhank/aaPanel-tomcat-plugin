@@ -80,6 +80,13 @@
   .jh-logo{display:grid;place-items:center;width:40px;height:40px;flex:none;
     border-radius:var(--r);background:linear-gradient(135deg,var(--ink),var(--accent-d));
     color:#fff;box-shadow:var(--sh-1)}
+  /* Default size for every ic()-emitted inline icon. Context-specific rules
+     (e.g. .jh-btn svg, .jh-empty svg) use tag.class specificity and still win,
+     so this only governs icons placed in otherwise-unstyled contexts
+     (badges, .jh-kv rows, labels, headings) — keeps them at ~16px instead of
+     ballooning to fill the row. Decorative SVGs (logo, empty-state box) are
+     emitted directly without .jh-ic and are unaffected. */
+  .jh-ic{width:1em;height:1em;flex:none;vertical-align:-.125em}
   .jh-logo svg{width:24px;height:24px}
   .jh-title{display:flex;flex-direction:column;line-height:1.15;min-width:0}
   .jh-title b{font-size:17px;font-weight:700;letter-spacing:-.01em}
@@ -199,7 +206,7 @@
     overflow-wrap:anywhere}
   .jh-kv>*{min-width:0}
   .jh-kv:last-child{border-bottom:0}
-  .jh-kv .btns{display:flex;gap:6px;flex-wrap:wrap}
+  .jh-kv .btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 
   /* table */
   .jh-table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
@@ -789,7 +796,7 @@
   }
   function $(id){ return document.getElementById(id); }
   function el(html){ var d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstChild; }
-  function ic(name){ return '<svg aria-hidden="true"><use href="#i-'+name+'"/></svg>'; }
+  function ic(name){ return '<svg class="jh-ic" aria-hidden="true"><use href="#i-'+name+'"/></svg>'; }
 
   // Toggle a button into a spinner/disabled state during an async call.
   function busy(btn, on){
@@ -2138,10 +2145,40 @@
   function drawerDb(){
     var app = DRAWER.app, p = $('dpanel-db'); if(!p) return;
     p.innerHTML = '<div class="jh-alert info">'+ic('db')+
-      '<div>Write this app’s database connection environment. Secrets are stored server-side and never echoed back.</div></div>'+
+      '<div>Write this app’s database connection environment. Secrets are stored server-side and never echoed back. '+
+        'The app must be restarted to pick up changes.</div></div>'+
+      '<div id="jh-dbenv-cur" aria-live="polite"></div>'+
       '<div class="jh-spread" style="margin-top:var(--s3)">'+
         '<button type="button" class="jh-btn accent sm" data-dbenv="'+esc(app)+'">'+ic('db')+'Configure database env</button>'+
       '</div>';
+    loadDbEnvPanel(app);
+  }
+  // Fetch + render the read-only current-env panel for `app`. Never renders a
+  // password (the URL is host/port/db only — secret-safe). Tolerates the
+  // GetDbEnv endpoint being absent: on transport/unknown-method failure the
+  // panel is hidden gracefully rather than showing an error.
+  function loadDbEnvPanel(app){
+    var box = $('jh-dbenv-cur'); if(!box) return;
+    call('GetDbEnv', {app:app}, function(r){
+      box = $('jh-dbenv-cur');
+      if(!box || DRAWER.app !== app || DRAWER.tab !== 'db') return;  // drawer moved on
+      if(failed(r)){ box.innerHTML = ''; return; }   // endpoint absent → hide
+      var d = payload(r) || {};
+      if(!d.configured){
+        box.innerHTML = '<div class="jh-alert" style="margin-top:var(--s3)">'+ic('info')+
+          '<div>No database env configured for this app.</div></div>';
+        return;
+      }
+      box.innerHTML = '<div class="jh-rows" style="margin-top:var(--s3)">'+
+        kv('Engine', d.engine)+
+        '<div class="jh-kv"><span>Connection URL</span>'+
+          '<span class="jh-muted" style="font-family:var(--mono)">'+esc(d.url==null||d.url===''?'—':d.url)+'</span></div>'+
+        kv('User', d.user)+
+        kv('Driver', d.driver)+
+        kv('Driver (Maven)', d.driver_maven)+
+        kv('Password', d.has_password ? 'set' : 'not set')+
+      '</div>';
+    });
   }
   // drawer controls: close, tablist arrow-keys, focus trap, Esc
   $('jh-drawer-x').addEventListener('click', closeDrawer);
@@ -2652,6 +2689,8 @@
               if(failed(r)){ toast(errText(p), 'err', 'DB env failed'); return; }
               toast('DB env written', 'ok', (p.app||app)+' ('+(p.engine||e.engine)+')');
               closeModal();
+              // refresh the read-only current-env panel if it's open for this app
+              if(DRAWER.app === app && DRAWER.tab === 'db') loadDbEnvPanel(app);
               // env is read at process start: the app must be restarted to use it
               if(confirm('DB env written. Restart "'+app+'" now so it picks up the new database settings?')){
                 toast('Restarting '+app+'…');
