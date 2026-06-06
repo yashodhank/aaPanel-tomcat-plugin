@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-06-06
+
+### Added
+- App lifecycle endpoints + `core/tomcat/instance.py` (per-app CATALINA_BASE):
+  `CreateApp`, `AppAction`, `UpdateTomcat`, `DeleteApp`, `RepairApp`,
+  `GetAppDetail`, `GetLogs` (memory-safe log tail), with marker-gated removal.
+- Full clean-room admin UI (`index.html`): dashboard, app create/actions/logs,
+  multi-engine DB helper, reverse-proxy hint — XSS-escaped, dependency-light.
+- Documentation set: `docs/architecture.md`, `java-runtime.md`, `tomcat-10.md`,
+  `tomcat-11.md`, `databases-java-apps.md`, `troubleshooting.md`,
+  `aaPanel-plugin-packaging.md`, plus `INSTALL.md`, `CONTRIBUTING.md`, `SECURITY.md`.
+- Project Agent Skills under `.claude/skills/`: `javahost-dev`, `javahost-release`,
+  `javahost-security` (clean-room, instructions-only).
+
+### Changed
+- Entrypoint slimmed: `CreateApp`/`DeployWar` delegate to `instance.py`.
+
 ## [0.1.0] — 2026-06-06
 
 First release of **JavaHost**, an independent clean-room rewrite. This project
