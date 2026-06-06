@@ -741,6 +741,7 @@
               '<button data-act="restart" data-app="'+ec+'">'+ic('refresh')+'Restart</button>'+
               '<hr>'+
               '<button data-logs="'+ec+'">'+ic('doc')+'View logs</button>'+
+              '<button data-metrics="'+ec+'">'+ic('cpu')+'Metrics</button>'+
               '<button data-health="'+ec+'">'+ic('heart')+'Check health</button>'+
               '<button data-repair="'+ec+'">'+ic('wrench')+'Repair</button>'+
               '<button data-dbenv="'+ec+'">'+ic('db')+'Database env</button>'+
@@ -872,6 +873,7 @@
             '<option value="17">Java 17</option><option value="21">Java 21</option><option value="11">Java 11</option><option value="8">Java 8</option></select></div>'+
           '<div class="jh-field"><label for="j-port">Port</label><input id="j-port" type="number" value="8080" min="1" max="65535"></div>'+
           '<div class="jh-field"><label for="j-mem">Memory (MB)</label><input id="j-mem" type="number" value="512" min="64" step="64"></div>'+
+          '<div class="jh-field wide"><label for="j-profiles">Spring profiles (optional)</label><input id="j-profiles" placeholder="prod,metrics" autocomplete="off"></div>'+
           '<div class="jh-field wide"><label for="j-file">Fat JAR file</label><input id="j-file" type="file" accept=".jar"></div>'+
         '</div>'+
         '<div class="jh-hint">The file is uploaded via the panel file API and staged server-side; the staged path is passed to <code>CreateJarApp</code>.</div>',
@@ -881,10 +883,11 @@
           var name = $('j-name').value.trim();
           if(!name){ toast('Enter a JAR app name', 'err'); $('j-name').focus(); return; }
           var java = $('j-java').value, port = $('j-port').value, mem = $('j-mem').value;
+          var profiles = $('j-profiles').value.trim();
           busy(btn, true);
           stageUpload($('j-file'), function(jar, err){
             if(err || !jar){ busy(btn,false); toast(err||'no staged path', 'err', 'Upload failed'); return; }
-            call('CreateJarApp', {app:name, jar:jar, java:java, port:port, memory:mem}, function(r){
+            call('CreateJarApp', {app:name, jar:jar, java:java, port:port, memory:mem, profiles:profiles}, function(r){
               busy(btn, false);
               var p = payload(r);
               if(failed(r)){ toast(errText(p), 'err', 'Create JAR app failed'); return; }
@@ -983,6 +986,63 @@
       pre.textContent = failed(r) ? ('error: ' + errText(p))
         : ((p && p.log != null) ? p.log : errText(p));
       pre.scrollTop = pre.scrollHeight;
+    });
+  }
+
+  // =====================================================================
+  // MODAL: METRICS — GetMetrics {app} -> {app,pid,up,rss_mb,threads,uptime_s}
+  // =====================================================================
+  function fmtUptime(s){
+    if(s == null || s === '' || isNaN(s)) return '—';
+    var n = Math.floor(Number(s));
+    if(n < 0) return '—';
+    var d = Math.floor(n / 86400); n %= 86400;
+    var h = Math.floor(n / 3600);  n %= 3600;
+    var m = Math.floor(n / 60);    var sec = n % 60;
+    var parts = [];
+    if(d) parts.push(d + 'd');
+    if(h) parts.push(h + 'h');
+    if(m) parts.push(m + 'm');
+    if(!d && !h) parts.push(sec + 's');   // only show seconds for short uptimes
+    return parts.join(' ') || '0s';
+  }
+  function openMetrics(app){
+    var refreshBtn = mkBtn('Refresh', 'ghost', function(b){ loadMetrics(app, b); }, 'refresh');
+    openModal({
+      title:'Metrics', sub:app,
+      body: '<div id="m-body"><div class="jh-loading">Loading metrics…</div></div>',
+      footer: [ refreshBtn, mkBtn('Close', 'ghost', closeModal) ],
+      onMount: function(){ loadMetrics(app); }
+    });
+  }
+  function metricRow(key, value){
+    return '<div class="jh-kv"><span>'+esc(key)+'</span><span class="jh-muted">'+esc(value)+'</span></div>';
+  }
+  function loadMetrics(app, btn){
+    var box = $('m-body'); if(!box) return;
+    busy(btn, true);
+    box.innerHTML = '<div class="jh-loading">Loading metrics…</div>';
+    call('GetMetrics', {app:app}, function(r){
+      busy(btn, false);
+      var box2 = $('m-body'); if(!box2) return;
+      var p = payload(r);
+      if(failed(r)){
+        box2.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
+        return;
+      }
+      var up = !!p.up, pid = p.pid;
+      if(!up || pid == null){
+        box2.innerHTML = '<div class="jh-empty" style="padding:var(--s4)">'+ic('stop')+
+          '<b>Not running</b><div>This app has no live process to report metrics for.</div></div>';
+        return;
+      }
+      box2.innerHTML =
+        '<div class="jh-kv"><span>Status</span>'+
+          '<span class="jh-badge ok"><span class="jh-dot"></span>up</span></div>'+
+        metricRow('PID', pid)+
+        metricRow('Memory', (p.rss_mb != null ? p.rss_mb + ' MB' : '—'))+
+        metricRow('Threads', (p.threads != null ? p.threads : '—'))+
+        metricRow('Uptime', fmtUptime(p.uptime_s));
     });
   }
 
@@ -1179,6 +1239,7 @@
       call('DeleteApp', {app:ds.delete}, done('Delete '+ds.delete)); return;
     }
     if(ds.logs){ openLogs(ds.logs); return; }
+    if(ds.metrics){ openMetrics(ds.metrics); return; }
     if(ds.health){ checkHealth(ds.health); toast('Re-checking health…'); return; }
     if(ds.dbenv){ openDbEnv(ds.dbenv); return; }
   });
