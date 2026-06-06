@@ -1,0 +1,28 @@
+# Local reference copy of the proprietary plugin — NEVER commit (license §2.2)
+_private_spec/
+
+# graphify tool artifacts
+graphify-out/
+.graphify_*
+graphify-in/
+
+# build artifacts
+*.zip
+dist/
+build/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# editor/OS
+.idea/
+.vscode/
+.DS_Store
+*.bak
+*.bak2
+*.rpm

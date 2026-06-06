@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Rendered by JavaHost. Per-instance CATALINA_BASE. Hardened defaults:
+     shutdown disabled, single localhost HTTP connector, no AJP. -->
+<Server port="-1" shutdown="DISABLED">
+  <Listener className="org.apache.catalina.startup.VersionLoggerListener" />
+  <Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="on" />
+  <Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />
+  <Listener className="org.apache.catalina.mbeans.GlobalResourcesLifecycleListener" />
+  <Listener className="org.apache.catalina.core.ThreadLocalLeakPreventionListener" />
+
+  <Service name="Catalina">
+    <!-- TLS is terminated by the panel-managed Nginx reverse proxy; Tomcat
+         listens only on loopback. -->
+    <Connector port="@@http_port@@"
+               address="127.0.0.1"
+               protocol="HTTP/1.1"
+               connectionTimeout="20000"
+               maxThreads="200"
+               URIEncoding="UTF-8"
+               redirectPort="8443" />
+
+    <!-- NO AJP connector by design (attack surface). -->
+
+    <Engine name="Catalina" defaultHost="localhost">
+      <Host name="localhost" appBase="webapps"
+            unpackWARs="true" autoDeploy="false" deployOnStartup="true">
+        <Valve className="org.apache.catalina.valves.AccessLogValve"
+               directory="logs" prefix="access_log" suffix=".txt"
+               pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+    </Engine>
+  </Service>
+</Server>

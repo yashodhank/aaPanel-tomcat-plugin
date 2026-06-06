@@ -1,0 +1,85 @@
+<!-- JavaHost UI — original clean-room markup (Apache-2.0). No aaPanel layout. -->
+<div class="javahost" style="padding:16px;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1b3a4b">
+  <style>
+    .javahost h2{margin:0 0 12px;font-size:18px}
+    .javahost .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .javahost .card{border:1px solid #e2e8ec;border-radius:8px;padding:12px;background:#fff}
+    .javahost .card h3{margin:0 0 8px;font-size:13px;color:#5b7;letter-spacing:.04em;text-transform:uppercase}
+    .javahost .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #eef}
+    .javahost .badge{padding:1px 7px;border-radius:10px;font-size:12px}
+    .javahost .ok{background:#e6f7ec;color:#1a7f37}.javahost .off{background:#fdecec;color:#c0392b}
+    .javahost button{cursor:pointer;border:1px solid #1b3a4b;background:#1b3a4b;color:#fff;border-radius:6px;padding:6px 12px;font-size:13px}
+    .javahost button.ghost{background:#fff;color:#1b3a4b}
+    .javahost .muted{color:#88a;font-size:12px}
+    .javahost .warn{background:#fff6e5;border:1px solid #f0c36d;border-radius:6px;padding:8px;margin-top:10px;font-size:13px}
+  </style>
+
+  <h2>JavaHost — Tomcat &amp; Java Runtime Manager</h2>
+  <div class="muted" style="margin-bottom:12px">
+    Independent OSS plugin (Apache-2.0). Tomcat 9 / 10.1 / 11 · Java 8 / 11 / 17 / 21 · verified downloads · systemd.
+  </div>
+
+  <div class="grid">
+    <div class="card"><h3>Java Runtimes</h3><div id="jh-java" class="muted">loading…</div>
+      <div style="margin-top:8px"><button class="ghost" data-jdk="17">Install JDK 17</button>
+      <button class="ghost" data-jdk="21">Install JDK 21</button></div>
+    </div>
+    <div class="card"><h3>Tomcat</h3><div id="jh-tomcat" class="muted">loading…</div>
+      <div style="margin-top:8px"><button data-tc="10">Install 10.1</button>
+      <button data-tc="11">Install 11</button>
+      <button class="ghost" data-tc="9">Install 9 (legacy)</button></div>
+    </div>
+    <div class="card"><h3>Apps</h3><div id="jh-apps" class="muted">loading…</div></div>
+    <div class="card"><h3>Environment</h3><div id="jh-env" class="muted">loading…</div></div>
+  </div>
+  <div id="jh-msg"></div>
+</div>
+
+<script>
+(function(){
+  // aaPanel plugin AJAX convention: POST /plugin?action=a&name=javahost&s=<Method>
+  function call(method, data, cb){
+    var url = '/plugin?action=a&name=javahost&s=' + method;
+    if (window.$ && $.post){ $.post(url, data||{}, function(r){ cb(typeof r==='string'?JSON.parse(r):r); }); }
+    else { fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+           body:new URLSearchParams(data||{})}).then(function(x){return x.json();}).then(cb); }
+  }
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function msg(t,bad){document.getElementById('jh-msg').innerHTML =
+    '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+esc(t)+'</div>';}
+
+  function refresh(){
+    call('GetStatus',{},function(r){
+      var d=(r&&r.msg)||r||{};
+      var j=d.java||{}, jh='';
+      Object.keys(j).forEach(function(k){jh+='<div class="row"><span>Java '+esc(k)+'</span><span class="badge ok">installed</span></div>';});
+      document.getElementById('jh-java').innerHTML = jh||'<span class="muted">none detected</span>';
+
+      var t=d.tomcat||{}, th='';
+      (d.supported_tomcat||['9','10','11']).forEach(function(k){
+        var info=t[k]; th+='<div class="row"><span>Tomcat '+esc(k)+'</span>'+
+          (info?'<span class="badge ok">'+esc(info.patch)+'</span>':'<span class="badge off">not installed</span>')+'</div>';});
+      document.getElementById('jh-tomcat').innerHTML = th;
+
+      var a=d.apps||[], ah='';
+      a.forEach(function(x){ah+='<div class="row"><span>'+esc(x.app)+'</span><span class="badge '+
+        (x.status==='active'?'ok':'off')+'">'+esc(x.status)+'</span></div>';});
+      document.getElementById('jh-apps').innerHTML = ah||'<span class="muted">no apps yet</span>';
+
+      document.getElementById('jh-env').innerHTML =
+        '<div class="row"><span>systemd</span><span class="badge '+(d.systemd?'ok':'off')+'">'+
+        (d.systemd?'yes':'init.d fallback')+'</span></div>';
+    });
+  }
+
+  document.querySelector('.javahost').addEventListener('click',function(e){
+    var b=e.target.closest('button'); if(!b) return;
+    if(b.dataset.jdk){ msg('Installing JDK '+b.dataset.jdk+'…');
+      call('InstallJava',{version:b.dataset.jdk},function(r){msg((r&&r.msg&&r.msg.java_home)?('JDK ready: '+r.msg.java_home):JSON.stringify(r), r&&r.status===false); refresh();}); }
+    if(b.dataset.tc){ msg('Installing Tomcat '+b.dataset.tc+' (verified download)…');
+      call('InstallTomcat',{version:b.dataset.tc},function(r){msg(JSON.stringify((r&&r.msg)||r), r&&r.status===false); refresh();}); }
+  });
+  refresh();
+})();
+</script>

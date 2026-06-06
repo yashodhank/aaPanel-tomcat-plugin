@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: pip install pytest
+
+      - name: Validate plugin structure
+        run: |
+          set -euo pipefail
+          SRC=plugin/javahost
+          echo "== required files =="
+          for f in info.json install.sh tomcat_install.sh index.html icon.svg javahost_main.py; do
+            [ -f "$SRC/$f" ] && echo "  ✓ $f" || { echo "ERROR: missing $SRC/$f"; exit 1; }
+          done
+
+          echo "== info.json =="
+          python3 -c "
+          import json,sys
+          i=json.load(open('plugin/javahost/info.json'))
+          for k in ('title','name','versions','author','type'):
+              assert k in i, 'missing key: '+k
+          assert i['name']=='javahost', 'plugin name must be javahost'
+          print('  ✓', i['title'], 'v'+i['versions'], 'by', i['author'])
+          "
+
+          echo "== no aaPanel-derived code committed =="
+          if git ls-files | grep -E '(^|/)tomcat2_main\.py$'; then
+            echo 'ERROR: proprietary-derived file tracked'; exit 1; fi
+          echo "  ✓ clean"
+
+      - name: Lint shell
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S warning plugin/javahost/*.sh || true
+
+      - name: Compile + unit tests
+        run: |
+          find plugin/javahost -name '*.py' -print0 | xargs -0 python3 -m py_compile
+          python3 -m pytest -q tests/
+
+  zip:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: echo "version=$(python3 -c "import json;print(json.load(open('plugin/javahost/info.json'))['versions'])")" >> $GITHUB_OUTPUT
+      - name: Build ZIP
+        run: |
+          cd plugin && zip -r ../javahost-v${{ steps.version.outputs.version }}.zip javahost -x '*/__pycache__/*' '*.pyc'
+          cd .. && sha256sum javahost-v${{ steps.version.outputs.version }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: javahost-v${{ steps.version.outputs.version }}
+          path: javahost-v${{ steps.version.outputs.version }}.zip
+          retention-days: 90

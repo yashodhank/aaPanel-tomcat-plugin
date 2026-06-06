@@ -1,0 +1,24 @@
+JavaHost — Tomcat & Java runtime manager for aaPanel/BaoTa-style panels
+Copyright 2026 yashodhank
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+This product is an INDEPENDENT, clean-room plugin. It is not affiliated with,
+endorsed by, or derived from the source code of aaPanel / 宝塔 (Dongguan Baita
+Network Technology Co., Ltd.). It interoperates with the panel solely through
+the panel's public, documented third-party plugin API. It contains no aaPanel
+source code, UI layout, icons, or text.
+
+At runtime the plugin downloads and manages the following third-party software,
+which it does NOT bundle or redistribute:
+
+  * Apache Tomcat            — Apache License 2.0   (https://tomcat.apache.org)
+  * Eclipse Temurin / OpenJDK — GPLv2 with Classpath Exception (https://adoptium.net)
+  * PostgreSQL JDBC Driver    — BSD-2-Clause        (https://jdbc.postgresql.org)
+
+Downloads are integrity-verified (SHA-512, and OpenPGP where signatures are
+published) before use.
