@@ -35,11 +35,23 @@
     font:var(--fs)/1.5 var(--font); color:var(--text);
     background:var(--bg); box-sizing:border-box;
     padding:var(--s4); -webkit-font-smoothing:antialiased;
-    /* aaPanel injects the plugin into a fixed modal — contain to the viewport and
-       scroll internally so the content never overflows off-screen. */
-    max-height:100vh; overflow-y:auto; overflow-x:hidden;
+    /* aaPanel injects the plugin into a FIXED modal box. Contain to that box
+       (the parent), not the viewport, so nothing bleeds off-screen in either
+       axis; wide content scrolls INTERNALLY. width:100% honours the modal
+       width; height:100% fills the modal box when it has a height, falling
+       back to a viewport-minus-chrome cap when the modal gives no height. */
+    width:100%; max-width:100%;
+    height:100%; max-height:calc(100vh - 32px);
+    overflow:auto; overflow-x:hidden;
   }
   .jh *,.jh *::before,.jh *::after{box-sizing:border-box}
+
+  /* ---- fullscreen / full-UI mode: pop OUT of aaPanel's modal and fill the
+     whole viewport using only our own CSS (the realistic "full UI" mode). ---- */
+  .jh.jh-fullscreen{
+    position:fixed; inset:0; width:100vw; height:100vh;
+    max-width:none; max-height:none; z-index:99999;
+    background:var(--bg); overflow:auto;}
 
   /* ---- optional dark theme (progressive enhancement) ---- */
   @media (prefers-color-scheme: dark){.jh{
@@ -59,7 +71,7 @@
   /* =====================================================================
      LAYOUT
      ===================================================================== */
-  .jh-shell{max-width:1180px;margin:0 auto}
+  .jh-shell{max-width:1180px;margin:0 auto;min-width:0}
 
   /* top app bar */
   .jh-bar{display:flex;align-items:center;gap:var(--s3);
@@ -82,7 +94,7 @@
     margin-top:var(--s4);align-items:start}
 
   /* left vertical section menu */
-  .jh-side{position:sticky;top:var(--s4);align-self:start;
+  .jh-side{position:sticky;top:var(--s4);align-self:start;min-width:0;
     background:var(--surface);border:1px solid var(--line);
     border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s2);
     display:flex;flex-direction:column;gap:2px}
@@ -99,7 +111,7 @@
     border-color:var(--line);box-shadow:inset 3px 0 0 var(--accent-d)}
   .jh-tab:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
 
-  .jh-content{min-width:0}
+  .jh-content{min-width:0;max-width:100%}
   .jh-page{display:none;animation:jh-fade .18s ease}
   .jh-page.active{display:block}
   @keyframes jh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -118,7 +130,7 @@
      PRIMITIVES — cards, stat tiles, buttons, forms, badges, table
      ===================================================================== */
   .jh-card{background:var(--surface);border:1px solid var(--line);
-    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s4)}
+    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s4);min-width:0}
   .jh-card + .jh-card{margin-top:var(--s4)}
   .jh-card-h{display:flex;align-items:center;justify-content:space-between;
     gap:var(--s3);margin-bottom:var(--s3)}
@@ -181,7 +193,8 @@
   .jh input[type=file]{padding:7px 11px;cursor:pointer}
   .jh-hint{font-size:12px;color:var(--muted);margin-top:var(--s2)}
   .jh-hint code,.jh code{font:12px var(--mono);background:var(--surface-2);
-    border:1px solid var(--line);padding:1px 5px;border-radius:4px}
+    border:1px solid var(--line);padding:1px 5px;border-radius:4px;
+    overflow-wrap:anywhere}
 
   /* badges / pills */
   .jh-badge{display:inline-flex;align-items:center;gap:5px;
@@ -192,9 +205,11 @@
   .jh-dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
 
   /* key/value rows */
-  .jh-rows{display:flex;flex-direction:column}
+  .jh-rows{display:flex;flex-direction:column;min-width:0}
   .jh-kv{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);
-    padding:8px 0;border-bottom:1px solid var(--line-2)}
+    padding:8px 0;border-bottom:1px solid var(--line-2);min-width:0;
+    overflow-wrap:anywhere}
+  .jh-kv>*{min-width:0}
   .jh-kv:last-child{border-bottom:0}
   .jh-kv .btns{display:flex;gap:6px;flex-wrap:wrap}
 
@@ -253,7 +268,7 @@
 
   /* monospace viewer (logs / proxy) — fills modal body; no double-scroll */
   .jh-pre{background:#0e1f29;color:#cfe9ef;border-radius:var(--r);
-    padding:14px;max-height:40vh;overflow:auto;margin:0;
+    padding:14px;max-height:40vh;max-width:100%;overflow:auto;margin:0;
     font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word}
   /* inside the modal body, fill available height instead of double-scrolling */
   .jh-modal-b .jh-pre{max-height:none;min-height:200px;flex:1}
@@ -357,6 +372,8 @@
       <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
       <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
       <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
+      <symbol id="i-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
     </defs>
   </svg>
 
@@ -370,6 +387,9 @@
       </div>
       <div class="jh-bar-spacer"></div>
       <span class="jh-pill-ver" title="Independent OSS plugin · Apache-2.0">Apache-2.0 · OSS</span>
+      <button class="jh-btn ghost sm icon" id="jh-fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false">
+        <svg aria-hidden="true" focusable="false"><use href="#i-expand"/></svg>
+      </button>
       <button class="jh-btn ghost sm" id="jh-refresh" title="Refresh status" aria-label="Refresh status">
         <svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg> Refresh
       </button>
@@ -1454,6 +1474,41 @@
   renderHelpDocs();
 
   // =====================================================================
+  // FULLSCREEN / FULL-UI MODE
+  //   Pops the whole plugin OUT of aaPanel's fixed modal into a viewport-
+  //   filling overlay (.jh-fullscreen) using only our own CSS. Esc exits;
+  //   focus moves to the toggle on enter/exit; while fullscreen the .jh root
+  //   already covers everything so focus stays within it. CSP-safe: wired via
+  //   the existing delegated click handler (no inline on* attributes).
+  // =====================================================================
+  function isFullscreen(){ return $('jh-root').classList.contains('jh-fullscreen'); }
+  function setFullscreen(on){
+    var root = $('jh-root'), btn = $('jh-fullscreen');
+    root.classList.toggle('jh-fullscreen', on);
+    if(btn){
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      var label = on ? 'Exit fullscreen' : 'Fullscreen';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+      var useEl = btn.querySelector('use');
+      if(useEl) useEl.setAttribute('href', on ? '#i-collapse' : '#i-expand');
+      // keep focus on the toggle so keyboard users aren't dropped on enter/exit
+      setTimeout(function(){ try { btn.focus(); } catch(_){} }, 0);
+    }
+  }
+  function toggleFullscreen(){ setFullscreen(!isFullscreen()); }
+  // Esc exits fullscreen. Skip when a modal is open — its own Esc handler
+  // (registered earlier) closes the dialog first; only exit fullscreen once
+  // no modal remains.
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape') return;
+    if(!isFullscreen()) return;
+    if($('jh-overlay').classList.contains('open')) return;   // modal handles Esc first
+    e.preventDefault();
+    setFullscreen(false);
+  });
+
+  // =====================================================================
   // STATUS REFRESH
   // =====================================================================
   function refresh(btn){
@@ -1481,6 +1536,7 @@
     if(b.getAttribute('role') === 'menuitem') closeAllMenus();
 
     // header / toolbar
+    if(b.id === 'jh-fullscreen'){ toggleFullscreen(); return; }
     if(b.id === 'jh-refresh'){ refresh(b); toast('Refreshing…'); return; }
     if(b.id === 'jh-open-create' || b.id === 'jh-empty-create'){ openCreate(); return; }
     if(b.id === 'jh-open-jar'){ openJar(); return; }

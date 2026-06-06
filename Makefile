@@ -1,7 +1,9 @@
 # JavaHost — Makefile
 #
-#   make test      — compile + run unit tests
-#   make lint      — shellcheck + py_compile
+#   make test         — compile + run unit tests
+#   make lint         — shellcheck + py_compile
+#   make samples      — generate deploy-test fixtures into tests/fixtures/out/
+#   make test-deploy  — run the service-less deploy matrix E2E (needs a panel/Tomcat)
 #   make hooks     — opt in to the local git pre-commit hook (.githooks)
 #   make zip       — build distributable plugin zip (javahost.zip)
 #   make deploy    — rsync plugin/javahost -> VPS plugin dir + restart panel (YOUR OWN panel)
@@ -15,11 +17,17 @@ PLUGIN_DST   = /www/server/panel/plugin/$(PLUGIN_NAME)
 SRC          = plugin/$(PLUGIN_NAME)
 PY          ?= python3
 
-.PHONY: test lint hooks zip deploy restart clean release
+.PHONY: test lint hooks zip deploy restart clean release samples test-deploy
 
 test:
 	find $(SRC) -name '*.py' -print0 | xargs -0 $(PY) -m py_compile
 	$(PY) -m pytest -q tests/
+
+samples:
+	$(PY) tests/fixtures/make_samples.py --all
+
+test-deploy:
+	$(PY) tests/e2e/deploy_matrix.py
 
 lint:
 	@command -v shellcheck >/dev/null 2>&1 && shellcheck -S warning $(SRC)/*.sh || echo "shellcheck not installed (skipped)"

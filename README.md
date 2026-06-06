@@ -43,6 +43,9 @@ are **downloaded and integrity-verified at runtime**, not bundled.
   System Hardening; auto lift/re-lock with the `manage_hardening` toggle.
 - [Single-host vs. multi-server](docs/single-vs-multi-mode.md) — JavaHost is
   host-local; install it on each host that should run Java apps.
+- [Testing runbook](docs/testing.md) — manual end-to-end testing checklist
+  (sample artifacts, WAR/JAR/migrate/DB walkthrough) plus the opt-in CI deploy
+  matrix.
 
 ## Compatibility
 

@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.10.0] — 2026-06-06
+
+### Added
+- **Fullscreen / full-UI mode:** a toggle in the header pops the plugin out of
+  aaPanel's cramped modal to fill the whole viewport using only our own CSS
+  (`position:fixed; inset:0`) — the clean-room alternative to a left-sidebar entry,
+  which would require patching panel-managed `config/menu.json` (fragile across panel
+  updates, against our coexistence stance). Esc exits; focus is managed (WCAG 2.2 AA),
+  CSP-safe (no inline handlers).
+- **Sample-artifact generator** (`tests/fixtures/make_samples.py`, `make samples`):
+  builds `hello.war` (Jakarta JSP → `JAVAHOST_OK`), `legacy.war` (old `javax`
+  schema → exercises Migrate), runnable `app.jar` (`com.sun.net.httpserver`),
+  `boot.jar` (Spring-Boot-shaped), and `dbcheck.war --db <engine>` (JDBC `SELECT 1`
+  → `DB_OK`, driver pulled per `recommend_driver`; Mongo via TCP probe). stdlib
+  `zipfile` + `javac` only — no Maven/Gradle.
+- **Automated deploy matrix** (`tests/e2e/deploy_matrix.py`, `make test-deploy`):
+  service-less install → deploy → health → migrate → JAR-run, with `--with-db`
+  spinning ephemeral Docker DBs (postgres/mysql/mariadb/mongo), `SetDbEnv`, and a
+  `DB_OK` assertion; full teardown.
+- **Opt-in CI** (`.github/workflows/deploy-matrix.yml`): `workflow_dispatch` + weekly
+  cron, plus a `deploy-matrix-db` job using GitHub service containers.
+- **Testing runbook** (`docs/testing.md`): manual UI walkthrough mapped to real
+  endpoints + the automated path.
+- **`javahost-test-deploy` skill**: reusable on-demand generate-and-verify runbook.
+
+### Fixed
+- **Modal overflow ("hidden env"):** the UI bled off-screen inside aaPanel's modal.
+  `.jh` now sizes to the modal box (not `100vh`) and scrolls internally; the classic
+  CSS-grid blowout is fixed with `min-width:0` on grid children, and wide content
+  (logs, tables, metric rows, long tokens) scrolls/wraps locally instead of widening
+  the layout.
+
 ## [0.9.1] — 2026-06-06
 
 ### Fixed

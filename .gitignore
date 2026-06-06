@@ -6,6 +6,9 @@ graphify-out/
 .graphify_*
 graphify-in/
 
+# deploy-test fixtures (generated)
+tests/fixtures/out/
+
 # build artifacts
 *.zip
 dist/
