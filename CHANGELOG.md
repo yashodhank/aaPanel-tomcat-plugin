@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-06-06
+
+### Added
+- **Runs safely under aaPanel System Hardening, no manual disabling.** When a
+  service dir is immutable (`chattr +i`), the plugin briefly lifts the bit on its
+  own unit path, writes, and **re-locks immediately** (`core/util/immutable.py`),
+  preserving hardening. Controlled by `manage_hardening` (default true,
+  `core/config.py`). `GetStatus.service_dirs_locked` now reflects true inability.
+- **Detects aaPanel daemon/process protection** (`203/EXEC` / "BT security") after
+  start and returns a clear, actionable error — JavaHost will not bypass an
+  anti-persistence exec filter.
+- **Redesigned admin UI**: tabbed dashboard (Dashboard/Applications/Runtimes/
+  Databases/Help), stat tiles, health pills, per-row action menus, modal dialogs
+  for create/deploy/JAR/DB/logs, toasts, busy states — self-contained, no CDNs.
+- Docs: `docs/single-vs-multi-mode.md`; `system-hardening.md` documents both layers.
+
+### Changed
+- init.d run-as uses `runuser` (not the aaPanel-jailed `su`); systemd unit gains `PIDFile=`.
+
 ## [0.4.0] — 2026-06-06
 
 ### Added

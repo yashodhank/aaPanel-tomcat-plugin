@@ -1,423 +1,766 @@
-<!-- JavaHost UI — original clean-room markup (Apache-2.0). No aaPanel layout. -->
+<!-- JavaHost UI — original clean-room markup (Apache-2.0). No aaPanel layout/assets. -->
 <!--
-  Single-file admin UI for the JavaHost plugin.
-  Talks to the backend over the panel plugin AJAX convention:
-      POST /plugin?action=a&name=javahost&s=<Method>
-  Responses are the standard {status, msg} envelope; the actual data lives in
-  r.msg (we read `r.msg||r` everywhere). All dynamic text is escaped via esc().
-  Dependency-light: uses jQuery's $.post when present, otherwise falls back to
-  the Fetch API — identical to the original call() helper.
+  Single self-contained admin UI for the JavaHost plugin. Inline <style> + <script>;
+  NO external CDNs, fonts, frameworks, or network calls (CSP-safe / offline / secure).
+  System font stack, inline-SVG icons only, vanilla JS, no build step.
+
+  Panel AJAX convention:  POST /plugin?action=a&name=javahost&s=<Method>
+  Responses are the standard {status, msg} envelope; data lives in r.msg (we read
+  `r.msg || r`). All dynamic text is escaped via esc() (HTML) or textContent (logs).
+  call() uses jQuery's $.post when present, else the Fetch API.
 -->
-<div class="javahost" style="padding:16px;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1b3a4b">
+<div id="jh-root" class="jh">
   <style>
-    /* ---- palette: #1b3a4b ink · #7fd1e0 accent · #f0a830 highlight ---- */
-    .javahost h2{margin:0 0 12px;font-size:18px}
-    .javahost .section{margin-top:22px}
-    .javahost .section>h2{font-size:16px;border-bottom:2px solid #7fd1e0;padding-bottom:6px}
-    .javahost .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-    .javahost .card{border:1px solid #e2e8ec;border-radius:8px;padding:12px;background:#fff}
-    .javahost .card h3{margin:0 0 8px;font-size:13px;color:#3a8ca0;letter-spacing:.04em;text-transform:uppercase}
-    .javahost .row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px dashed #eef}
-    .javahost .row:last-child{border-bottom:0}
-    .javahost .badge{padding:1px 8px;border-radius:10px;font-size:12px;white-space:nowrap}
-    .javahost .ok{background:#e6f7ec;color:#1a7f37}
-    .javahost .off{background:#fdecec;color:#c0392b}
-    .javahost .neutral{background:#eef4f6;color:#3a8ca0}
-    .javahost button{cursor:pointer;border:1px solid #1b3a4b;background:#1b3a4b;color:#fff;border-radius:6px;padding:6px 12px;font-size:13px}
-    .javahost button:hover{opacity:.9}
-    .javahost button.ghost{background:#fff;color:#1b3a4b}
-    .javahost button.accent{border-color:#f0a830;background:#f0a830;color:#1b3a4b}
-    .javahost button.sm{padding:3px 8px;font-size:12px}
-    .javahost button:disabled{cursor:default;opacity:.45}
-    .javahost .muted{color:#88a;font-size:12px}
-    .javahost input,.javahost select{font:13px inherit;padding:6px 8px;border:1px solid #cdd9de;border-radius:6px;color:#1b3a4b;background:#fff}
-    .javahost label{display:block;font-size:12px;color:#5b7a86;margin:0 0 3px}
-    .javahost .field{display:flex;flex-direction:column;min-width:120px}
-    .javahost .formrow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
-    .javahost table{width:100%;border-collapse:collapse;font-size:13px}
-    .javahost th,.javahost td{text-align:left;padding:7px 8px;border-bottom:1px solid #eef2f4}
-    .javahost th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5b7a86}
-    .javahost td .btns{display:flex;flex-wrap:wrap;gap:4px}
-    .javahost pre{background:#102832;color:#cfe9ef;padding:10px;border-radius:6px;max-height:340px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
-    .javahost .panel{margin-top:10px;border:1px solid #cdd9de;border-radius:8px;padding:12px;background:#f7fbfc}
-    .javahost .warn{background:#fff6e5;border:1px solid #f0c36d;border-radius:6px;padding:8px;margin-top:10px;font-size:13px}
-    .javahost code{background:#eef4f6;padding:1px 5px;border-radius:4px;font:12px ui-monospace,Menlo,monospace}
-    .javahost .hide{display:none}
-    .javahost .kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:12px}
+  /* =====================================================================
+     DESIGN SYSTEM — tokens (color / spacing / radius / shadow / type)
+     Palette: ink #1b3a4b · accent #7fd1e0 · highlight #f0a830
+     ===================================================================== */
+  .jh{
+    --ink:#1b3a4b; --ink-2:#2e5566; --accent:#7fd1e0; --accent-d:#3a8ca0;
+    --hi:#f0a830; --hi-d:#c47f12;
+    --ok:#1a7f37; --ok-bg:#e6f7ec; --danger:#c0392b; --danger-bg:#fdecec;
+    --warn-bg:#fff6e5; --warn-bd:#f0c36d;
+    --bg:#f4f7f9; --surface:#ffffff; --surface-2:#f7fbfc;
+    --line:#e3eaee; --line-2:#eef2f4;
+    --text:#1b3a4b; --muted:#6b8590; --muted-2:#90a6af;
+    --r-sm:6px; --r:10px; --r-lg:14px;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+    --sh-1:0 1px 2px rgba(27,58,75,.06),0 1px 3px rgba(27,58,75,.08);
+    --sh-2:0 4px 12px rgba(27,58,75,.10),0 2px 4px rgba(27,58,75,.06);
+    --sh-3:0 12px 32px rgba(27,58,75,.18),0 4px 8px rgba(27,58,75,.10);
+    --fs:14px;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+
+    font:var(--fs)/1.5 var(--font); color:var(--text);
+    background:var(--bg); box-sizing:border-box;
+    padding:var(--s4); min-height:100%; -webkit-font-smoothing:antialiased;
+  }
+  .jh *,.jh *::before,.jh *::after{box-sizing:border-box}
+
+  /* ---- optional dark theme (progressive enhancement) ---- */
+  @media (prefers-color-scheme: dark){.jh{
+    --ink:#cfe9ef;--ink-2:#aacede;--accent-d:#7fd1e0;
+    --ok:#5fd58a;--ok-bg:#13302035;--danger:#ff7a6b;--danger-bg:#3a181645;
+    --warn-bg:#3a300f55;--warn-bd:#8a6d24;
+    --bg:#0e1c24;--surface:#15262f;--surface-2:#172c37;--line:#23404e;--line-2:#1d3540;
+    --text:#dbe9ef;--muted:#8fb0bd;--muted-2:#6f93a1;
+    --sh-1:0 1px 2px rgba(0,0,0,.3);--sh-2:0 4px 14px rgba(0,0,0,.35);--sh-3:0 14px 40px rgba(0,0,0,.5);}}
+
+  /* =====================================================================
+     LAYOUT
+     ===================================================================== */
+  .jh-shell{max-width:1180px;margin:0 auto}
+
+  /* top app bar */
+  .jh-bar{display:flex;align-items:center;gap:var(--s3);
+    padding:var(--s3) var(--s4);background:var(--surface);
+    border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh-1)}
+  .jh-logo{display:grid;place-items:center;width:40px;height:40px;flex:none;
+    border-radius:var(--r);background:linear-gradient(135deg,var(--ink),var(--accent-d));
+    color:#fff;box-shadow:var(--sh-1)}
+  .jh-logo svg{width:24px;height:24px}
+  .jh-title{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+  .jh-title b{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .jh-title span{font-size:12px;color:var(--muted)}
+  .jh-bar-spacer{flex:1}
+  .jh-pill-ver{font-size:11px;font-weight:600;color:var(--accent-d);
+    background:color-mix(in srgb,var(--accent) 22%,transparent);
+    padding:3px 10px;border-radius:999px;white-space:nowrap}
+
+  /* nav tabs */
+  .jh-nav{display:flex;gap:var(--s1);margin:var(--s4) 0;flex-wrap:wrap}
+  .jh-tab{display:inline-flex;align-items:center;gap:7px;
+    padding:9px 14px;border-radius:var(--r);border:1px solid transparent;
+    background:transparent;color:var(--muted);font:600 13px var(--font);cursor:pointer;
+    transition:background .12s,color .12s,box-shadow .12s}
+  .jh-tab svg{width:16px;height:16px;flex:none}
+  .jh-tab:hover{color:var(--text);background:var(--surface)}
+  .jh-tab[aria-selected="true"]{color:var(--ink);background:var(--surface);
+    border-color:var(--line);box-shadow:var(--sh-1)}
+  .jh-tab:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+
+  .jh-page{display:none;animation:jh-fade .18s ease}
+  .jh-page.active{display:block}
+  @keyframes jh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* =====================================================================
+     PRIMITIVES — cards, stat tiles, buttons, forms, badges, table
+     ===================================================================== */
+  .jh-card{background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s4)}
+  .jh-card + .jh-card{margin-top:var(--s4)}
+  .jh-card-h{display:flex;align-items:center;justify-content:space-between;
+    gap:var(--s3);margin-bottom:var(--s3)}
+  .jh-card-h h3{margin:0;font-size:14px;font-weight:700;letter-spacing:-.01em}
+  .jh-card-h p{margin:2px 0 0;font-size:12px;color:var(--muted);font-weight:400}
+
+  .jh-grid{display:grid;gap:var(--s3);
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+
+  /* stat tile */
+  .jh-stat{background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-lg);box-shadow:var(--sh-1);padding:var(--s4);
+    display:flex;align-items:flex-start;gap:var(--s3)}
+  .jh-stat-ic{display:grid;place-items:center;width:38px;height:38px;flex:none;
+    border-radius:var(--r);background:color-mix(in srgb,var(--accent) 22%,transparent);
+    color:var(--accent-d)}
+  .jh-stat-ic svg{width:20px;height:20px}
+  .jh-stat-ic.hi{background:color-mix(in srgb,var(--hi) 24%,transparent);color:var(--hi-d)}
+  .jh-stat-ic.ok{background:var(--ok-bg);color:var(--ok)}
+  .jh-stat-b{min-width:0}
+  .jh-stat-k{font-size:12px;color:var(--muted);font-weight:600}
+  .jh-stat-v{font-size:24px;font-weight:750;letter-spacing:-.02em;line-height:1.1}
+  .jh-stat-s{font-size:12px;color:var(--muted-2)}
+
+  /* buttons */
+  .jh-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    border:1px solid var(--ink);background:var(--ink);color:#fff;
+    border-radius:var(--r-sm);padding:8px 14px;font:600 13px var(--font);cursor:pointer;
+    transition:filter .12s,box-shadow .12s,opacity .12s;white-space:nowrap;
+    text-decoration:none}
+  .jh-btn svg{width:15px;height:15px}
+  .jh-btn:hover{filter:brightness(1.08)}
+  .jh-btn:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+  .jh-btn.ghost{background:var(--surface);color:var(--ink);border-color:var(--line)}
+  .jh-btn.ghost:hover{background:var(--surface-2);filter:none}
+  .jh-btn.accent{background:var(--hi);border-color:var(--hi);color:#3a2a05}
+  .jh-btn.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+  .jh-btn.danger.ghost{background:var(--surface);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,var(--line))}
+  .jh-btn.sm{padding:5px 10px;font-size:12px}
+  .jh-btn.icon{padding:6px;width:32px;height:32px}
+  .jh-btn[disabled]{cursor:default;opacity:.5;filter:none}
+  .jh-btn.busy{position:relative;color:transparent !important}
+  .jh-btn.busy::after{content:"";position:absolute;width:14px;height:14px;
+    border:2px solid currentColor;border-top-color:transparent;border-radius:50%;
+    animation:jh-spin .6s linear infinite;color:#fff}
+  .jh-btn.ghost.busy::after,.jh-btn.accent.busy::after{color:var(--ink)}
+  @keyframes jh-spin{to{transform:rotate(360deg)}}
+
+  /* forms */
+  .jh-form{display:grid;gap:var(--s3);
+    grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end}
+  .jh-field{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .jh-field.wide{grid-column:1/-1}
+  .jh label{font-size:12px;font-weight:600;color:var(--ink-2)}
+  .jh input,.jh select{font:14px var(--font);padding:9px 11px;width:100%;
+    border:1px solid var(--line);border-radius:var(--r-sm);
+    background:var(--surface);color:var(--text);transition:border-color .12s,box-shadow .12s}
+  .jh input:focus,.jh select:focus{outline:none;border-color:var(--accent-d);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 35%,transparent)}
+  .jh input[type=file]{padding:7px 11px;cursor:pointer}
+  .jh-hint{font-size:12px;color:var(--muted);margin-top:var(--s2)}
+  .jh-hint code,.jh code{font:12px var(--mono);background:var(--surface-2);
+    border:1px solid var(--line);padding:1px 5px;border-radius:4px}
+
+  /* badges / pills */
+  .jh-badge{display:inline-flex;align-items:center;gap:5px;
+    padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+  .jh-badge.ok{background:var(--ok-bg);color:var(--ok)}
+  .jh-badge.off{background:var(--danger-bg);color:var(--danger)}
+  .jh-badge.neutral{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+  .jh-dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+
+  /* key/value rows */
+  .jh-rows{display:flex;flex-direction:column}
+  .jh-kv{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);
+    padding:8px 0;border-bottom:1px solid var(--line-2)}
+  .jh-kv:last-child{border-bottom:0}
+  .jh-kv .btns{display:flex;gap:6px;flex-wrap:wrap}
+
+  /* table */
+  .jh-table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r)}
+  .jh table{width:100%;border-collapse:collapse;font-size:13px;min-width:540px}
+  .jh thead th{text-align:left;padding:10px 14px;background:var(--surface-2);
+    font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--muted);border-bottom:1px solid var(--line)}
+  .jh tbody td{padding:11px 14px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+  .jh tbody tr:last-child td{border-bottom:0}
+  .jh tbody tr:hover{background:var(--surface-2)}
+  .jh .app-name{font-weight:700;letter-spacing:-.01em}
+
+  /* row action menu */
+  .jh-menu{position:relative;display:inline-block}
+  .jh-menu-pop{position:absolute;right:0;top:calc(100% + 4px);z-index:30;
+    min-width:172px;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r);box-shadow:var(--sh-3);padding:5px;display:none}
+  .jh-menu-pop.open{display:block}
+  .jh-menu-pop button{display:flex;align-items:center;gap:9px;width:100%;
+    padding:8px 10px;border:0;background:transparent;color:var(--text);
+    font:500 13px var(--font);text-align:left;border-radius:var(--r-sm);cursor:pointer}
+  .jh-menu-pop button svg{width:15px;height:15px;color:var(--muted);flex:none}
+  .jh-menu-pop button:hover{background:var(--surface-2)}
+  .jh-menu-pop button.danger{color:var(--danger)}
+  .jh-menu-pop button.danger svg{color:var(--danger)}
+  .jh-menu-pop hr{border:0;border-top:1px solid var(--line-2);margin:4px 0}
+
+  /* alerts / banners */
+  .jh-alert{display:flex;gap:var(--s2);align-items:flex-start;
+    padding:12px 14px;border-radius:var(--r);font-size:13px;
+    background:var(--warn-bg);border:1px solid var(--warn-bd);color:var(--ink)}
+  .jh-alert svg{width:18px;height:18px;flex:none;margin-top:1px}
+  .jh-alert.danger{background:var(--danger-bg);border-color:color-mix(in srgb,var(--danger) 45%,transparent);color:var(--danger)}
+  .jh-alert.info{background:var(--surface-2);border-color:var(--line);color:var(--ink-2)}
+
+  /* empty state */
+  .jh-empty{text-align:center;padding:var(--s6) var(--s4);color:var(--muted)}
+  .jh-empty svg{width:40px;height:40px;color:var(--muted-2);margin-bottom:var(--s2)}
+  .jh-empty b{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}
+
+  /* monospace viewer (logs / proxy) */
+  .jh-pre{background:#0e1f29;color:#cfe9ef;border-radius:var(--r);
+    padding:14px;max-height:48vh;overflow:auto;margin:0;
+    font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word}
+
+  /* =====================================================================
+     MODAL DIALOG
+     ===================================================================== */
+  .jh-overlay{position:fixed;inset:0;z-index:1000;display:none;
+    background:rgba(15,32,42,.45);backdrop-filter:blur(2px);
+    padding:var(--s4);overflow-y:auto}
+  .jh-overlay.open{display:flex;align-items:flex-start;justify-content:center}
+  .jh-modal{background:var(--surface);border-radius:var(--r-lg);box-shadow:var(--sh-3);
+    width:100%;max-width:600px;margin:auto;animation:jh-pop .16s ease;
+    border:1px solid var(--line)}
+  .jh-modal.lg{max-width:760px}
+  @keyframes jh-pop{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+  .jh-modal-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);
+    padding:var(--s4);border-bottom:1px solid var(--line)}
+  .jh-modal-h h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .jh-modal-h p{margin:2px 0 0;font-size:12px;color:var(--muted)}
+  .jh-x{display:grid;place-items:center;width:32px;height:32px;flex:none;
+    border:1px solid var(--line);background:var(--surface);border-radius:var(--r-sm);
+    color:var(--muted);cursor:pointer}
+  .jh-x:hover{background:var(--surface-2);color:var(--text)}
+  .jh-x svg{width:16px;height:16px}
+  .jh-modal-b{padding:var(--s4);max-height:70vh;overflow-y:auto}
+  .jh-modal-f{display:flex;justify-content:flex-end;gap:var(--s2);
+    padding:var(--s3) var(--s4);border-top:1px solid var(--line);flex-wrap:wrap}
+
+  /* =====================================================================
+     TOASTS
+     ===================================================================== */
+  .jh-toasts{position:fixed;right:16px;bottom:16px;z-index:2000;
+    display:flex;flex-direction:column;gap:10px;max-width:360px}
+  .jh-toast{display:flex;gap:10px;align-items:flex-start;
+    padding:12px 14px;border-radius:var(--r);box-shadow:var(--sh-2);
+    background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent-d);
+    font-size:13px;animation:jh-slide .2s ease}
+  .jh-toast.ok{border-left-color:var(--ok)}
+  .jh-toast.err{border-left-color:var(--danger)}
+  .jh-toast svg{width:18px;height:18px;flex:none;margin-top:1px}
+  .jh-toast.ok svg{color:var(--ok)} .jh-toast.err svg{color:var(--danger)}
+  .jh-toast .tx{min-width:0;word-break:break-word}
+  .jh-toast .tx b{display:block;font-weight:700;margin-bottom:1px}
+  .jh-toast.out{animation:jh-slideout .2s ease forwards}
+  @keyframes jh-slide{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+  @keyframes jh-slideout{to{opacity:0;transform:translateX(20px)}}
+
+  .jh-spread{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center}
+  .jh-spread .jh-bar-spacer{flex:1}
+  .jh-muted{color:var(--muted)}
+  .jh-loading{color:var(--muted);font-size:13px}
+
+  @media (max-width:560px){
+    .jh{padding:var(--s3)}
+    .jh-stat-v{font-size:20px}
+    .jh-modal-f{flex-direction:column-reverse}
+    .jh-modal-f .jh-btn{width:100%}
+  }
   </style>
 
-  <h2>JavaHost — Tomcat &amp; Java Runtime Manager</h2>
-  <div class="muted" style="margin-bottom:6px">
-    Independent OSS plugin (Apache-2.0). Tomcat 9 / 10.1 / 11 · Java 8 / 11 / 17 / 21 · verified downloads · systemd.
-  </div>
-  <!-- Global status / error line, written by msg() -->
-  <div id="jh-msg"></div>
+  <!-- defs: shared inline SVG sprite (icons referenced via <use>) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-coffee" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4Z"/><line x1="6" y1="2" x2="6" y2="4"/><line x1="10" y1="2" x2="10" y2="4"/><line x1="14" y1="2" x2="14" y2="4"/></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+      <symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></symbol>
+      <symbol id="i-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></symbol>
+      <symbol id="i-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/></symbol>
+      <symbol id="i-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0 5 5l-7.4 7.4a2 2 0 0 1-2.8 0l-2.2-2.2a2 2 0 0 1 0-2.8z"/></symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+      <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></symbol>
+    </defs>
+  </svg>
 
-  <!-- ====================== 1. DASHBOARD ====================== -->
-  <div class="section">
-    <h2>Dashboard</h2>
-    <div class="grid">
-      <div class="card">
-        <h3>Java Runtimes</h3>
-        <div id="jh-java" class="muted">loading…</div>
-        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
-          <button class="ghost sm" data-jdk="8">+ JDK 8</button>
-          <button class="ghost sm" data-jdk="11">+ JDK 11</button>
-          <button class="ghost sm" data-jdk="17">+ JDK 17</button>
-          <button class="ghost sm" data-jdk="21">+ JDK 21</button>
+  <div class="jh-shell">
+    <!-- ================== TOP APP BAR ================== -->
+    <header class="jh-bar">
+      <div class="jh-logo" aria-hidden="true"><svg><use href="#i-coffee"/></svg></div>
+      <div class="jh-title">
+        <b>JavaHost</b>
+        <span>Tomcat &amp; Java runtime manager</span>
+      </div>
+      <div class="jh-bar-spacer"></div>
+      <span class="jh-pill-ver" title="Independent OSS plugin · Apache-2.0">Apache-2.0 · OSS</span>
+      <button class="jh-btn ghost sm" id="jh-refresh" title="Refresh status" aria-label="Refresh status">
+        <svg><use href="#i-refresh"/></svg> Refresh
+      </button>
+    </header>
+
+    <!-- ================== NAV TABS ================== -->
+    <nav class="jh-nav" role="tablist" aria-label="Sections">
+      <button class="jh-tab" role="tab" data-tab="dashboard" aria-selected="true" id="tab-dashboard" aria-controls="page-dashboard"><svg><use href="#i-grid"/></svg>Dashboard</button>
+      <button class="jh-tab" role="tab" data-tab="apps" aria-selected="false" id="tab-apps" aria-controls="page-apps"><svg><use href="#i-box"/></svg>Applications</button>
+      <button class="jh-tab" role="tab" data-tab="runtimes" aria-selected="false" id="tab-runtimes" aria-controls="page-runtimes"><svg><use href="#i-layers"/></svg>Runtimes</button>
+      <button class="jh-tab" role="tab" data-tab="databases" aria-selected="false" id="tab-databases" aria-controls="page-databases"><svg><use href="#i-db"/></svg>Databases</button>
+      <button class="jh-tab" role="tab" data-tab="help" aria-selected="false" id="tab-help" aria-controls="page-help"><svg><use href="#i-help"/></svg>Help</button>
+    </nav>
+
+    <!-- hardening banner (shown only when service_dirs_locked) -->
+    <div id="jh-harden" style="margin-bottom:var(--s4);display:none"></div>
+
+    <!-- ================== PAGE: DASHBOARD ================== -->
+    <section class="jh-page active" id="page-dashboard" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="0">
+      <div class="jh-grid" style="margin-bottom:var(--s4)" id="jh-stats">
+        <div class="jh-loading">Loading status…</div>
+      </div>
+      <div class="jh-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+        <div class="jh-card">
+          <div class="jh-card-h"><div><h3>Java runtimes</h3><p>Detected JDK installations</p></div></div>
+          <div class="jh-rows" id="dash-java"><div class="jh-loading">Loading…</div></div>
+        </div>
+        <div class="jh-card">
+          <div class="jh-card-h"><div><h3>Tomcat versions</h3><p>Installed servlet containers</p></div></div>
+          <div class="jh-rows" id="dash-tomcat"><div class="jh-loading">Loading…</div></div>
+        </div>
+        <div class="jh-card">
+          <div class="jh-card-h"><div><h3>Environment</h3><p>Service backend &amp; limits</p></div></div>
+          <div class="jh-rows" id="dash-env"><div class="jh-loading">Loading…</div></div>
         </div>
       </div>
-      <div class="card">
-        <h3>Tomcat Versions</h3>
-        <!-- one row per supported_tomcat major, with install/update/uninstall -->
-        <div id="jh-tomcat" class="muted">loading…</div>
-      </div>
-      <div class="card">
-        <h3>Environment</h3>
-        <div id="jh-env" class="muted">loading…</div>
-      </div>
-    </div>
-  </div>
+    </section>
 
-  <!-- ====================== 2. APPS ====================== -->
-  <div class="section">
-    <h2>Applications</h2>
-
-    <!-- Create app form. The version dropdown is populated from installed tomcats. -->
-    <div class="card">
-      <h3>Create App</h3>
-      <div class="formrow">
-        <div class="field"><label for="jh-new-name">Name</label>
-          <input id="jh-new-name" placeholder="myapp" autocomplete="off"></div>
-        <div class="field"><label for="jh-new-ver">Tomcat version</label>
-          <select id="jh-new-ver"><option value="">(no tomcat installed)</option></select></div>
-        <div class="field"><label for="jh-new-port">Port</label>
-          <input id="jh-new-port" type="number" value="8080" min="1" max="65535" style="width:90px"></div>
-        <div class="field"><label for="jh-new-mem">Memory (MB)</label>
-          <input id="jh-new-mem" type="number" value="512" min="64" step="64" style="width:100px"></div>
-        <div class="field"><label>&nbsp;</label>
-          <button id="jh-create" class="accent">Create app</button></div>
-      </div>
-      <div class="muted" style="margin-top:6px">A dedicated Tomcat instance is created per app on the chosen major.</div>
-    </div>
-
-    <!-- Spring Boot / executable fat-JAR app — sibling to the Tomcat create form -->
-    <div class="card" style="margin-top:12px">
-      <h3>Spring Boot / executable JAR app</h3>
-      <div class="formrow">
-        <div class="field"><label for="jh-jar-name">Name</label>
-          <input id="jh-jar-name" placeholder="myservice" autocomplete="off"></div>
-        <div class="field"><label for="jh-jar-java">Java major</label>
-          <select id="jh-jar-java"><option value="17">Java 17</option><option value="21">Java 21</option><option value="11">Java 11</option><option value="8">Java 8</option></select></div>
-        <div class="field"><label for="jh-jar-port">Port</label>
-          <input id="jh-jar-port" type="number" value="8080" min="1" max="65535" style="width:90px"></div>
-        <div class="field"><label for="jh-jar-mem">Memory (MB)</label>
-          <input id="jh-jar-mem" type="number" value="512" min="64" step="64" style="width:100px"></div>
-      </div>
-      <div class="formrow" style="margin-top:8px">
-        <div class="field" style="min-width:240px"><label for="jh-jar-file">Fat JAR file</label>
-          <input id="jh-jar-file" type="file" accept=".jar"></div>
-        <div class="field"><label>&nbsp;</label>
-          <button id="jh-jar-create" class="accent">Deploy Spring Boot JAR</button></div>
-      </div>
-      <div class="muted" style="margin-top:6px">
-        Runs an executable fat-jar as a managed service (no Tomcat). The file is uploaded via the panel file API and staged server-side; the staged path is passed to <code>CreateJarApp</code>.
-      </div>
-    </div>
-
-    <!-- App table: status badge + per-app actions -->
-    <div class="card" style="margin-top:12px">
-      <h3>Managed Apps</h3>
-      <table>
-        <thead><tr><th>App</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody id="jh-app-rows"><tr><td colspan="3" class="muted">loading…</td></tr></tbody>
-      </table>
-
-      <!-- Logs panel: toggled by the per-app "Logs" button -->
-      <div id="jh-logs" class="panel hide">
-        <div class="formrow" style="justify-content:space-between">
-          <strong id="jh-logs-title">Logs</strong>
-          <div class="field" style="flex-direction:row;align-items:center;gap:6px">
-            <label for="jh-logs-lines" style="margin:0">Lines</label>
-            <select id="jh-logs-lines">
-              <option>50</option><option selected>200</option><option>500</option><option>1000</option>
-            </select>
-            <button class="ghost sm" id="jh-logs-refresh">Refresh</button>
-            <button class="ghost sm" id="jh-logs-close">Close</button>
+    <!-- ================== PAGE: APPLICATIONS ================== -->
+    <section class="jh-page" id="page-apps" role="tabpanel" aria-labelledby="tab-apps" tabindex="0">
+      <div class="jh-card">
+        <div class="jh-card-h">
+          <div><h3>Managed applications</h3><p>Tomcat instances and Spring Boot services</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-open-war"><svg><use href="#i-upload"/></svg>Deploy WAR</button>
+            <button class="jh-btn ghost sm" id="jh-open-jar"><svg><use href="#i-server"/></svg>Spring Boot JAR</button>
+            <button class="jh-btn accent sm" id="jh-open-create"><svg><use href="#i-plus"/></svg>Create app</button>
           </div>
         </div>
-        <pre id="jh-logs-pre">…</pre>
+        <div id="jh-apps-body">
+          <div class="jh-loading">Loading applications…</div>
+        </div>
       </div>
+    </section>
 
-      <!-- WAR-deploy panel: toggled by the per-app "Deploy WAR" button -->
-      <div id="jh-warpanel" class="panel hide">
-        <div class="formrow" style="justify-content:space-between">
-          <strong id="jh-war-title">Deploy WAR</strong>
-          <button class="ghost sm" id="jh-war-close">Close</button>
-        </div>
-        <div class="formrow" style="margin-top:8px">
-          <div class="field" style="min-width:260px"><label for="jh-war-file">WAR file</label>
-            <input id="jh-war-file" type="file" accept=".war"></div>
-          <div class="field"><label>&nbsp;</label>
-            <button id="jh-war-deploy" class="accent">Deploy WAR</button></div>
-          <div class="field"><label>&nbsp;</label>
-            <button id="jh-war-migrate" class="ghost">Migrate javax&rarr;jakarta &amp; deploy</button></div>
-        </div>
-        <div class="muted" style="margin-top:6px">
-          The WAR is uploaded via the panel file API and staged server-side; the staged path is passed to <code>UploadWar</code> / <code>MigrateWar</code>. Use Migrate for a javax.* WAR deployed onto Tomcat 10/11.
-        </div>
-        <!-- Returned warnings (e.g. namespace) rendered here in warn style -->
-        <div id="jh-war-result"></div>
+    <!-- ================== PAGE: RUNTIMES ================== -->
+    <section class="jh-page" id="page-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" tabindex="0">
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Java (Temurin / OpenJDK)</h3><p>Install runtimes via verified Adoptium downloads</p></div></div>
+        <div class="jh-rows" id="rt-java"><div class="jh-loading">Loading…</div></div>
+        <div class="jh-hint">Click a version to install. Java 17/21 are recommended for Tomcat 10.1/11; Java 8 for legacy apps.</div>
       </div>
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Apache Tomcat</h3><p>Install, update to latest patch, or uninstall a major line</p></div></div>
+        <div class="jh-rows" id="rt-tomcat"><div class="jh-loading">Loading…</div></div>
+        <div class="jh-hint">Tomcat 9 uses the <code>javax.*</code> namespace; 10.1 / 11 use <code>jakarta.*</code>. Downloads are checksum-verified.</div>
+      </div>
+    </section>
 
-      <!-- DB-env panel: toggled by the per-app "DB env" button -->
-      <div id="jh-dbpanel" class="panel hide">
-        <div class="formrow" style="justify-content:space-between">
-          <strong id="jh-db-title">Database environment</strong>
-          <button class="ghost sm" id="jh-db-close">Close</button>
+    <!-- ================== PAGE: DATABASES ================== -->
+    <section class="jh-page" id="page-databases" role="tabpanel" aria-labelledby="tab-databases" tabindex="0">
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Supported database engines</h3><p>Reference matrix from the server. Wire an app via its DB&nbsp;env action.</p></div></div>
+        <div class="jh-table-wrap">
+          <table>
+            <thead><tr><th>Engine</th><th>Default port</th><th>Versions</th><th>Driver</th><th>Local</th></tr></thead>
+            <tbody id="db-matrix"><tr><td colspan="5" class="jh-loading">Loading…</td></tr></tbody>
+          </table>
         </div>
-        <div class="formrow" style="margin-top:8px">
-          <div class="field"><label for="jh-db-engine">Engine</label>
-            <select id="jh-db-engine"><option value="">loading…</option></select></div>
-          <div class="field"><label for="jh-db-version">Version</label>
-            <select id="jh-db-version"></select></div>
-          <div class="field"><label for="jh-db-host">Host</label>
-            <input id="jh-db-host" value="127.0.0.1"></div>
-          <div class="field"><label for="jh-db-port">Port</label>
-            <input id="jh-db-port" type="number" style="width:90px"></div>
-        </div>
-        <div class="formrow" style="margin-top:8px">
-          <div class="field"><label for="jh-db-name">Database</label>
-            <input id="jh-db-name" placeholder="appdb"></div>
-          <div class="field"><label for="jh-db-user">User</label>
-            <input id="jh-db-user" placeholder="appuser"></div>
-          <div class="field"><label for="jh-db-pass">Password</label>
-            <input id="jh-db-pass" type="password" autocomplete="new-password"></div>
-          <div class="field"><label>&nbsp;</label>
-            <button id="jh-db-save" class="accent">Write DB env</button></div>
-        </div>
-        <!-- recommended driver coordinates for the chosen engine -->
-        <div id="jh-db-driver" class="muted" style="margin-top:8px"></div>
-        <div class="muted">Secrets are written server-side and never echoed back to this UI.</div>
       </div>
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Per-app database environment</h3><p>Pick a managed app to write its DB connection env</p></div></div>
+        <div id="db-app-picker" class="jh-spread"><div class="jh-loading">Loading apps…</div></div>
+        <div class="jh-hint">Secrets are written server-side and never echoed back to this UI.</div>
+      </div>
+    </section>
+
+    <!-- ================== PAGE: HELP ================== -->
+    <section class="jh-page" id="page-help" role="tabpanel" aria-labelledby="tab-help" tabindex="0">
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Reverse-proxy hint</h3><p>Include snippet to front a managed app with the panel's web server</p></div></div>
+        <div id="help-proxy"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Documentation</h3><p>Operational guides shipped with the plugin</p></div></div>
+        <div class="jh-rows">
+          <div class="jh-kv">
+            <span><svg style="width:15px;height:15px;vertical-align:-2px;color:var(--muted)"><use href="#i-doc"/></svg> System hardening &amp; service directories</span>
+            <a class="jh-btn ghost sm" href="docs/system-hardening.md" target="_blank" rel="noopener"><svg><use href="#i-link"/></svg>Open</a>
+          </div>
+          <div class="jh-kv">
+            <span><svg style="width:15px;height:15px;vertical-align:-2px;color:var(--muted)"><use href="#i-doc"/></svg> Single vs. multi-instance mode</span>
+            <a class="jh-btn ghost sm" href="docs/single-vs-multi-mode.md" target="_blank" rel="noopener"><svg><use href="#i-link"/></svg>Open</a>
+          </div>
+        </div>
+        <div class="jh-hint">Per-app Tomcat instances on the chosen major; downloads are verified; services run under systemd (with init.d fallback).</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================== MODAL HOST (single overlay, content swapped) ================== -->
+  <div class="jh-overlay" id="jh-overlay" role="dialog" aria-modal="true" aria-labelledby="jh-modal-title">
+    <div class="jh-modal" id="jh-modal">
+      <div class="jh-modal-h">
+        <div><h3 id="jh-modal-title">Dialog</h3><p id="jh-modal-sub"></p></div>
+        <button class="jh-x" id="jh-modal-x" aria-label="Close dialog"><svg><use href="#i-x"/></svg></button>
+      </div>
+      <div class="jh-modal-b" id="jh-modal-body"></div>
+      <div class="jh-modal-f" id="jh-modal-foot"></div>
     </div>
   </div>
 
-  <!-- ====================== 3. DB HELPER REFERENCE ====================== -->
-  <div class="section">
-    <h2>Database Support</h2>
-    <div class="card">
-      <h3>Supported Engines</h3>
-      <div class="muted" style="margin-bottom:6px">
-        Reference matrix from the server. Use the per-app <em>DB env</em> button above to wire an app to a database.
-      </div>
-      <table>
-        <thead><tr><th>Engine</th><th>Default port</th><th>Versions</th><th>Driver</th><th>Local</th></tr></thead>
-        <tbody id="jh-db-matrix"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- ====================== 4. PROXY HINT ====================== -->
-  <div class="section">
-    <h2>Reverse-Proxy Hint</h2>
-    <div class="card">
-      <h3>Web Server Include</h3>
-      <div id="jh-proxy" class="muted">loading…</div>
-    </div>
-  </div>
+  <!-- ================== TOASTS ================== -->
+  <div class="jh-toasts" id="jh-toasts" aria-live="polite" aria-atomic="false"></div>
 </div>
 
 <script>
 (function(){
   "use strict";
 
-  // ---- AJAX: panel plugin convention (jQuery if present, else Fetch) ----
+  // =====================================================================
+  // CORE HELPERS — AJAX, envelope unwrap, escaping, DOM
+  // =====================================================================
+
+  // Panel plugin convention. jQuery $.post if available, else Fetch.
   function call(method, data, cb){
     var url = '/plugin?action=a&name=javahost&s=' + method;
     if (window.$ && $.post){
-      $.post(url, data||{}, function(r){ cb(typeof r==='string'?JSON.parse(r):r); });
+      $.post(url, data || {}, function(r){ cb(typeof r === 'string' ? JSON.parse(r) : r); })
+        .fail(function(e){ cb({status:false, msg:String(e && e.statusText || e)}); });
     } else {
-      fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:new URLSearchParams(data||{})})
-        .then(function(x){return x.json();}).then(cb)
+      fetch(url, {method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:new URLSearchParams(data || {})})
+        .then(function(x){ return x.json(); }).then(cb)
         .catch(function(e){ cb({status:false, msg:String(e)}); });
     }
   }
-  // Unwrap the {status,msg} envelope: data lives in msg, fall back to r itself.
-  function payload(r){ return (r && r.msg!=null) ? r.msg : (r||{}); }
-  function failed(r){ return !!(r && r.status===false); }
+  // {status,msg} envelope: data lives in msg, else r itself.
+  function payload(r){ return (r && r.msg != null) ? r.msg : (r || {}); }
+  function failed(r){ return !!(r && r.status === false); }
+  function errText(p){ return typeof p === 'string' ? p : JSON.stringify(p); }
 
-  // ---- XSS escaping for every piece of dynamic text ----
-  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-
-  // ---- tiny DOM helper ----
-  function $id(id){return document.getElementById(id);}
-
-  // ---- per-app tomcat major cache (filled by renderApps from GetStatus) ----
-  var appVersions = {};
-
-  // ---- global status / error line ----
-  function msg(t,bad){
-    $id('jh-msg').innerHTML =
-      '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+esc(t)+'</div>';
+  // HTML escaping for ALL dynamic text injected via innerHTML.
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
   }
-  // Standard completion handler for action calls.
-  function done(label){
+  function $(id){ return document.getElementById(id); }
+  function el(html){ var d=document.createElement('div'); d.innerHTML=html.trim(); return d.firstChild; }
+  function ic(name){ return '<svg aria-hidden="true"><use href="#i-'+name+'"/></svg>'; }
+
+  // Toggle a button into a spinner/disabled state during an async call.
+  function busy(btn, on){
+    if(!btn) return;
+    if(on){ btn.classList.add('busy'); btn.disabled = true; }
+    else { btn.classList.remove('busy'); btn.disabled = false; }
+  }
+
+  // =====================================================================
+  // TOASTS
+  // =====================================================================
+  function toast(msg, kind, title){
+    var t = document.createElement('div');
+    t.className = 'jh-toast ' + (kind || '');
+    var sym = kind === 'ok' ? 'check' : kind === 'err' ? 'warn' : 'info';
+    t.innerHTML = ic(sym) + '<div class="tx">' +
+      (title ? '<b>'+esc(title)+'</b>' : '') + esc(msg) + '</div>';
+    $('jh-toasts').appendChild(t);
+    setTimeout(function(){
+      t.classList.add('out');
+      setTimeout(function(){ t.remove(); }, 220);
+    }, kind === 'err' ? 6000 : 3600);
+  }
+  // Standard completion handler for fire-and-refresh action calls.
+  function done(label, btn){
     return function(r){
-      var p = payload(r);
-      msg(failed(r) ? (label+' failed: '+(typeof p==='string'?p:JSON.stringify(p)))
-                    : (label+' ok'), failed(r));
+      busy(btn, false);
+      if(failed(r)) toast(errText(payload(r)), 'err', label + ' failed');
+      else toast(label + ' completed', 'ok');
       refresh();
     };
   }
 
-  // ===================================================================
-  // DASHBOARD
-  // ===================================================================
-  function renderDashboard(d){
-    // -- Java runtimes: { major: home } --
-    var j = d.java||{}, jh='', keys=Object.keys(j);
-    keys.forEach(function(k){
-      jh += '<div class="row"><span>Java '+esc(k)+'</span>'+
-            '<span class="badge ok" title="'+esc(j[k])+'">installed</span></div>';
+  // =====================================================================
+  // STATE
+  // =====================================================================
+  var STATE = {};        // last GetStatus payload
+  var DB_ENGINES = [];   // cached GetDbSupport matrix
+  var appMajor = {};     // app -> tomcat major (for WAR version param)
+
+  // =====================================================================
+  // NAV TABS
+  // =====================================================================
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.jh-tab'));
+  function showTab(name){
+    tabs.forEach(function(t){
+      var on = t.dataset.tab === name;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      $('page-' + name).classList.toggle('active', on);
     });
-    $id('jh-java').innerHTML = jh || '<span class="muted">none detected</span>';
-
-    // -- Tomcat: row per supported major with install/update/uninstall --
-    var t = d.tomcat||{}, th='';
-    (d.supported_tomcat||['9','10','11']).forEach(function(k){
-      var info = t[k];
-      th += '<div class="row"><span>Tomcat '+esc(k)+
-            (info?(' <span class="muted">'+esc(info.patch)+'</span>'):'')+'</span><span class="btns">';
-      if(info){
-        th += '<button class="sm" data-tc-update="'+esc(k)+'">Update</button>'+
-              '<button class="ghost sm" data-tc-uninstall="'+esc(k)+'">Uninstall</button>';
-      } else {
-        th += '<button class="accent sm" data-tc-install="'+esc(k)+'">Install</button>';
-      }
-      th += '</span></div>';
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener('click', function(){ showTab(t.dataset.tab); });
+    // arrow-key navigation between tabs (accessibility)
+    t.addEventListener('keydown', function(e){
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if(!d) return;
+      e.preventDefault();
+      var n = tabs[(i + d + tabs.length) % tabs.length];
+      n.focus(); showTab(n.dataset.tab);
     });
-    $id('jh-tomcat').innerHTML = th || '<span class="muted">no lines</span>';
+  });
 
-    // -- Environment / systemd --
-    $id('jh-env').innerHTML =
-      '<div class="row"><span>systemd</span><span class="badge '+(d.systemd?'ok':'neutral')+'">'+
-      (d.systemd?'available':'init.d fallback')+'</span></div>'+
-      '<div class="row"><span>Java runtimes</span><span class="badge neutral">'+keys.length+'</span></div>'+
-      '<div class="row"><span>Managed apps</span><span class="badge neutral">'+((d.apps||[]).length)+'</span></div>'+
-      '<div class="row"><span>Service dirs</span><span class="badge '+(d.service_dirs_locked?'off':'ok')+'">'+
-      (d.service_dirs_locked?'locked (hardening)':'writable')+'</span></div>';
-
-    // -- System Hardening banner: services can't be installed while locked --
-    if (d.service_dirs_locked) {
-      $id('jh-msg').innerHTML =
-        '<div class="warn" style="background:#fdecec;border-color:#e7a">&#9888; '+
-        esc(d.hardening_hint || 'aaPanel System Hardening locks /etc/systemd/system & /etc/init.d — '+
-            'disable it (or lift chattr +i) to create/manage apps. See docs/system-hardening.md.')+
-        '</div>';
-    }
-
-    // -- populate Create-App version dropdown from INSTALLED tomcats --
-    var sel = $id('jh-new-ver'), prev = sel.value, opts='';
-    Object.keys(t).forEach(function(k){
-      opts += '<option value="'+esc(k)+'">Tomcat '+esc(k)+' ('+esc(t[k].patch)+')</option>';
-    });
-    sel.innerHTML = opts || '<option value="">(no tomcat installed)</option>';
-    if(prev){ sel.value = prev; }
+  // =====================================================================
+  // MODAL DIALOG (single host, content swapped per-use)
+  // =====================================================================
+  var modalCleanup = null;
+  function openModal(opts){
+    $('jh-modal-title').textContent = opts.title || '';
+    $('jh-modal-sub').textContent = opts.sub || '';
+    $('jh-modal').classList.toggle('lg', !!opts.large);
+    $('jh-modal-body').innerHTML = opts.body || '';
+    var foot = $('jh-modal-foot'); foot.innerHTML = '';
+    (opts.footer || []).forEach(function(f){ foot.appendChild(f); });
+    $('jh-overlay').classList.add('open');
+    modalCleanup = opts.onClose || null;
+    if(opts.onMount) opts.onMount();
+    // focus first focusable element
+    var f = $('jh-modal-body').querySelector('input,select,button,textarea');
+    if(f) setTimeout(function(){ f.focus(); }, 30);
+  }
+  function closeModal(){
+    $('jh-overlay').classList.remove('open');
+    if(modalCleanup){ modalCleanup(); modalCleanup = null; }
+  }
+  $('jh-modal-x').addEventListener('click', closeModal);
+  $('jh-overlay').addEventListener('mousedown', function(e){
+    if(e.target === $('jh-overlay')) closeModal();
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && $('jh-overlay').classList.contains('open')) closeModal();
+  });
+  // factory for footer buttons
+  function mkBtn(label, cls, onClick, iconName){
+    var b = el('<button class="jh-btn '+(cls||'')+'">'+(iconName?ic(iconName):'')+esc(label)+'</button>');
+    if(onClick) b.addEventListener('click', function(){ onClick(b); });
+    return b;
   }
 
-  // ===================================================================
-  // APPS TABLE
-  // ===================================================================
+  // =====================================================================
+  // DASHBOARD
+  // =====================================================================
+  function statTile(icon, kind, value, key, sub){
+    return '<div class="jh-stat"><div class="jh-stat-ic '+(kind||'')+'">'+ic(icon)+'</div>'+
+      '<div class="jh-stat-b"><div class="jh-stat-k">'+esc(key)+'</div>'+
+      '<div class="jh-stat-v">'+esc(value)+'</div>'+
+      (sub ? '<div class="jh-stat-s">'+esc(sub)+'</div>' : '')+'</div></div>';
+  }
+  function renderDashboard(d){
+    var java = d.java || {}, jKeys = Object.keys(java);
+    var tom = d.tomcat || {}, tKeys = Object.keys(tom);
+    var apps = d.apps || [];
+    var healthy = (d.systemd ? 'systemd' : 'init.d');
+
+    // stat tiles
+    $('jh-stats').innerHTML =
+      statTile('cpu', '', jKeys.length, 'Java runtimes',
+        jKeys.length ? ('Java ' + jKeys.sort(function(a,b){return a-b;}).join(', ')) : 'none detected') +
+      statTile('layers', 'hi', tKeys.length, 'Tomcat versions',
+        tKeys.length ? ('majors ' + tKeys.join(', ')) : 'none installed') +
+      statTile('box', '', apps.length, 'Managed apps',
+        apps.length ? (apps.filter(function(a){return a.status==='active';}).length + ' running') : 'no apps yet') +
+      statTile('server', 'ok', d.systemd ? 'systemd' : 'init.d', 'Service backend',
+        d.service_dirs_locked ? 'dirs locked' : 'writable');
+
+    // java rows
+    $('dash-java').innerHTML = jKeys.length ? jKeys.map(function(k){
+      return '<div class="jh-kv"><span>Java '+esc(k)+'</span>'+
+        '<span class="jh-badge ok" title="'+esc(java[k])+'"><span class="jh-dot"></span>installed</span></div>';
+    }).join('') : emptyInline('No JDK detected', 'Install one from the Runtimes tab.');
+
+    // tomcat rows
+    var supp = d.supported_tomcat || ['9','10','11'];
+    $('dash-tomcat').innerHTML = supp.map(function(k){
+      var info = tom[k];
+      return '<div class="jh-kv"><span>Tomcat '+esc(k)+
+        (info ? ' <span class="jh-muted">'+esc(info.patch)+'</span>' : '')+'</span>'+
+        (info ? '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'
+              : '<span class="jh-badge neutral">not installed</span>')+'</div>';
+    }).join('');
+
+    // environment rows
+    $('dash-env').innerHTML =
+      '<div class="jh-kv"><span>Service manager</span><span class="jh-badge '+(d.systemd?'ok':'neutral')+'">'+esc(d.systemd?'systemd':'init.d fallback')+'</span></div>'+
+      '<div class="jh-kv"><span>Supported Tomcat</span><span class="jh-muted">'+esc(supp.join(' / '))+'</span></div>'+
+      '<div class="jh-kv"><span>Service directories</span><span class="jh-badge '+(d.service_dirs_locked?'off':'ok')+'">'+esc(d.service_dirs_locked?'locked':'writable')+'</span></div>'+
+      '<div class="jh-kv"><span>Total apps</span><span class="jh-badge neutral">'+apps.length+'</span></div>';
+
+    // hardening banner — shown ONLY when locked
+    var hb = $('jh-harden');
+    if(d.service_dirs_locked){
+      hb.style.display = '';
+      hb.innerHTML = '<div class="jh-alert danger">'+ic('warn')+
+        '<div><b>System hardening is active.</b> '+
+        esc(d.hardening_hint || 'Service directories are immutable; JavaHost cannot register services until hardening is lifted.')+
+        ' See <code>docs/system-hardening.md</code>.</div></div>';
+    } else { hb.style.display = 'none'; hb.innerHTML = ''; }
+  }
+  function emptyInline(title, sub){
+    return '<div class="jh-empty" style="padding:var(--s4)">'+ic('info')+
+      '<b>'+esc(title)+'</b>'+(sub?'<div>'+esc(sub)+'</div>':'')+'</div>';
+  }
+
+  // =====================================================================
+  // RUNTIMES TAB — Java + Tomcat install/update/uninstall
+  // =====================================================================
+  function renderRuntimes(d){
+    var java = d.java || {};
+    var majors = ['8','11','17','21'];
+    $('rt-java').innerHTML = majors.map(function(k){
+      var on = java[k] != null;
+      return '<div class="jh-kv"><span>Java '+esc(k)+
+        (on ? ' <span class="jh-muted" title="'+esc(java[k])+'">'+esc(java[k])+'</span>' : '')+'</span>'+
+        '<span class="btns">'+
+          (on ? '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'
+              : '<button class="jh-btn accent sm" data-jdk="'+esc(k)+'">'+ic('plus')+'Install</button>')+
+        '</span></div>';
+    }).join('');
+
+    var tom = d.tomcat || {}, supp = d.supported_tomcat || ['9','10','11'];
+    $('rt-tomcat').innerHTML = supp.map(function(k){
+      var info = tom[k];
+      var meta = info ? ('patch '+info.patch+' · '+info.namespace+' · min Java '+info.min_java) : 'not installed';
+      return '<div class="jh-kv"><span>Tomcat '+esc(k)+' <span class="jh-muted">'+esc(meta)+'</span></span>'+
+        '<span class="btns">'+
+        (info
+          ? '<button class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>'+
+            '<button class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>'
+          : '<button class="jh-btn accent sm" data-tc-install="'+esc(k)+'">'+ic('plus')+'Install</button>')+
+        '</span></div>';
+    }).join('');
+  }
+
+  // =====================================================================
+  // APPLICATIONS TAB — table + per-row action menu + health pill
+  // =====================================================================
   function renderApps(apps){
-    apps = apps||[];
+    apps = apps || [];
+    appMajor = {};
+    var body = $('jh-apps-body');
     if(!apps.length){
-      $id('jh-app-rows').innerHTML = '<tr><td colspan="3" class="muted">no apps yet — create one above</td></tr>';
+      body.innerHTML = '<div class="jh-empty">'+ic('box')+
+        '<b>No applications yet</b>'+
+        '<div>Create a Tomcat app, deploy a WAR, or run a Spring Boot JAR to get started.</div>'+
+        '<div style="margin-top:var(--s3)"><button class="jh-btn accent" id="jh-empty-create">'+ic('plus')+'Create your first app</button></div>'+
+        '</div>';
+      var ec = $('jh-empty-create'); if(ec) ec.addEventListener('click', openCreate);
       return;
     }
-    var html='';
-    apps.forEach(function(x){
-      var name = esc(x.app), live = (x.status==='active');
-      // cache the app's tomcat major so the WAR panel can pass `version`
-      appVersions[x.app] = (x.tomcat!=null ? x.tomcat : (x.version!=null ? x.version : ''));
-      html += '<tr><td><strong>'+name+'</strong></td>'+
-        '<td><span class="badge '+(live?'ok':'off')+'">'+esc(x.status)+'</span> '+
-            '<span class="badge neutral" id="jh-health-'+name+'" title="health">health: ?</span></td>'+
-        '<td><div class="btns">'+
-          '<button class="ghost sm" data-app-action="start"   data-app="'+name+'">Start</button>'+
-          '<button class="ghost sm" data-app-action="stop"    data-app="'+name+'">Stop</button>'+
-          '<button class="ghost sm" data-app-action="restart" data-app="'+name+'">Restart</button>'+
-          '<button class="ghost sm" data-app-health="'+name+'">Check health</button>'+
-          '<button class="ghost sm" data-app-repair="'+name+'">Repair</button>'+
-          '<button class="ghost sm" data-app-war="'+name+'">Deploy WAR</button>'+
-          '<button class="ghost sm" data-app-logs="'+name+'">Logs</button>'+
-          '<button class="ghost sm" data-app-db="'+name+'">DB env</button>'+
-          '<button class="sm" data-app-delete="'+name+'" style="border-color:#c0392b;background:#c0392b">Delete</button>'+
-        '</div></td></tr>';
-    });
-    $id('jh-app-rows').innerHTML = html;
-    // auto-refresh health for every app once the list is (re)rendered
+    var rows = apps.map(function(x){
+      var name = x.app;
+      appMajor[name] = (x.tomcat != null ? x.tomcat : (x.version != null ? x.version : ''));
+      var live = x.status === 'active';
+      var ec = esc(name);
+      return '<tr>'+
+        '<td><div class="app-name">'+ec+'</div></td>'+
+        '<td><span class="jh-badge '+(live?'ok':'off')+'"><span class="jh-dot"></span>'+esc(x.status)+'</span></td>'+
+        '<td><span class="jh-badge neutral" id="hp-'+ec+'"><span class="jh-dot"></span>checking…</span></td>'+
+        '<td style="text-align:right">'+
+          '<button class="jh-btn ghost sm" data-act="restart" data-app="'+ec+'" title="Restart">'+ic('refresh')+'</button> '+
+          '<div class="jh-menu">'+
+            '<button class="jh-btn ghost sm icon" data-menu="'+ec+'" aria-haspopup="true" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
+            '<div class="jh-menu-pop" id="menu-'+ec+'">'+
+              '<button data-act="start" data-app="'+ec+'">'+ic('play')+'Start</button>'+
+              '<button data-act="stop" data-app="'+ec+'">'+ic('stop')+'Stop</button>'+
+              '<button data-act="restart" data-app="'+ec+'">'+ic('refresh')+'Restart</button>'+
+              '<hr>'+
+              '<button data-logs="'+ec+'">'+ic('doc')+'View logs</button>'+
+              '<button data-health="'+ec+'">'+ic('heart')+'Check health</button>'+
+              '<button data-repair="'+ec+'">'+ic('wrench')+'Repair</button>'+
+              '<button data-dbenv="'+ec+'">'+ic('db')+'Database env</button>'+
+              '<hr>'+
+              '<button class="danger" data-delete="'+ec+'">'+ic('trash')+'Delete app</button>'+
+            '</div>'+
+          '</div>'+
+        '</td></tr>';
+    }).join('');
+    body.innerHTML = '<div class="jh-table-wrap"><table>'+
+      '<thead><tr><th>Application</th><th>Service</th><th>Health</th><th style="text-align:right">Actions</th></tr></thead>'+
+      '<tbody>'+rows+'</tbody></table></div>';
+
     apps.forEach(function(x){ checkHealth(x.app); });
   }
 
-  // ===================================================================
-  // HEALTH INDICATOR (per app) — GetHealth {app} -> {app,up,code,port}
-  // ===================================================================
-  function setHealthBadge(app, cls, text, title){
-    var el = $id('jh-health-' + app);   // id built from raw app name; element is keyed by it
-    if(!el) return;
-    el.className = 'badge ' + cls;
-    el.textContent = text;              // textContent = safe
-    if(title!=null){ el.title = title; }
-  }
+  // health pill — GetHealth {app} -> {up, code, port}
   function checkHealth(app){
-    setHealthBadge(app, 'neutral', 'health: …');
-    call('GetHealth',{app:app},function(r){
-      var p = payload(r);
-      if(failed(r)){
-        setHealthBadge(app, 'off', 'health: error',
-          (typeof p==='string'?p:JSON.stringify(p)));
-        return;
-      }
+    var elp = $('hp-' + cssId(app)); if(!elp) return;
+    setPill(elp, 'neutral', 'checking…');
+    call('GetHealth', {app:app}, function(r){
+      var p = payload(r), elp2 = $('hp-' + cssId(app)); if(!elp2) return;
+      if(failed(r)){ setPill(elp2, 'off', 'error', errText(p)); return; }
       var up = !!p.up;
-      var detail = 'port '+(p.port!=null?p.port:'?')+
-                   (p.code!=null?(' · HTTP '+p.code):'');
-      setHealthBadge(app, up?'ok':'off', up?'up':'down', detail);
+      var detail = 'port ' + (p.port != null ? p.port : '?') +
+        (p.code != null ? (' · HTTP ' + p.code) : '');
+      setPill(elp2, up ? 'ok' : 'off', up ? 'up' : 'down', detail);
     });
   }
+  function setPill(node, cls, text, title){
+    node.className = 'jh-badge ' + cls;
+    node.innerHTML = '';
+    var dot = document.createElement('span'); dot.className = 'jh-dot';
+    node.appendChild(dot);
+    node.appendChild(document.createTextNode(text));  // textContent-safe
+    if(title != null) node.title = title;
+  }
+  // id() needs a value usable as an element id selector. App names are
+  // validated server-side as identifiers, but be defensive in the DOM.
+  function cssId(s){ return String(s).replace(/[^A-Za-z0-9_-]/g, '_'); }
 
-  // ===================================================================
-  // WAR DEPLOY PANEL (per app) — uploads via panel file API, then
-  // UploadWar {app,version,tmp} / MigrateWar {app,version,war}
-  // ===================================================================
-  var warApp = null, warVersion = '';
-  function openWarPanel(app){
-    warApp = app;
-    // best-effort: find the app's tomcat major from the last status payload
-    warVersion = (appVersions[app] != null) ? String(appVersions[app]) : '';
-    $id('jh-war-title').textContent = 'Deploy WAR — ' + app;   // textContent = safe
-    $id('jh-war-result').innerHTML = '';
-    $id('jh-war-file').value = '';
-    $id('jh-warpanel').classList.remove('hide');
-    $id('jh-warpanel').scrollIntoView({behavior:'smooth',block:'nearest'});
-  }
-  function warResult(html, bad){
-    $id('jh-war-result').innerHTML =
-      '<div class="warn" style="'+(bad?'background:#fdecec;border-color:#e7a;':'')+'">'+html+'</div>';
-  }
-  // Stage a File via the panel's standard upload API, then call back with the
-  // server-side staged path. Falls back to a pasted path if no file chosen.
+  // close any open row menu when clicking elsewhere
+  document.addEventListener('click', function(e){
+    var keepOpen = e.target.closest && e.target.closest('[data-menu]');
+    document.querySelectorAll('.jh-menu-pop.open').forEach(function(m){
+      if(keepOpen && ('menu-' + keepOpen.dataset.menu) === m.id) return;
+      m.classList.remove('open');
+      var b = document.querySelector('[data-menu="'+m.id.slice(5)+'"]');
+      if(b) b.setAttribute('aria-expanded','false');
+    });
+  });
+
+  // =====================================================================
+  // UPLOAD STAGING — stage a File via panel file API, return server path
+  // =====================================================================
   function stageUpload(fileInput, cb){
     var f = fileInput && fileInput.files && fileInput.files[0];
     if(!f){
-      var pasted = prompt('No file selected. Paste a server-side path to the WAR/JAR (already on the host):', '');
+      var pasted = prompt('No file selected. Paste a server-side path to the file (already on the host):', '');
       if(pasted){ cb(pasted, null); } else { cb(null, 'no file or path provided'); }
       return;
     }
     var fd = new FormData();
-    // aaPanel file API: /files?action=upload — fields f_path/f_name/blob (chunk).
     fd.append('f_path', '/tmp');
     fd.append('f_name', f.name);
     fd.append('f_size', f.size);
@@ -426,302 +769,375 @@
     fetch('/files?action=upload', {method:'POST', body:fd})
       .then(function(x){ return x.json(); })
       .then(function(r){
-        // staged path: prefer a path the API returns, else the conventional /tmp/<name>
         var p = (r && (r.path || (r.msg && r.msg.path))) || ('/tmp/' + f.name);
         cb(p, null);
       })
       .catch(function(e){ cb(null, String(e)); });
   }
-  function deployWar(migrate){
-    if(!warApp){ msg('Open the WAR panel for an app first', true); return; }
-    if(!warVersion){ msg('Could not resolve the app’s Tomcat version', true); return; }
-    var app = warApp, ver = warVersion;
-    warResult('Uploading WAR for '+esc(app)+'…');
-    stageUpload($id('jh-war-file'), function(tmp, err){
-      if(err || !tmp){ warResult('Upload failed: '+esc(err||'no staged path'), true); return; }
+
+  // =====================================================================
+  // MODAL: CREATE APP (Tomcat)
+  // =====================================================================
+  function openCreate(){
+    var tom = STATE.tomcat || {};
+    var opts = Object.keys(tom).map(function(k){
+      return '<option value="'+esc(k)+'">Tomcat '+esc(k)+' ('+esc(tom[k].patch)+')</option>';
+    }).join('');
+    var hasTomcat = !!opts;
+    openModal({
+      title:'Create Tomcat app', sub:'A dedicated Tomcat instance on the chosen major',
+      body: (hasTomcat ? '' :
+        '<div class="jh-alert" style="margin-bottom:var(--s4)">'+ic('warn')+
+        '<div>No Tomcat is installed. Install one from the <b>Runtimes</b> tab first.</div></div>')+
+        '<div class="jh-form">'+
+          '<div class="jh-field wide"><label for="c-name">App name</label><input id="c-name" placeholder="myapp" autocomplete="off"></div>'+
+          '<div class="jh-field"><label for="c-ver">Tomcat version</label><select id="c-ver">'+(opts||'<option value="">(none installed)</option>')+'</select></div>'+
+          '<div class="jh-field"><label for="c-port">Port</label><input id="c-port" type="number" value="8080" min="1" max="65535"></div>'+
+          '<div class="jh-field"><label for="c-mem">Memory (MB)</label><input id="c-mem" type="number" value="512" min="64" step="64"></div>'+
+        '</div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Create app', 'accent', function(btn){
+          var name = $('c-name').value.trim();
+          if(!name){ toast('Enter an app name', 'err'); $('c-name').focus(); return; }
+          var ver = $('c-ver').value;
+          if(!ver){ toast('Install a Tomcat version first', 'err'); return; }
+          busy(btn, true);
+          call('CreateApp', {app:name, version:ver, port:$('c-port').value, memory:$('c-mem').value},
+            function(r){
+              busy(btn, false);
+              var p = payload(r);
+              if(failed(r)){ toast(errText(p), 'err', 'Create failed'); return; }
+              toast('Created '+(p.app||name)+' on Tomcat '+(p.tomcat||ver), 'ok');
+              closeModal(); refresh();
+            });
+        }, 'plus')
+      ]
+    });
+  }
+
+  // =====================================================================
+  // MODAL: SPRING BOOT / FAT-JAR APP — CreateJarApp
+  // =====================================================================
+  function openJar(){
+    openModal({
+      title:'Spring Boot / executable JAR', sub:'Runs a fat-jar as a managed service (no Tomcat)',
+      body:
+        '<div class="jh-form">'+
+          '<div class="jh-field wide"><label for="j-name">App name</label><input id="j-name" placeholder="myservice" autocomplete="off"></div>'+
+          '<div class="jh-field"><label for="j-java">Java major</label><select id="j-java">'+
+            '<option value="17">Java 17</option><option value="21">Java 21</option><option value="11">Java 11</option><option value="8">Java 8</option></select></div>'+
+          '<div class="jh-field"><label for="j-port">Port</label><input id="j-port" type="number" value="8080" min="1" max="65535"></div>'+
+          '<div class="jh-field"><label for="j-mem">Memory (MB)</label><input id="j-mem" type="number" value="512" min="64" step="64"></div>'+
+          '<div class="jh-field wide"><label for="j-file">Fat JAR file</label><input id="j-file" type="file" accept=".jar"></div>'+
+        '</div>'+
+        '<div class="jh-hint">The file is uploaded via the panel file API and staged server-side; the staged path is passed to <code>CreateJarApp</code>.</div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Deploy JAR', 'accent', function(btn){
+          var name = $('j-name').value.trim();
+          if(!name){ toast('Enter a JAR app name', 'err'); $('j-name').focus(); return; }
+          var java = $('j-java').value, port = $('j-port').value, mem = $('j-mem').value;
+          busy(btn, true);
+          stageUpload($('j-file'), function(jar, err){
+            if(err || !jar){ busy(btn,false); toast(err||'no staged path', 'err', 'Upload failed'); return; }
+            call('CreateJarApp', {app:name, jar:jar, java:java, port:port, memory:mem}, function(r){
+              busy(btn, false);
+              var p = payload(r);
+              if(failed(r)){ toast(errText(p), 'err', 'Create JAR app failed'); return; }
+              toast('Created '+(p.app||name)+' (Java '+(p.java||java)+')', 'ok');
+              closeModal(); refresh();
+            });
+          });
+        }, 'upload')
+      ]
+    });
+  }
+
+  // =====================================================================
+  // MODAL: DEPLOY WAR (upload + optional javax->jakarta migrate)
+  //   appName optional — if omitted, user picks from a dropdown of apps.
+  // =====================================================================
+  function openWar(appName){
+    var apps = STATE.apps || [];
+    if(!apps.length){ toast('Create an app first', 'err'); return; }
+    var appSel = appName
+      ? '<input id="w-app" type="hidden" value="'+esc(appName)+'"><div class="jh-field wide"><label>Target app</label><div class="jh-badge neutral" style="align-self:flex-start">'+esc(appName)+'</div></div>'
+      : '<div class="jh-field wide"><label for="w-app">Target app</label><select id="w-app">'+
+        apps.map(function(a){ return '<option value="'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('')+'</select></div>';
+    openModal({
+      title:'Deploy WAR', sub:'Upload a .war and deploy to the app’s webapps/ROOT',
+      body:
+        '<div class="jh-form">'+ appSel +
+          '<div class="jh-field wide"><label for="w-file">WAR file</label><input id="w-file" type="file" accept=".war"></div>'+
+        '</div>'+
+        '<div class="jh-hint">Use <b>Migrate</b> for a <code>javax.*</code> WAR being deployed onto Tomcat 10/11 — it converts to <code>jakarta.*</code> first. The WAR is staged server-side, then passed to <code>UploadWar</code> / <code>MigrateWar</code>.</div>'+
+        '<div id="w-result" style="margin-top:var(--s3)"></div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Migrate → deploy', 'ghost', function(btn){ doWar(true, btn); }, 'refresh'),
+        mkBtn('Deploy WAR', 'accent', function(btn){ doWar(false, btn); }, 'upload')
+      ]
+    });
+  }
+  function doWar(migrate, btn){
+    var app = $('w-app').value;
+    var ver = appMajor[app] != null ? String(appMajor[app]) : '';
+    if(!ver){ toast('Could not resolve the app’s Tomcat version', 'err'); return; }
+    var res = $('w-result');
+    res.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Uploading WAR…</div></div>';
+    busy(btn, true);
+    stageUpload($('w-file'), function(tmp, err){
+      if(err || !tmp){ busy(btn,false); res.innerHTML=''; toast(err||'no staged path','err','Upload failed'); return; }
       var method = migrate ? 'MigrateWar' : 'UploadWar';
-      var data = migrate ? {app:app, version:ver, war:tmp}
-                         : {app:app, version:ver, tmp:tmp};
-      warResult((migrate?'Migrating &amp; deploying':'Deploying')+' WAR … ('+esc(tmp)+')');
+      var data = migrate ? {app:app, version:ver, war:tmp} : {app:app, version:ver, tmp:tmp};
       call(method, data, function(r){
+        busy(btn, false);
         var p = payload(r);
         if(failed(r)){
-          warResult((migrate?'Migrate':'Deploy')+' failed: '+
-                    esc(typeof p==='string'?p:JSON.stringify(p)), true);
+          res.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
           return;
         }
-        var out = (migrate?'Migrated &amp; deployed':'Deployed')+' to '+esc(p.app||app)+'.';
-        if(p.warning){ out += '<br><strong>Warning:</strong> '+esc(p.warning); }
-        warResult(out, false);
-        msg((migrate?'WAR migrated+deployed to ':'WAR deployed to ')+esc(p.app||app));
+        var msg = (migrate ? 'Migrated &amp; deployed' : 'Deployed') + ' to ' + esc(p.app || app) + '.';
+        if(p.warning) msg += ' <b>Warning:</b> ' + esc(p.warning);
+        res.innerHTML = '<div class="jh-alert"><svg><use href="#i-check"/></svg><div>'+msg+'</div></div>';
+        toast((migrate?'WAR migrated + deployed to ':'WAR deployed to ') + (p.app||app), 'ok');
         refresh();
       });
     });
   }
 
-  // ===================================================================
-  // SPRING BOOT / EXECUTABLE FAT-JAR APP — CreateJarApp
-  // {app, jar:<staged path>, java:<major>, port, memory}
-  // ===================================================================
-  function createJarApp(){
-    var name = $id('jh-jar-name').value.trim(),
-        java = $id('jh-jar-java').value,
-        port = $id('jh-jar-port').value,
-        mem  = $id('jh-jar-mem').value;
-    if(!name){ msg('Enter a JAR app name', true); return; }
-    msg('Uploading JAR for '+name+'…');
-    stageUpload($id('jh-jar-file'), function(jar, err){
-      if(err || !jar){ msg('JAR upload failed: '+(err||'no staged path'), true); return; }
-      msg('Creating Spring Boot app '+name+'…');
-      call('CreateJarApp',{app:name, jar:jar, java:java, port:port, memory:mem},function(r){
-        var p = payload(r);
-        if(failed(r)){ msg('Create JAR app failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
-        msg('Created '+esc(p.app||name)+' (Java '+esc(p.java||java)+', port '+esc(p.port||port)+')');
-        $id('jh-jar-name').value=''; $id('jh-jar-file').value='';
-        refresh();
-      });
-    });
-  }
-
-  // ===================================================================
-  // LOGS PANEL
-  // ===================================================================
-  var logsApp = null;
+  // =====================================================================
+  // MODAL: LOGS — monospace viewer + line-count selector + refresh
+  // =====================================================================
   function openLogs(app){
-    logsApp = app;
-    $id('jh-logs-title').textContent = 'Logs — ' + app;   // textContent = safe
-    $id('jh-logs').classList.remove('hide');
-    loadLogs();
-    $id('jh-logs').scrollIntoView({behavior:'smooth',block:'nearest'});
+    var refreshBtn = mkBtn('Refresh', 'ghost', function(b){ loadLogs(app, b); }, 'refresh');
+    openModal({
+      title:'Logs', sub:app, large:true,
+      body:
+        '<div class="jh-spread" style="margin-bottom:var(--s3)">'+
+          '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)">'+
+            '<label for="l-lines" style="margin:0">Lines</label>'+
+            '<select id="l-lines" style="width:auto"><option>50</option><option selected>200</option><option>500</option><option>1000</option></select>'+
+          '</div><div class="jh-bar-spacer"></div></div>'+
+        '<pre class="jh-pre" id="l-pre">loading…</pre>',
+      footer: [ refreshBtn, mkBtn('Close', 'ghost', closeModal) ],
+      onMount: function(){
+        $('l-lines').addEventListener('change', function(){ loadLogs(app); });
+        loadLogs(app);
+      }
+    });
   }
-  function loadLogs(){
-    if(!logsApp) return;
-    var lines = $id('jh-logs-lines').value;
-    $id('jh-logs-pre').textContent = 'loading…';
-    call('GetLogs',{app:logsApp, lines:lines},function(r){
+  function loadLogs(app, btn){
+    var pre = $('l-pre'); if(!pre) return;
+    busy(btn, true);
+    var lines = ($('l-lines') && $('l-lines').value) || 200;
+    pre.textContent = 'loading…';
+    call('GetLogs', {app:app, lines:lines}, function(r){
+      busy(btn, false);
       var p = payload(r);
-      // textContent avoids any HTML interpretation of log bytes (safe by construction)
-      $id('jh-logs-pre').textContent = failed(r)
-        ? ('error: '+(typeof p==='string'?p:JSON.stringify(p)))
-        : ((p && p.log!=null) ? p.log : JSON.stringify(p));
+      // textContent — never interpret log bytes as HTML
+      pre.textContent = failed(r) ? ('error: ' + errText(p))
+        : ((p && p.log != null) ? p.log : errText(p));
+      pre.scrollTop = pre.scrollHeight;
     });
   }
 
-  // ===================================================================
-  // DB-ENV PANEL (per app) + DB SUPPORT MATRIX (reference)
-  // ===================================================================
-  var dbEngines = [];   // cached support_matrix
-  var dbApp = null;     // app the panel is currently editing
-
-  function loadDbSupport(){
-    call('GetDbSupport',{},function(r){
-      var p = payload(r);
-      dbEngines = (p && p.engines) || [];
-      renderDbMatrix();
-      fillEngineSelect();
-    });
-  }
-
-  // Reference table in the "Database Support" section.
-  function renderDbMatrix(){
-    if(!dbEngines.length){
-      $id('jh-db-matrix').innerHTML = '<tr><td colspan="5" class="muted">none reported</td></tr>';
-      return;
+  // =====================================================================
+  // MODAL: DATABASE ENV (per app) — SetDbEnv
+  // =====================================================================
+  function openDbEnv(app){
+    function build(){
+      if(!DB_ENGINES.length){
+        return '<div class="jh-alert danger">'+ic('warn')+'<div>No database engines reported by the server.</div></div>';
+      }
+      var engOpts = DB_ENGINES.map(function(e){
+        return '<option value="'+esc(e.engine)+'">'+esc(e.label||e.engine)+'</option>';
+      }).join('');
+      return '<div class="jh-form">'+
+        '<div class="jh-field"><label for="d-engine">Engine</label><select id="d-engine">'+engOpts+'</select></div>'+
+        '<div class="jh-field"><label for="d-version">Version</label><select id="d-version"></select></div>'+
+        '<div class="jh-field"><label for="d-host">Host</label><input id="d-host" value="127.0.0.1"></div>'+
+        '<div class="jh-field"><label for="d-port">Port</label><input id="d-port" type="number"></div>'+
+        '<div class="jh-field"><label for="d-name">Database</label><input id="d-name" placeholder="appdb"></div>'+
+        '<div class="jh-field"><label for="d-user">User</label><input id="d-user" placeholder="appuser"></div>'+
+        '<div class="jh-field"><label for="d-pass">Password</label><input id="d-pass" type="password" autocomplete="new-password"></div>'+
+      '</div>'+
+      '<div class="jh-hint" id="d-driver"></div>'+
+      '<div class="jh-hint">Secrets are written server-side and never echoed back to this UI.</div>';
     }
-    var html='';
-    dbEngines.forEach(function(e){
+    function mount(){
+      if(!DB_ENGINES.length){ return; }
+      var sel = $('d-engine');
+      sel.addEventListener('change', onEngine);
+      onEngine();
+    }
+    function curEngine(){
+      var name = $('d-engine').value;
+      for(var i=0;i<DB_ENGINES.length;i++) if(DB_ENGINES[i].engine===name) return DB_ENGINES[i];
+      return null;
+    }
+    function onEngine(){
+      var e = curEngine(); if(!e) return;
+      $('d-version').innerHTML = (e.versions||[]).map(function(v){
+        return '<option value="'+esc(v)+'">'+esc(v)+'</option>'; }).join('') || '<option value="">(any)</option>';
+      if(e.default_port != null) $('d-port').value = e.default_port;
+      var drv = e.driver || e.driver_class || '';
+      $('d-driver').innerHTML = drv ? ('Recommended driver: <code>'+esc(drv)+'</code>') : '';
+    }
+    var open = function(){
+      openModal({
+        title:'Database environment', sub:app,
+        body: build(),
+        footer: [
+          mkBtn('Cancel', 'ghost', closeModal),
+          mkBtn('Write DB env', 'accent', function(btn){
+            var e = curEngine();
+            if(!e){ toast('Pick an engine', 'err'); return; }
+            busy(btn, true);
+            call('SetDbEnv', {
+              app:app, db_engine:e.engine,
+              db_host:$('d-host').value, db_port:$('d-port').value,
+              db_name:$('d-name').value, db_user:$('d-user').value,
+              db_password:$('d-pass').value, db_version:$('d-version').value
+            }, function(r){
+              busy(btn, false);
+              var p = payload(r);
+              if(failed(r)){ toast(errText(p), 'err', 'DB env failed'); return; }
+              toast('DB env written for '+(p.app||app)+' ('+(p.engine||e.engine)+')', 'ok');
+              closeModal();
+            });
+          }, 'check')
+        ],
+        onMount: mount
+      });
+    };
+    if(!DB_ENGINES.length){ loadDbSupport(open); } else { open(); }
+  }
+
+  // =====================================================================
+  // DATABASES TAB — support matrix + per-app picker
+  // =====================================================================
+  function loadDbSupport(after){
+    call('GetDbSupport', {}, function(r){
+      var p = payload(r);
+      DB_ENGINES = (p && p.engines) || [];
+      renderDbMatrix();
+      if(after) after();
+    });
+  }
+  function renderDbMatrix(){
+    var tb = $('db-matrix');
+    if(!DB_ENGINES.length){ tb.innerHTML = '<tr><td colspan="5" class="jh-muted">none reported</td></tr>'; return; }
+    tb.innerHTML = DB_ENGINES.map(function(e){
       var vers = (e.versions||[]).map(esc).join(', ');
-      html += '<tr>'+
-        '<td><strong>'+esc(e.label||e.engine)+'</strong><div class="muted">'+esc(e.engine)+'</div></td>'+
+      return '<tr>'+
+        '<td><div class="app-name">'+esc(e.label||e.engine)+'</div><div class="jh-muted" style="font-size:12px">'+esc(e.engine)+'</div></td>'+
         '<td>'+esc(e.default_port)+'</td>'+
-        '<td>'+(vers||'<span class="muted">—</span>')+'</td>'+
+        '<td>'+(vers || '<span class="jh-muted">—</span>')+'</td>'+
         '<td><code>'+esc(e.driver||e.driver_class||'—')+'</code></td>'+
-        '<td><span class="badge '+(e.local_detected?'ok':'neutral')+'">'+
-            (e.local_detected?'detected':'no')+'</span></td>'+
+        '<td><span class="jh-badge '+(e.local_detected?'ok':'neutral')+'">'+(e.local_detected?'detected':'no')+'</span></td>'+
       '</tr>';
-    });
-    $id('jh-db-matrix').innerHTML = html;
-  }
-
-  // Engine dropdown inside the per-app DB panel.
-  function fillEngineSelect(){
-    var sel = $id('jh-db-engine');
-    if(!dbEngines.length){ sel.innerHTML='<option value="">(none available)</option>'; return; }
-    sel.innerHTML = dbEngines.map(function(e){
-      return '<option value="'+esc(e.engine)+'">'+esc(e.label||e.engine)+'</option>';
     }).join('');
-    onEngineChange();
   }
-  function currentEngine(){
-    var name = $id('jh-db-engine').value;
-    for(var i=0;i<dbEngines.length;i++){ if(dbEngines[i].engine===name) return dbEngines[i]; }
-    return null;
-  }
-  // When the engine changes: refill version dropdown, default port, driver hint.
-  function onEngineChange(){
-    var e = currentEngine(); if(!e) return;
-    var vsel = $id('jh-db-version');
-    vsel.innerHTML = (e.versions||[]).map(function(v){
-      return '<option value="'+esc(v)+'">'+esc(v)+'</option>';
-    }).join('') || '<option value="">(any)</option>';
-    if(e.default_port!=null){ $id('jh-db-port').value = e.default_port; }
-    var drv = e.driver || e.driver_class || '';
-    $id('jh-db-driver').innerHTML = drv
-      ? 'Recommended driver: <code>'+esc(drv)+'</code>'+
-        (e.driver_class && e.driver_class!==drv ? ' · class <code>'+esc(e.driver_class)+'</code>' : '')
-      : '';
+  function renderDbPicker(apps){
+    apps = apps || [];
+    var box = $('db-app-picker');
+    if(!apps.length){ box.innerHTML = emptyInline('No apps to configure', 'Create an app first.'); return; }
+    box.innerHTML = apps.map(function(a){
+      return '<button class="jh-btn ghost sm" data-dbenv="'+esc(a.app)+'">'+ic('db')+esc(a.app)+'</button>';
+    }).join('');
   }
 
-  function openDbPanel(app){
-    dbApp = app;
-    $id('jh-db-title').textContent = 'Database environment — ' + app;
-    $id('jh-dbpanel').classList.remove('hide');
-    if(!dbEngines.length){ loadDbSupport(); } else { fillEngineSelect(); }
-    $id('jh-db-pass').value = '';   // never pre-fill secrets
-    $id('jh-dbpanel').scrollIntoView({behavior:'smooth',block:'nearest'});
-  }
-  function saveDbEnv(){
-    var e = currentEngine();
-    if(!dbApp || !e){ msg('Pick an app and engine first', true); return; }
-    msg('Writing DB env for '+dbApp+'…');
-    call('SetDbEnv',{
-      app:        dbApp,
-      db_engine:  e.engine,
-      db_host:    $id('jh-db-host').value,
-      db_port:    $id('jh-db-port').value,
-      db_name:    $id('jh-db-name').value,
-      db_user:    $id('jh-db-user').value,
-      db_password:$id('jh-db-pass').value,
-      db_version: $id('jh-db-version').value
-    },function(r){
-      var p = payload(r);
-      if(failed(r)){ msg('DB env failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
-      msg('DB env written for '+esc(p.app||dbApp)+' ('+esc(p.engine||e.engine)+
-          '), driver '+esc(p.driver||''));
-      $id('jh-db-pass').value = '';   // clear secret after submit
-    });
-  }
-
-  // ===================================================================
-  // PROXY HINT
-  // ===================================================================
+  // =====================================================================
+  // HELP TAB — proxy hint
+  // =====================================================================
   function loadProxyHint(){
-    call('GetProxyHint',{},function(r){
-      var p = payload(r);
-      if(failed(r)){ $id('jh-proxy').innerHTML='<span class="off">'+esc(typeof p==='string'?p:JSON.stringify(p))+'</span>'; return; }
+    call('GetProxyHint', {}, function(r){
+      var p = payload(r), box = $('help-proxy');
+      if(failed(r)){ box.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
       var html = '';
       if(p.include){
-        html += '<div class="kv"><span>Include line</span></div>'+
-                '<pre>'+esc(p.include)+'</pre>';
+        html += '<pre class="jh-pre">'+esc(p.include)+'</pre>';
       }
       if(p.db){
-        html += '<div class="warn">'+esc(p.db)+'</div>';
+        html += '<div class="jh-alert info" style="margin-top:var(--s3)">'+ic('info')+'<div>'+esc(p.db)+'</div></div>';
       }
-      $id('jh-proxy').innerHTML = html || '<span class="muted">no hint available</span>';
+      box.innerHTML = html || '<div class="jh-muted">No hint available.</div>';
     });
   }
 
-  // ===================================================================
-  // CREATE APP
-  // ===================================================================
-  function createApp(){
-    var name = $id('jh-new-name').value.trim(),
-        ver  = $id('jh-new-ver').value,
-        port = $id('jh-new-port').value,
-        mem  = $id('jh-new-mem').value;
-    if(!name){ msg('Enter an app name', true); return; }
-    if(!ver){ msg('Install a Tomcat version first', true); return; }
-    msg('Creating app '+name+'…');
-    call('CreateApp',{app:name, version:ver, port:port, memory:mem},function(r){
-      var p = payload(r);
-      if(failed(r)){ msg('Create failed: '+(typeof p==='string'?p:JSON.stringify(p)), true); return; }
-      msg('Created '+esc(p.app||name)+' on Tomcat '+esc(p.tomcat||ver)+' (port '+esc(p.port||port)+')');
-      $id('jh-new-name').value='';
-      refresh();
-    });
-  }
-
-  // ===================================================================
+  // =====================================================================
   // STATUS REFRESH
-  // ===================================================================
-  function refresh(){
-    call('GetStatus',{},function(r){
+  // =====================================================================
+  function refresh(btn){
+    busy(btn, true);
+    call('GetStatus', {}, function(r){
+      busy(btn, false);
       var d = payload(r);
-      if(failed(r)){ msg('Status error: '+(typeof d==='string'?d:JSON.stringify(d)), true); return; }
+      if(failed(r)){ toast(errText(d), 'err', 'Status error'); return; }
+      STATE = d;
       renderDashboard(d);
+      renderRuntimes(d);
       renderApps(d.apps);
+      renderDbPicker(d.apps);
     });
   }
 
-  // ===================================================================
-  // EVENT WIRING (single delegated click handler for the whole UI)
-  // ===================================================================
-  document.querySelector('.javahost').addEventListener('click',function(e){
-    var b = e.target.closest('button'); if(!b) return;
+  // =====================================================================
+  // EVENT WIRING — one delegated handler for the whole UI
+  // =====================================================================
+  $('jh-root').addEventListener('click', function(e){
+    var b = e.target.closest('button, a'); if(!b) return;
     var ds = b.dataset;
 
-    // -- Java --
-    if(ds.jdk){ msg('Installing JDK '+ds.jdk+'…');
-      call('InstallJava',{version:ds.jdk},function(r){
-        var p=payload(r);
-        msg(failed(r)?('JDK install failed: '+(typeof p==='string'?p:JSON.stringify(p)))
-                     :('JDK ready: '+esc(p.java_home||p.major||ds.jdk)), failed(r));
-        refresh();
-      });
-      return;
-    }
+    // header / toolbar
+    if(b.id === 'jh-refresh'){ refresh(b); toast('Refreshing…'); return; }
+    if(b.id === 'jh-open-create' || b.id === 'jh-empty-create'){ openCreate(); return; }
+    if(b.id === 'jh-open-jar'){ openJar(); return; }
+    if(b.id === 'jh-open-war'){ openWar(null); return; }
 
-    // -- Tomcat install / update / uninstall --
-    if(ds.tcInstall){ msg('Installing Tomcat '+ds.tcInstall+' (verified download)…');
-      call('InstallTomcat',{version:ds.tcInstall}, done('Install Tomcat '+ds.tcInstall)); return; }
-    if(ds.tcUpdate){ msg('Updating Tomcat '+ds.tcUpdate+'…');
-      call('UpdateTomcat',{version:ds.tcUpdate}, done('Update Tomcat '+ds.tcUpdate)); return; }
+    // runtimes — Java
+    if(ds.jdk){
+      busy(b, true); toast('Installing JDK '+ds.jdk+'…');
+      call('InstallJava', {version:ds.jdk}, done('JDK '+ds.jdk+' install', b)); return;
+    }
+    // runtimes — Tomcat
+    if(ds.tcInstall){ busy(b, true); toast('Installing Tomcat '+ds.tcInstall+'… (verified download)');
+      call('InstallTomcat', {version:ds.tcInstall}, done('Tomcat '+ds.tcInstall+' install', b)); return; }
+    if(ds.tcUpdate){ busy(b, true); toast('Updating Tomcat '+ds.tcUpdate+'…');
+      call('UpdateTomcat', {version:ds.tcUpdate}, done('Tomcat '+ds.tcUpdate+' update', b)); return; }
     if(ds.tcUninstall){
       if(!confirm('Uninstall Tomcat '+ds.tcUninstall+'? Apps on this major may break.')) return;
-      msg('Uninstalling Tomcat '+ds.tcUninstall+'…');
-      call('UninstallTomcat',{version:ds.tcUninstall}, done('Uninstall Tomcat '+ds.tcUninstall)); return;
+      busy(b, true); call('UninstallTomcat', {version:ds.tcUninstall}, done('Tomcat '+ds.tcUninstall+' uninstall', b)); return;
     }
 
-    // -- Create app --
-    if(b.id==='jh-create'){ createApp(); return; }
-
-    // -- Per-app lifecycle --
-    if(ds.appAction){ msg(ds.appAction+' '+ds.app+'…');
-      call('AppAction',{app:ds.app, action:ds.appAction}, done(ds.appAction+' '+ds.app)); return; }
-    if(ds.appRepair){ msg('Repairing '+ds.appRepair+'…');
-      call('RepairApp',{app:ds.appRepair}, done('Repair '+ds.appRepair)); return; }
-    if(ds.appDelete){
-      if(!confirm('Delete app "'+ds.appDelete+'"? This removes its Tomcat instance and files.')) return;
-      msg('Deleting '+ds.appDelete+'…');
-      call('DeleteApp',{app:ds.appDelete}, done('Delete '+ds.appDelete)); return;
+    // app row: toggle action menu
+    if(ds.menu){
+      var pop = $('menu-' + ds.menu);
+      var willOpen = !pop.classList.contains('open');
+      pop.classList.toggle('open', willOpen);
+      b.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      return;
     }
-    if(ds.appLogs){ openLogs(ds.appLogs); return; }
-    if(ds.appDb){ openDbPanel(ds.appDb); return; }
-    if(ds.appHealth){ checkHealth(ds.appHealth); return; }
-    if(ds.appWar){ openWarPanel(ds.appWar); return; }
-
-    // -- WAR-deploy panel controls --
-    if(b.id==='jh-war-deploy'){ deployWar(false); return; }
-    if(b.id==='jh-war-migrate'){ deployWar(true); return; }
-    if(b.id==='jh-war-close'){ $id('jh-warpanel').classList.add('hide'); warApp=null; return; }
-
-    // -- Spring Boot / executable JAR app --
-    if(b.id==='jh-jar-create'){ createJarApp(); return; }
-
-    // -- Logs panel controls --
-    if(b.id==='jh-logs-refresh'){ loadLogs(); return; }
-    if(b.id==='jh-logs-close'){ $id('jh-logs').classList.add('hide'); logsApp=null; return; }
-
-    // -- DB panel controls --
-    if(b.id==='jh-db-save'){ saveDbEnv(); return; }
-    if(b.id==='jh-db-close'){ $id('jh-dbpanel').classList.add('hide'); dbApp=null; return; }
+    // app lifecycle (start/stop/restart)
+    if(ds.act){
+      busy(b, true);
+      call('AppAction', {app:ds.app, action:ds.act}, done(ds.act+' '+ds.app, b)); return;
+    }
+    if(ds.repair){ toast('Repairing '+ds.repair+'…'); call('RepairApp', {app:ds.repair}, done('Repair '+ds.repair)); return; }
+    if(ds.delete){
+      if(!confirm('Delete app "'+ds.delete+'"? This removes its Tomcat instance and files.')) return;
+      call('DeleteApp', {app:ds.delete}, done('Delete '+ds.delete)); return;
+    }
+    if(ds.logs){ openLogs(ds.logs); return; }
+    if(ds.health){ checkHealth(ds.health); toast('Re-checking health…'); return; }
+    if(ds.dbenv){ openDbEnv(ds.dbenv); return; }
   });
 
-  // change events (selects) — not clicks
-  $id('jh-logs-lines').addEventListener('change', loadLogs);
-  $id('jh-db-engine').addEventListener('change', onEngineChange);
-
-  // ---- boot ----
+  // =====================================================================
+  // BOOT
+  // =====================================================================
   refresh();
   loadDbSupport();
   loadProxyHint();
