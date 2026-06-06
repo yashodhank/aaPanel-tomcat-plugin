@@ -20,6 +20,7 @@ SITE_SUFFIX = "5d.bisotech.in"
 _TEMPLATE = """# Managed by JavaHost — instance @@app@@ ($domain). Do not edit by hand.
 server {
     listen 80;
+    listen [::]:80;
     server_name @@domain@@;
     location / {
         proxy_pass http://127.0.0.1:@@port@@;

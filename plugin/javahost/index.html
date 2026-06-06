@@ -1107,7 +1107,7 @@
     var dom = appDomain(x); if(dom == null) return null;
     var ctx = (x && x.context) ? String(x.context) : '/';
     if(ctx.charAt(0) !== '/') ctx = '/' + ctx;
-    if(ctx === '/') ctx = '/';
+    if(/^\/ROOT\/?$/i.test(ctx)) ctx = '/';   // the ROOT webapp is served at /
     // domain may already include scheme; normalize to a bare host
     dom = dom.replace(/^https?:\/\//, '').replace(/\/+$/, '');
     return 'http://' + dom + ctx;

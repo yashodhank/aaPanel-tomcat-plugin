@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.12.1] — 2026-06-06
+
+### Fixed
+- **Reverse-proxy sites unreachable over IPv6:** the generated nginx vhost only
+  had `listen 80;` (IPv4). When a domain has an AAAA record, browsers prefer IPv6
+  and got `ERR_CONNECTION_REFUSED`. The vhost template now also emits
+  `listen [::]:80;`.
+- **"Open" link 404'd on ROOT apps:** the UI appended the context path `/ROOT`,
+  but the ROOT webapp is served at `/`. `appUrl()` now maps `/ROOT` → `/`.
+- **`SetDbEnv` failed against local non-TLS databases** (`DB_FAIL: server does
+  not support SSL`): it always requested SSL. Now honours an explicit `db_ssl`
+  flag and otherwise defaults SSL **off for loopback hosts** (127.0.0.1/localhost/::1)
+  and on for remote — so local DBs connect out of the box.
+
 ## [0.12.0] — 2026-06-06
 
 ### Fixed

@@ -348,13 +348,22 @@ class javahost_main(object):
             app = validate.identifier(panel.attr(get, "app"), "app")
             base = instance.base_path(app)
             engine = dbengines.get(panel.attr(get, "db_engine", "postgresql"))
+            host = panel.attr(get, "db_host", "127.0.0.1")
+            # SSL: honour explicit db_ssl; otherwise default OFF for loopback hosts
+            # (local DBs usually have no TLS) and ON for remote hosts.
+            ssl_raw = panel.attr(get, "db_ssl", None)
+            if ssl_raw is None:
+                ssl = str(host) not in ("127.0.0.1", "localhost", "::1")
+            else:
+                ssl = str(ssl_raw).lower() not in ("0", "false", "no", "off", "")
             mapping = engine.render_env(
-                host=panel.attr(get, "db_host", "127.0.0.1"),
+                host=host,
                 port=panel.attr(get, "db_port", None),  # defaults to engine port
                 db=panel.attr(get, "db_name"),
                 user=panel.attr(get, "db_user"),
                 password=panel.attr(get, "db_password", ""),
                 version=panel.attr(get, "db_version"),  # optional; any supported version
+                ssl=ssl,
             )
             dbengines.write_app_env(base, mapping)
             return panel.ok({"app": app, "engine": engine.name,
