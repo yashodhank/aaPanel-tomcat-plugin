@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import socket
 from typing import Dict, List, Optional
 
 from . import templating, service, installer, registry
@@ -28,6 +30,49 @@ def exists(app: str) -> bool:
     return os.path.isdir(base_path(app))
 
 
+# --- port allocation / conflict detection (closes matrix B5) ---
+PORT_LO, PORT_HI = 8080, 8999
+
+
+def used_ports() -> Dict[int, str]:
+    """Ports already claimed by managed instances (from their server.xml)."""
+    out: Dict[int, str] = {}
+    if os.path.isdir(INSTANCE_ROOT):
+        for name in os.listdir(INSTANCE_ROOT):
+            p = _read_port(os.path.join(INSTANCE_ROOT, name))
+            if p:
+                out[p] = name
+    return out
+
+
+def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """True if a process is already listening on host:port (live probe)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = PORT_HI) -> int:
+    """Pick a free port: honor `preferred` if free, else first unclaimed+unbound
+    in [lo, hi]. Raises if `preferred` is taken or no port is available."""
+    claimed = used_ports()
+    if preferred:
+        preferred = validate.port(preferred)
+        if preferred in claimed:
+            raise RuntimeError("port %d already used by app '%s'" % (preferred, claimed[preferred]))
+        if port_in_use(preferred):
+            raise RuntimeError("port %d is already in use on this host" % preferred)
+        return preferred
+    for p in range(lo, hi + 1):
+        if p not in claimed and not port_in_use(p):
+            return p
+    raise RuntimeError("no free port available in range %d-%d" % (lo, hi))
+
+
 def list_apps() -> List[Dict[str, str]]:
     out = []
     if os.path.isdir(INSTANCE_ROOT):
@@ -43,25 +88,33 @@ def _scaffold(base: str) -> None:
     fs.mark_managed(base)
 
 
-def _render_conf(base: str, app: str, port: int) -> None:
+def _render_conf(base: str, app: str, port: int, catalina_home: Optional[str] = None) -> None:
     fs.atomic_write(os.path.join(base, "conf", "server.xml"),
                     templating.render_file("server.xml.tmpl", {"http_port": str(port)}),
                     mode=0o640)
     fs.atomic_write(os.path.join(base, "conf", "context.xml"),
                     templating.render_file("context.xml.tmpl", {"app": app}),
                     mode=0o640)
+    # A CATALINA_BASE needs the global conf/web.xml (DefaultServlet, welcome-files,
+    # mime types). Without it Tomcat logs "No global web.xml found" and serves 404.
+    if catalina_home:
+        src = os.path.join(catalina_home, "conf", "web.xml")
+        if os.path.isfile(src):
+            shutil.copyfile(src, os.path.join(base, "conf", "web.xml"))
+            os.chmod(os.path.join(base, "conf", "web.xml"), 0o640)
 
 
 def create(app: str, major: str, port: int, memory_mb: int,
            user: str = "www", prefer_java: Optional[int] = None) -> Dict:
     app = validate.identifier(app, "app")
     major = validate.tomcat_version(major)
-    port = validate.port(port)
     memory_mb = validate.memory_mb(memory_mb)
     if not installer.is_installed(major):
         raise RuntimeError("Tomcat %s is not installed" % major)
     if exists(app):
         raise RuntimeError("app already exists: %s" % app)
+    # allocate_port honors a requested port (and rejects conflicts) or picks a free one
+    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
     home = installer.home_path(major)
     java_home = installer.ensure_java(major, prefer=prefer_java)
     major_java = java.probe(java_home) or registry.get_line(major).min_java
@@ -69,7 +122,11 @@ def create(app: str, major: str, port: int, memory_mb: int,
     _scaffold(base)
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), major_java)
     service.write_setenv(base, app, java_home, home, opts, [])
-    _render_conf(base, app, port)
+    _render_conf(base, app, port, catalina_home=home)
+    # The service runs as `user` (default www); give it ownership of CATALINA_BASE
+    # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
+    from ..util import shell
+    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
     service.install_unit(app, java_home, home, base, user=user)
     service.enable_start(app)
     return {"app": app, "tomcat": major, "port": port, "java": major_java,

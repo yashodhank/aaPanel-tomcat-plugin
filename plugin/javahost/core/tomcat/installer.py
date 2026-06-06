@@ -82,6 +82,10 @@ def install(major: str, *, patch: Optional[str] = None, prefer_java: Optional[in
 
         # 3. harden + version marker
         hardening.harden_home(staging, keep_manager=keep_manager)
+        # Shared CATALINA_HOME is read-only to instances but must be traversable +
+        # executable by the run user (www) — Apache tar ships bin/*.sh as 0750, so
+        # the service (User=www) couldn't exec catalina.sh. Grant group/other r-X.
+        shell.run(["chmod", "-R", "go+rX", staging], check=False)
         fs.atomic_write(os.path.join(staging, ".javahost-version"), art.patch + "\n", 0o644)
         fs.mark_managed(staging)
 

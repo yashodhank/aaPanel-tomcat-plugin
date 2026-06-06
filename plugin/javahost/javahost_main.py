@@ -159,6 +159,46 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def UploadWar(self, get):
+        """Deploy a WAR the panel has staged to a temp path (`tmp`). The UI uploads
+        the file via the panel's file API; this wires that staged path into the
+        zip-slip-safe deploy flow."""
+        try:
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            tmp = panel.attr(get, "tmp") or panel.attr(get, "war")
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            if not tmp or not os.path.isfile(tmp):
+                return panel.err("uploaded WAR not found at staged path: %r" % tmp)
+            warn = war.namespace_warning(tmp, registry.get_line(major).namespace)
+            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
+            war.safe_extract(tmp, target)
+            panel.log("UploadWar", "%s <- %s" % (app, os.path.basename(str(tmp))))
+            return panel.ok({"app": app, "deployed": True, "warning": warn})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def MigrateWar(self, get):
+        """Convert a javax.* WAR to jakarta.* (Apache migration tool), then deploy
+        the migrated artifact to the app's webapps/ROOT for Tomcat 10/11."""
+        try:
+            from core.util import fs
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            src = panel.attr(get, "war") or panel.attr(get, "tmp")
+            if not src or not os.path.isfile(src):
+                return panel.err("source WAR not found: %r" % src)
+            java_home = installer.ensure_java(major)
+            tmp = fs.mkdtemp("javahost-migrate-")
+            out = os.path.join(tmp, "migrated.war")
+            war.migrate(src, out, java_home)
+            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
+            war.safe_extract(out, target)
+            fs.safe_rmtree(tmp, require_marker=False) if tmp.startswith("/tmp") else None
+            panel.log("MigrateWar", "%s migrated+deployed" % app)
+            return panel.ok({"app": app, "migrated": True, "deployed": True})
+        except Exception as e:
+            return panel.err(str(e))
+
     def SetDbEnv(self, get):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")

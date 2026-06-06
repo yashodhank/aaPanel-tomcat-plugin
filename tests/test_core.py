@@ -266,6 +266,41 @@ def test_instance_list_apps(monkeypatch, tmp_path):
     assert names == ["alpha", "beta"]
 
 
+# ---- port allocation / conflict (B5) ----
+def test_allocate_port(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    monkeypatch.setattr(instance, "port_in_use", lambda p, host="127.0.0.1": False)
+    base = tmp_path / "a" / "conf"
+    base.mkdir(parents=True)
+    (base / "server.xml").write_text('<Connector port="8080" protocol="HTTP/1.1"/>')
+    assert instance.used_ports() == {8080: "a"}
+    assert instance.allocate_port() == 8081           # 8080 already claimed
+    assert instance.allocate_port(preferred=9000) == 9000
+    with pytest.raises(RuntimeError):
+        instance.allocate_port(preferred=8080)        # claimed -> conflict
+
+
+def test_port_in_use_detects_bound():
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0)); s.listen()
+    port = s.getsockname()[1]
+    try:
+        assert instance.port_in_use(port) is True
+    finally:
+        s.close()
+
+
+# ---- Jakarta migration tool ----
+def test_migration_jar_name():
+    assert war._MIGRATION_JAR % war.MIGRATION_VER == "jakartaee-migration-1.0.8-shaded.jar"
+
+
+def test_migrate_missing_war(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        war.migrate(str(tmp_path / "nope.war"), str(tmp_path / "out.war"), "/x")
+
+
 # ---- engine registry ----
 def test_engine_registry():
     assert dbengines.get("postgres").name == "postgresql"

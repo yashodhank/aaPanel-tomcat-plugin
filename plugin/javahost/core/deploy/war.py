@@ -13,7 +13,13 @@ import os
 import zipfile
 from typing import List, Optional
 
-from ..util import fs
+from ..util import fs, download, shell
+
+# Apache Tomcat Migration Tool for Jakarta EE (verified download).
+MIGRATION_VER = "1.0.8"
+_MIGRATION_BASE = "https://dlcdn.apache.org/tomcat/jakartaee-migration/v%s/binaries"
+_MIGRATION_JAR = "jakartaee-migration-%s-shaded.jar"
+TOOLS_DIR = "/www/server/javahost/.tools"
 
 
 class UnsafeArchive(RuntimeError):
@@ -84,6 +90,31 @@ def detect_namespace(war_path: str) -> Optional[str]:
     if has_javax and has_jakarta:
         return "mixed"
     return None
+
+
+def ensure_migration_tool() -> str:
+    """Download + SHA-512-verify the Jakarta EE migration JAR. Returns its path."""
+    fs.ensure_dir(TOOLS_DIR)
+    jar = os.path.join(TOOLS_DIR, _MIGRATION_JAR % MIGRATION_VER)
+    if os.path.isfile(jar):
+        return jar
+    base = _MIGRATION_BASE % MIGRATION_VER
+    url = "%s/%s" % (base, _MIGRATION_JAR % MIGRATION_VER)
+    # SHA-512 mandatory (fail-closed); Apache publishes .sha512 alongside the jar.
+    return download.fetch_verified(url, TOOLS_DIR, sha512_url=url + ".sha512")
+
+
+def migrate(war_path: str, out_path: str, java_home: str) -> str:
+    """Convert a javax.* WAR to jakarta.* using the Apache migration tool.
+    Keeps the original (writes a new artifact at out_path). Returns out_path."""
+    if not os.path.isfile(war_path):
+        raise FileNotFoundError(war_path)
+    jar = ensure_migration_tool()
+    java = os.path.join(java_home, "bin", "java")
+    if not os.access(java, os.X_OK):
+        raise RuntimeError("java not executable at %s" % java)
+    shell.run([java, "-jar", jar, war_path, out_path])  # arg-list, no shell
+    return out_path
 
 
 def namespace_warning(war_path: str, tomcat_namespace: str) -> Optional[str]:
