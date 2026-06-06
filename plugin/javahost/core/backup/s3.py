@@ -204,8 +204,17 @@ class S3Client:
 
     def _parse_list(self, data: bytes) -> List[Dict]:
         out: List[Dict] = []
+        # Defense-in-depth before parsing: refuse any DTD / entity declaration (a
+        # ListObjectsV2 response never carries one). xml.etree does NOT resolve
+        # external entities, so with internal entities rejected here there is no
+        # XXE and no billion-laughs expansion vector. The body is the S3 API
+        # response from the operator's OWN TLS-authenticated endpoint, not
+        # arbitrary attacker input.
+        head = data[:8192].lower()
+        if b"<!doctype" in head or b"<!entity" in head:
+            return out
         try:
-            root = ET.fromstring(data)
+            root = ET.fromstring(data)  # nosec B314 — DTD/entities rejected above; no external-entity resolution
         except ET.ParseError:
             return out
         plen = len(self.prefix) + 1 if self.prefix else 0

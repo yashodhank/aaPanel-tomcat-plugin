@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.18.1] — 2026-06-07
+
+### Fixed
+- **CI (bandit B314):** the S3 `ListObjectsV2` response parser used
+  `xml.etree.ElementTree.fromstring` on the API response. It now refuses any
+  DTD/entity declaration before parsing (defense against entity-expansion;
+  `etree` does not resolve external entities) — closing the warning without a
+  third-party dependency. No behavior change for valid responses.
+
 ## [0.18.0] — 2026-06-06
 
 ### Added (backup & restore)
