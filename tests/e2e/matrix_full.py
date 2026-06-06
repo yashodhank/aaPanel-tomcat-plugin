@@ -317,6 +317,38 @@ def ensure_fixture(name, cell_id):
     return None
 
 
+_DB_FX_CACHE = {}
+
+
+def db_fixture(engine, kind, java_release, cell_id):
+    """Build (and cache) the engine-specific DB artifact on demand: each engine
+    bundles a different JDBC driver, so a single dbcheck.war/dbapp.jar cannot
+    serve all engines. Returns the path, or None (skips the cell) on failure."""
+    key = (engine, kind, int(java_release))
+    if key in _DB_FX_CACHE:
+        return _DB_FX_CACHE[key]
+    out = os.path.join(FIXTURES, "db_%s_r%d" % (engine, int(java_release)))
+    samples = os.path.join(_ROOT, "tests", "fixtures", "make_samples.py")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = PLUGIN + os.pathsep + env.get("PYTHONPATH", "")
+    subprocess.run([sys.executable, samples, "--db", engine, "--out", out,
+                    "--release", str(int(java_release))], env=env, check=False)
+    fname = "dbapp.jar" if kind == "jar" else "dbcheck.war"
+    path = os.path.join(out, fname)
+    res = path if os.path.isfile(path) else None
+    if not res:
+        skip(cell_id, "could not build %s fixture for %s (offline/no javac?)" % (fname, engine))
+    _DB_FX_CACHE[key] = res
+    return res
+
+
+def resolve_fixture(cell, name):
+    """Per-engine DB fixture for DB cells; static fixture otherwise."""
+    if cell["db"] != "none":
+        return db_fixture(cell["db"], cell["kind"], cell["java"], cell["id"])
+    return ensure_fixture(name, cell["id"])
+
+
 # === systemd path (javahost_main endpoints) =================================
 
 class G(object):
@@ -337,7 +369,7 @@ def run_cell_systemd(cell, db, proxy_n):
     app = ("jh_fm_%s_%s_j%d_%s" % (cell["kind"], cell["tomcat"] or "x",
                                    cell["java"], cell["db"])).replace(".", "")
     name, marker = artifact_for(cell)
-    fixture = ensure_fixture(name, cell["id"])
+    fixture = resolve_fixture(cell, name)
     if not fixture:
         return None, False
 
@@ -430,7 +462,7 @@ def run_cell_serviceless(cell, db, proxy_n):
     from core.util import fs
 
     name, marker = artifact_for(cell)
-    fixture = ensure_fixture(name, cell["id"])
+    fixture = resolve_fixture(cell, name)
     if not fixture:
         return None, False
 
