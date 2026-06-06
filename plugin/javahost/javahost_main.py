@@ -33,6 +33,7 @@ from core import config                          # noqa: E402
 from core import maintenance                      # noqa: E402
 from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
+from core.backup import remote as backupremote    # noqa: E402
 
 
 class javahost_main(object):
@@ -398,7 +399,7 @@ class javahost_main(object):
         try:
             app = panel.attr(get, "app", None) if get is not None else None
             app = validate.identifier(app, "app") if app else None
-            return panel.ok({"backups": backupstore.list_backups(app=app)})
+            return panel.ok({"backups": backupstore.list_backups(app=app, include_remote=True)})
         except Exception as e:
             return panel.err(str(e))
 
@@ -424,16 +425,19 @@ class javahost_main(object):
         reallocated port; `domain` (optional) remaps the site. Returns {job_id}."""
         try:
             name = panel.attr(get, "archive")
-            archive_path = backupstore._backup_path(name)  # validates name + containment
+            backupstore._backup_path(name)  # validate name + containment (raises on bad)
             as_raw = panel.attr(get, "as_name", None)
             as_name = validate.identifier(as_raw, "as_name") if as_raw else None
             dom = panel.attr(get, "domain", None) or None
+            # ensure_local pulls the archive from remote storage first if it isn't
+            # present on disk (so remote-only backups are restorable).
             body = ("from core.backup import store\n"
-                    "r = store.restore(%r, as_name=%r, domain=%r)\n"
+                    "p = store.ensure_local(%r)\n"
+                    "r = store.restore(p, as_name=%r, domain=%r)\n"
                     "print('restore:', r['app'], r['mode'], 'port=' + str(r.get('port')),"
                     " 'status=' + str(r.get('status')))\n"
                     "print('ssl_warning:', r['ssl_warning']) if r.get('ssl_warning') else None\n"
-                    % (archive_path, as_name, dom))
+                    % (name, as_name, dom))
             job_id = jobs.start("restore", as_name or name, jobs.python_work(body))
             panel.log("StartRestore", "%s as=%s -> job %s" % (name, as_name or "(overwrite)", job_id))
             return panel.ok({"job_id": job_id, "archive": name, "as_name": as_name})
@@ -444,6 +448,47 @@ class javahost_main(object):
         try:
             res = backupstore.delete_backup(panel.attr(get, "archive"))
             panel.log("DeleteBackup", res["name"])
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- remote object storage (S3 / Wasabi / MinIO / B2 / R2) ----
+    def GetRemoteStorage(self, get=None):
+        """Current remote-storage config. Secret key is NEVER returned (only a
+        `secret_set` flag), mirroring the GetDbEnv secret-safe pattern."""
+        try:
+            return panel.ok(backupremote.get_config(redacted=True))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetRemoteStorage(self, get):
+        try:
+            path_raw = panel.attr(get, "path_style", "1")
+            res = backupremote.set_config(
+                provider=panel.attr(get, "provider", "other"),
+                endpoint=panel.attr(get, "endpoint", ""),
+                region=panel.attr(get, "region", "us-east-1"),
+                bucket=panel.attr(get, "bucket", ""),
+                access_key=panel.attr(get, "access_key", ""),
+                secret_key=panel.attr(get, "secret_key", ""),
+                prefix=panel.attr(get, "prefix", ""),
+                path_style=str(path_raw).lower() not in ("0", "false", "no", "off"),
+            )
+            panel.log("SetRemoteStorage", "%s %s/%s" % (res.get("provider"), res.get("endpoint"), res.get("bucket")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def TestRemoteStorage(self, get=None):
+        try:
+            return panel.ok(backupremote.test())
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RemoveRemoteStorage(self, get=None):
+        try:
+            res = backupremote.remove()
+            panel.log("RemoveRemoteStorage", "removed=%s" % res.get("removed"))
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))

@@ -176,36 +176,67 @@ def _read_manifest_file(path: str) -> Dict:
         return {}
 
 
-def list_backups(app: Optional[str] = None) -> List[Dict]:
-    """Newest-first records for local backups (optionally filtered by app)."""
+def list_backups(app: Optional[str] = None, include_remote: bool = False) -> List[Dict]:
+    """Newest-first records for local backups (optionally filtered by app). With
+    include_remote=True, remote-only archives are merged in (tagged location)."""
     out: List[Dict] = []
-    if not os.path.isdir(BACKUPS_ROOT):
-        return out
-    for name in os.listdir(BACKUPS_ROOT):
-        if not _NAME_RE.match(name):
-            continue
-        path = os.path.join(BACKUPS_ROOT, name)
-        if not os.path.isfile(path):
-            continue
-        man = _read_manifest_file(path)
-        if app and man.get("app") != app:
-            continue
+    seen = set()
+    if os.path.isdir(BACKUPS_ROOT):
+        for name in os.listdir(BACKUPS_ROOT):
+            if not _NAME_RE.match(name):
+                continue
+            path = os.path.join(BACKUPS_ROOT, name)
+            if not os.path.isfile(path):
+                continue
+            man = _read_manifest_file(path)
+            if app and man.get("app") != app:
+                continue
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            seen.add(name)
+            out.append({
+                "name": name,
+                "app": man.get("app"),
+                "type": man.get("type"),
+                "domain": man.get("domain"),
+                "ssl_enabled": man.get("ssl_enabled"),
+                "created_at": man.get("created_at"),
+                "size_bytes": size,
+                "size_mb": round(size / (1 << 20), 2),
+                "location": "local",
+            })
+    if include_remote:
         try:
-            size = os.path.getsize(path)
-        except OSError:
-            size = 0
-        out.append({
-            "name": name,
-            "app": man.get("app"),
-            "type": man.get("type"),
-            "domain": man.get("domain"),
-            "ssl_enabled": man.get("ssl_enabled"),
-            "created_at": man.get("created_at"),
-            "size_bytes": size,
-            "size_mb": round(size / (1 << 20), 2),
-        })
-    out.sort(key=lambda b: b.get("created_at") or "", reverse=True)
+            from . import remote
+            if remote.configured():
+                for r in remote.list_remote():
+                    if r["name"] in seen:
+                        continue  # already have it locally
+                    if app and r.get("app") != app:
+                        continue
+                    out.append(r)
+        except Exception:
+            pass
+    out.sort(key=lambda b: (b.get("created_at") or b.get("name") or ""), reverse=True)
     return out
+
+
+def ensure_local(name: str) -> str:
+    """Return a local path for backup <name>, downloading it from remote storage
+    first if it isn't present locally. Raises if it can't be made available."""
+    path = _backup_path(name)
+    if os.path.isfile(path):
+        return path
+    fs.ensure_dir(BACKUPS_ROOT)
+    from . import remote
+    if remote.configured():
+        res = remote.download(name, path)
+        if res.get("ok") and os.path.isfile(path):
+            return path
+        raise RuntimeError("remote download failed: %s" % res.get("detail"))
+    raise FileNotFoundError("backup not found locally and no remote configured: %s" % name)
 
 
 def delete_backup(name: str) -> Dict:
@@ -214,7 +245,14 @@ def delete_backup(name: str) -> Dict:
     if os.path.isfile(path):
         os.unlink(path)
         removed = True
-    return {"name": name, "removed": removed}
+    remote_removed = False
+    try:
+        from . import remote
+        if remote.configured():
+            remote_removed = bool(remote.delete(name).get("ok"))
+    except Exception:
+        pass
+    return {"name": name, "removed": removed, "remote_removed": remote_removed}
 
 
 def prune_backups(app: str, keep: int) -> Dict:

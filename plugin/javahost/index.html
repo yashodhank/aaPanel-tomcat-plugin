@@ -741,6 +741,13 @@
 
     <!-- ================== PAGE: SETTINGS ================== -->
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
+      <div class="jh-card" style="margin-bottom:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Remote storage</h3><p>S3-compatible bucket for off-box backups (Wasabi · MinIO · Backblaze B2 · Cloudflare R2 · AWS)</p></div>
+          <button class="jh-btn ghost sm" id="jh-remote-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-remote-body"><div class="jh-loading">Loading…</div></div>
+      </div>
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
@@ -1146,6 +1153,93 @@
     var arr = p && p[cat.field];
     return Array.isArray(arr) ? arr.length : 0;
   }
+  // =====================================================================
+  // REMOTE STORAGE (Settings) — S3-compatible off-box backups
+  // =====================================================================
+  var REMOTE_PRESETS = {
+    wasabi:'https://s3.wasabisys.com', aws:'https://s3.us-east-1.amazonaws.com',
+    backblaze:'https://s3.us-west-001.backblazeb2.com', r2:'https://<account>.r2.cloudflarestorage.com',
+    minio:'http://127.0.0.1:9000', other:''
+  };
+  function refreshRemoteStorage(btn){
+    busy(btn, true);
+    call('GetRemoteStorage', {}, function(r){
+      busy(btn, false);
+      var bd = $('jh-remote-body'); if(!bd) return;
+      if(failed(r)){
+        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>Remote storage is not available on this server build.</div></div>';
+        return;
+      }
+      renderRemoteStorage(payload(r) || {});
+    });
+  }
+  function renderRemoteStorage(c){
+    var bd = $('jh-remote-body'); if(!bd) return;
+    var provs = ['wasabi','minio','backblaze','r2','aws','other'];
+    var psel = provs.map(function(p){
+      return '<option value="'+p+'"'+(c.provider===p?' selected':'')+'>'+esc(p)+'</option>';
+    }).join('');
+    var status = c.configured
+      ? '<span class="jh-badge ok"><span class="jh-dot"></span>configured</span>'
+      : '<span class="jh-badge neutral">not configured</span>';
+    bd.innerHTML =
+      '<div style="margin-bottom:var(--s3)">'+status+'</div>'+
+      '<div class="jh-form">'+
+        '<div class="jh-field"><label for="rm-provider">Provider</label><select id="rm-provider">'+psel+'</select></div>'+
+        '<div class="jh-field"><label for="rm-endpoint">Endpoint URL</label><input id="rm-endpoint" type="text" placeholder="https://s3.wasabisys.com" value="'+esc(c.endpoint||'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-region">Region</label><input id="rm-region" type="text" placeholder="us-east-1" value="'+esc(c.region||'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-bucket">Bucket</label><input id="rm-bucket" type="text" placeholder="my-backups" value="'+esc(c.bucket||'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-access">Access key ID</label><input id="rm-access" type="text" autocomplete="off" value="'+esc(c.access_key||'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-secret">Secret access key</label><input id="rm-secret" type="password" autocomplete="new-password" placeholder="'+(c.secret_set?'•••••••• (set — leave blank to keep)':'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-prefix">Path prefix (optional)</label><input id="rm-prefix" type="text" placeholder="javahost" value="'+esc(c.prefix||'')+'"></div>'+
+        '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="rm-pathstyle" type="checkbox"'+((c.path_style!==false)?' checked':'')+'><label for="rm-pathstyle" style="margin:0">Path-style addressing (Wasabi/MinIO)</label></div>'+
+      '</div>'+
+      '<div class="jh-spread" style="gap:var(--s2);margin-top:var(--s4)">'+
+        '<button type="button" class="jh-btn accent" id="jh-remote-save">'+ic('check')+'Save</button>'+
+        '<button type="button" class="jh-btn ghost" id="jh-remote-test">'+ic('refresh')+'Test connection</button>'+
+        (c.configured?'<button type="button" class="jh-btn danger" id="jh-remote-remove">'+ic('trash')+'Remove</button>':'')+
+      '</div>'+
+      '<div class="jh-hint" style="margin-top:var(--s2)">Credentials are stored server-side (0600) and the secret key is never sent back to this UI. Backups uploaded here also contain the app DB env — secure the bucket.</div>';
+    var pv = $('rm-provider');
+    if(pv) pv.addEventListener('change', function(){
+      var ep = $('rm-endpoint'); var preset = REMOTE_PRESETS[pv.value];
+      if(ep && preset && !ep.value) ep.value = preset;
+    });
+  }
+  function saveRemoteStorage(btn){
+    busy(btn, true);
+    var data = {
+      provider:$('rm-provider').value, endpoint:$('rm-endpoint').value.trim(),
+      region:$('rm-region').value.trim(), bucket:$('rm-bucket').value.trim(),
+      access_key:$('rm-access').value.trim(), secret_key:$('rm-secret').value,
+      prefix:$('rm-prefix').value.trim(), path_style:$('rm-pathstyle').checked?'1':'0'
+    };
+    call('SetRemoteStorage', data, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)), 'err', 'Save failed'); return; }
+      toast('Remote storage saved', 'ok'); refreshRemoteStorage();
+    });
+  }
+  function testRemoteStorage(btn){
+    busy(btn, true);
+    call('TestRemoteStorage', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r) || !p || !p.ok){ toast((p && p.detail) || errText(p) || 'connection failed', 'err', 'Test failed'); return; }
+      toast('Bucket reachable', 'ok');
+    });
+  }
+  function removeRemoteStorage(btn){
+    if(!confirm('Remove remote-storage credentials? Future backups will be local only.')) return;
+    busy(btn, true);
+    call('RemoveRemoteStorage', {}, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)), 'err', 'Remove failed'); return; }
+      toast('Remote storage removed', 'ok'); refreshRemoteStorage();
+    });
+  }
+
   function refreshDangerZone(btn){
     var body = $('jh-danger-body'); if(!body) return;
     busy(btn, true);
@@ -3253,7 +3347,7 @@
     if(name === 'apps'){ startAppsPoll(); refreshBackups(); }
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
-    if(name === 'settings') refreshDangerZone();
+    if(name === 'settings'){ refreshRemoteStorage(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -3509,6 +3603,11 @@
       busy(b, true); startJob('UninstallTomcat', {version:ds.tcUninstall}, 'Tomcat '+ds.tcUninstall+' uninstall', b); return;
     }
 
+    // settings / remote storage
+    if(b.id === 'jh-remote-refresh'){ refreshRemoteStorage(b); return; }
+    if(b.id === 'jh-remote-save'){ saveRemoteStorage(b); return; }
+    if(b.id === 'jh-remote-test'){ testRemoteStorage(b); return; }
+    if(b.id === 'jh-remote-remove'){ removeRemoteStorage(b); return; }
     // settings / danger zone
     if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
     if(b.id === 'jh-wipe-run'){ runWipe(b); return; }
