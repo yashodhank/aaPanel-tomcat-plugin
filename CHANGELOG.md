@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.16.0] — 2026-06-06
+
+### Changed
+- **The plugin no longer detects or reuses aaPanel's `/usr/local/btjdk`.** It now
+  manages only its own JDKs under `runtimes/` (plus distro JDKs in `/usr/lib/jvm`),
+  so it's fully self-contained — no more confusing "panel JDK" rows or an
+  un-removable shared runtime. (Migration on an existing install: repoint any app
+  pinned to `btjdk` to a plugin `runtimes/jdk-*`.)
+
+### Fixed
+- **Danger-zone "Remove plugin JDKs/Tomcats" no longer breaks running apps.** It
+  now SKIPS any JDK/Tomcat still in use by a deployed app (reported as `skipped`);
+  a full/apps wipe removes apps first, so everything still clears. Previously a
+  JDKs-only wipe could orphan every app's runtime.
+
+### UI/UX
+- "Java N is in use" uninstall dialog: leads with a count and a compact, scrollable
+  app list (no more giant modal). Databases tab: a live **search/filter** over the
+  per-app env chips (+ live count); version lists wrap; driver cells don't overflow.
+  Runtimes rows: consistent label/path/badge/button alignment, path shown muted-mono.
+  General spacing/overflow consistency pass.
+
 ## [0.15.2] — 2026-06-06
 
 ### Fixed

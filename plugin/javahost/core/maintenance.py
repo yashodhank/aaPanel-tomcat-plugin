@@ -152,29 +152,47 @@ def _wipe_apps() -> Dict:
 
 
 def _wipe_jdks() -> Dict:
+    """Remove plugin-owned JDKs NOT in use by any app. A JDK still pinned by a
+    deployed app is SKIPPED (removing it would break the app on next restart).
+    In a full/apps wipe the apps are removed first, so nothing is pinned and
+    every JDK is removed."""
     removed: List[str] = []
     errors: Dict[str, str] = {}
+    skipped: Dict[str, List[str]] = {}
     root = java.JDK_ROOT
     for name in _list_plugin_jdks():
+        m = re.match(r"jdk-(\d+)", name)
+        users = java.usage(int(m.group(1))) if m else []
+        if users:
+            skipped[name] = users
+            continue
         target = os.path.join(root, name)
         try:
             fs.safe_rmtree(target, require_marker=fs.is_managed(target))
             removed.append(name)
         except Exception as e:
             errors[name] = str(e)
-    return {"removed": removed, "errors": errors}
+    return {"removed": removed, "errors": errors, "skipped": skipped}
 
 
 def _wipe_tomcats() -> Dict:
+    """Uninstall Tomcat lines NOT in use by any app (an app on that Tomcat would
+    break). Skipped when in use; apps are wiped first in a full/apps wipe."""
     removed: List[str] = []
     errors: Dict[str, str] = {}
+    skipped: Dict[str, List[str]] = {}
+    apps = instance.list_apps()
     for major in _list_installed_tomcats():
+        users = [a["app"] for a in apps if str(a.get("tomcat")) == str(major)]
+        if users:
+            skipped[major] = users
+            continue
         try:
             installer.uninstall(major)
             removed.append(major)
         except Exception as e:
             errors[major] = str(e)
-    return {"removed": removed, "errors": errors}
+    return {"removed": removed, "errors": errors, "skipped": skipped}
 
 
 def _wipe_sites() -> Dict:

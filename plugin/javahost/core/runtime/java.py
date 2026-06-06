@@ -20,14 +20,15 @@ JDK_ROOT = "/www/server/javahost/runtimes"
 
 # Search order for already-present JDKs (newest first).
 _SEARCH = [
+    # JavaHost manages its own JDKs under runtimes/ only. We deliberately do NOT
+    # detect/reuse aaPanel's /usr/local/btjdk: it's the panel's space, the plugin
+    # should be self-contained, and reusing it created confusing "panel JDK" rows
+    # and an un-removable runtime. Distro JDKs under /usr/lib/jvm are still honoured
+    # (legitimately user-managed system JDKs).
     "/www/server/javahost/runtimes/jdk-21",
     "/www/server/javahost/runtimes/jdk-17",
     "/www/server/javahost/runtimes/jdk-11",
     "/www/server/javahost/runtimes/jdk-8",
-    "/usr/local/btjdk/jdk21",
-    "/usr/local/btjdk/jdk17",
-    "/usr/local/btjdk/jdk11",
-    "/usr/local/btjdk/jdk8",
     "/usr/lib/jvm",  # distro JDKs (expanded below)
 ]
 

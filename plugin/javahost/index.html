@@ -460,6 +460,51 @@
   .jh-muted{color:var(--muted)}
   .jh-loading{color:var(--muted);font-size:13px}
 
+  /* monospace secondary label (paths, drivers) — visually subordinate */
+  .jh-path{font:12px var(--mono);color:var(--muted);overflow-wrap:anywhere;word-break:break-word}
+
+  /* =====================================================================
+     RUNTIME ROWS — consistent two-column alignment (label left, actions right)
+     ===================================================================== */
+  .jh-rt-row{display:flex;align-items:center;justify-content:space-between;
+    gap:var(--s3);flex-wrap:wrap}
+  .jh-rt-row .jh-rt-label{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+  .jh-rt-row .jh-rt-name{font-weight:700;letter-spacing:-.01em;display:flex;
+    align-items:center;gap:var(--s2);flex-wrap:wrap}
+  .jh-rt-row .btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+  /* =====================================================================
+     FILTERABLE CHIP GRID (per-app DB picker) — search + responsive grid
+     ===================================================================== */
+  .jh-filterbar{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;
+    margin-bottom:var(--s3)}
+  .jh-filterbar .jh-search{position:relative;flex:1;min-width:180px;display:flex;align-items:center}
+  .jh-filterbar .jh-search svg{position:absolute;left:10px;width:15px;height:15px;
+    color:var(--muted);pointer-events:none}
+  .jh-filterbar .jh-search input{padding-left:32px}
+  .jh-count{font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap}
+  .jh-chipgrid{display:grid;gap:var(--s2);
+    grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+    max-height:340px;overflow-y:auto;padding:2px}
+  .jh-chipgrid .jh-btn{min-width:0;justify-content:flex-start}
+  .jh-chipgrid .jh-btn span.lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .jh-chipgrid [hidden]{display:none}
+  .jh-nomatch{grid-column:1/-1;text-align:center;color:var(--muted);
+    font-size:13px;padding:var(--s4)}
+
+  /* dependents list (Java-in-use modal) — scrollable, bounded chip area */
+  .jh-deplist{display:flex;flex-wrap:wrap;gap:var(--s2);max-height:200px;
+    overflow-y:auto;padding:var(--s2);margin-top:var(--s3);
+    border:1px solid var(--line);border-radius:var(--r);background:var(--surface-2)}
+  .jh-deplist:focus-visible{outline:2px solid var(--accent-d);outline-offset:2px}
+  .jh-deplist .jh-chip{max-width:100%}
+
+  /* wrap long version lists / driver codes in the DB matrix table */
+  .jh-verlist{display:flex;flex-wrap:wrap;gap:4px}
+  .jh-verlist code{font:11.5px var(--mono);background:var(--surface-2);
+    border:1px solid var(--line);padding:1px 5px;border-radius:4px;white-space:nowrap}
+  .jh td code{overflow-wrap:anywhere;word-break:break-word;display:inline-block;max-width:100%}
+
   @media (max-width:560px){
     .jh{padding:var(--s3)}
     .jh-stat-v{font-size:20px}
@@ -499,6 +544,7 @@
       <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
       <symbol id="i-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
       <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
     </defs>
   </svg>
 
@@ -1029,16 +1075,20 @@
     });
   }
   function confirmJavaInUse(version, apps, btn){
-    var list = apps.map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('');
+    var n = apps.length;
+    var noun = n === 1 ? 'app' : 'apps';
+    var chips = apps.map(function(a){
+      return '<span class="jh-chip" role="listitem" title="'+esc(a)+'">'+ic('box')+esc(a)+'</span>';
+    }).join('');
     openModal({
       title:'Java '+version+' is in use', sub:'Dependent apps must be stopped or repointed first',
       returnFocus: btn,
       body:
         '<div class="jh-alert danger" role="alert">'+ic('warn')+
-          '<div><b>Java '+esc(version)+' is used by:</b> '+esc(apps.join(', '))+
-          ' — stop or repoint these apps before removing this runtime.</div></div>'+
-        '<ul style="margin:var(--s3) 0 0;padding-left:var(--s5)">'+list+'</ul>'+
-        '<div class="jh-hint">Forcing the uninstall will leave the listed apps without a Java '+esc(version)+' runtime; they will not start until repointed or the runtime is reinstalled.</div>',
+          '<div><b>Java '+esc(version)+' is used by '+n+' '+noun+'.</b> '+
+          'Stop or repoint them before removing this runtime — forcing leaves them without a Java '+esc(version)+' runtime until repointed or reinstalled.</div></div>'+
+        '<div class="jh-deplist" tabindex="0" role="list" '+
+          'aria-label="Apps using Java '+esc(version)+'">'+chips+'</div>',
       footer: [
         mkBtn('Cancel', 'ghost', closeModal),
         mkBtn('Force uninstall anyway', 'danger ghost', function(b){
@@ -1399,10 +1449,12 @@
       var on = java[k] != null;
       var panel = on && jdkIsPanelManaged(java[k]);
       var ek = esc(k);
-      var pathHtml = on ? ' <span class="jh-muted" title="'+esc(java[k])+'">'+esc(java[k])+'</span>' : '';
       var panelBadge = panel
-        ? ' <span class="jh-badge neutral" title="Shared with aaPanel; managed by the panel">'+ic('info')+'panel JDK</span>'
+        ? '<span class="jh-badge neutral" title="Shared with aaPanel; managed by the panel">'+ic('info')+'panel JDK</span>'
         : '';
+      var subHtml = on
+        ? '<div class="jh-path" title="'+esc(java[k])+'">'+esc(java[k])+'</div>'
+        : '<div class="jh-path">not installed</div>';
       var btns;
       if(!on){
         btns = '<button type="button" class="jh-btn accent sm" data-jdk="'+ek+'">'+ic('plus')+'Install</button>';
@@ -1416,7 +1468,8 @@
           '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'">'+ic('refresh')+'Reinstall</button>'+
           '<button type="button" class="jh-btn danger ghost sm" data-jdk-uninstall="'+ek+'">'+ic('trash')+'Uninstall</button>';
       }
-      return '<div class="jh-kv"><span>Java '+ek+pathHtml+panelBadge+'</span>'+
+      return '<div class="jh-kv jh-rt-row"><div class="jh-rt-label">'+
+          '<div class="jh-rt-name">Java '+ek+panelBadge+'</div>'+subHtml+'</div>'+
         '<span class="btns">'+btns+'</span></div>';
     }).join('');
 
@@ -1424,7 +1477,9 @@
     $('rt-tomcat').innerHTML = supp.map(function(k){
       var info = tom[k];
       var meta = info ? ('patch '+info.patch+' · '+info.namespace+' · min Java '+info.min_java) : 'not installed';
-      return '<div class="jh-kv"><span>Tomcat '+esc(k)+' <span class="jh-muted">'+esc(meta)+'</span></span>'+
+      return '<div class="jh-kv jh-rt-row"><div class="jh-rt-label">'+
+          '<div class="jh-rt-name">Tomcat '+esc(k)+'</div>'+
+          '<div class="jh-path">'+esc(meta)+'</div></div>'+
         '<span class="btns">'+
         (info
           ? '<button type="button" class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>'+
@@ -2728,11 +2783,14 @@
     var tb = $('db-matrix');
     if(!DB_ENGINES.length){ tb.innerHTML = '<tr><td colspan="5" class="jh-muted">none reported</td></tr>'; return; }
     tb.innerHTML = DB_ENGINES.map(function(e){
-      var vers = (e.versions||[]).map(esc).join(', ');
+      var vlist = e.versions || [];
+      var vers = vlist.length
+        ? '<div class="jh-verlist">'+vlist.map(function(v){ return '<code>'+esc(v)+'</code>'; }).join('')+'</div>'
+        : '<span class="jh-muted">—</span>';
       return '<tr>'+
         '<td><div class="app-name">'+esc(e.label||e.engine)+'</div><div class="jh-muted" style="font-size:12px">'+esc(e.engine)+'</div></td>'+
         '<td>'+esc(e.default_port)+'</td>'+
-        '<td>'+(vers || '<span class="jh-muted">—</span>')+'</td>'+
+        '<td>'+vers+'</td>'+
         '<td><code>'+esc(e.driver||e.driver_class||'—')+'</code></td>'+
         '<td><span class="jh-badge '+(e.local_detected?'ok':'neutral')+'">'+(e.local_detected?'detected':'no')+'</span></td>'+
       '</tr>';
@@ -2741,10 +2799,60 @@
   function renderDbPicker(apps){
     apps = apps || [];
     var box = $('db-app-picker');
+    // keep the picker as a single full-width column so the filter UI + grid stack
+    box.classList.remove('jh-spread');
+    // preserve a typed filter across background re-renders (GetStatus refresh)
+    var prevFilter = (function(){ var f = $('db-app-filter'); return f ? f.value : ''; })();
     if(!apps.length){ box.innerHTML = emptyInline('No apps to configure', 'Create an app first.'); return; }
-    box.innerHTML = apps.map(function(a){
-      return '<button type="button" class="jh-btn ghost sm" data-dbenv="'+esc(a.app)+'">'+ic('db')+esc(a.app)+'</button>';
+    // stable case-insensitive sort by name so the wall scans predictably
+    var sorted = apps.slice().sort(function(a,b){
+      var an = String(a.app||'').toLowerCase(), bn = String(b.app||'').toLowerCase();
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    });
+    var n = sorted.length;
+    var chips = sorted.map(function(a){
+      var name = String(a.app||'');
+      return '<button type="button" class="jh-btn ghost sm" data-dbenv="'+esc(name)+'" '+
+        'data-dbname="'+esc(name.toLowerCase())+'">'+ic('db')+
+        '<span class="lbl" title="'+esc(name)+'">'+esc(name)+'</span></button>';
     }).join('');
+    box.innerHTML =
+      '<div class="jh-filterbar">'+
+        '<div class="jh-search">'+ic('search')+
+          '<input type="search" id="db-app-filter" placeholder="Filter apps… (try -pg, -mysql)" '+
+            'aria-label="Filter apps by name or engine suffix" aria-controls="db-app-grid" autocomplete="off">'+
+        '</div>'+
+        '<span class="jh-count" id="db-app-count" aria-live="polite">'+n+(n===1?' app':' apps')+'</span>'+
+      '</div>'+
+      '<div class="jh-chipgrid" id="db-app-grid" role="group" aria-label="Managed apps">'+
+        chips+
+        '<div class="jh-nomatch" id="db-app-nomatch" hidden>No apps match that filter.</div>'+
+      '</div>';
+    if(prevFilter){
+      var fi = $('db-app-filter');
+      if(fi){ fi.value = prevFilter; filterDbPicker(prevFilter); }
+    }
+  }
+  // Live-filter the DB picker chips by substring of the app name (covers engine
+  // suffixes like -pg / -mysql since those live in the name). Updates the count.
+  function filterDbPicker(q){
+    var grid = $('db-app-grid'); if(!grid) return;
+    var term = String(q||'').trim().toLowerCase();
+    var btns = grid.querySelectorAll('[data-dbname]');
+    var shown = 0;
+    for(var i=0;i<btns.length;i++){
+      var match = !term || btns[i].getAttribute('data-dbname').indexOf(term) !== -1;
+      btns[i].hidden = !match;
+      if(match) shown++;
+    }
+    var nomatch = $('db-app-nomatch'); if(nomatch) nomatch.hidden = shown !== 0;
+    var count = $('db-app-count');
+    if(count){
+      var total = btns.length;
+      count.textContent = (term && shown !== total)
+        ? (shown + ' of ' + total + (total===1?' app':' apps'))
+        : (total + (total===1?' app':' apps'));
+    }
   }
 
   // =====================================================================
@@ -3287,7 +3395,8 @@
   // typed-confirm input ("WIPE") gates the destructive Run button live
   $('jh-root').addEventListener('input', function(e){
     var t = e.target;
-    if(t && t.id === 'jh-wipe-confirm'){ updateWipeRunState(); }
+    if(t && t.id === 'jh-wipe-confirm'){ updateWipeRunState(); return; }
+    if(t && t.id === 'db-app-filter'){ filterDbPicker(t.value); }
   });
 
   // keyboard activation for app rows (role="button"): Enter / Space open drawer
