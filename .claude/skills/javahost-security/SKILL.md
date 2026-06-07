@@ -57,3 +57,16 @@ do not add them as hard dependencies.
 Produce a findings table: `Severity (Critical/High/Medium/Low/Info) | Area | Finding
 | Evidence (file:line) | Fix`. Prefer fixing the class (e.g. route through the safe
 helper) over patching one call site. Add/adjust a unit test for any security fix.
+
+## Storage-profile secrets (multi-destination backups)
+- Multiple S3 destinations ⇒ multiple secret keys, all in `0600`
+  `/www/server/javahost/remotes.json`. A Get/List endpoint MUST NEVER return a
+  `secret_key` — only a `secret_set` flag (mirror `GetDbEnv`). On update, an empty
+  secret keeps the stored one.
+- Backups contain the app DB env (`bin/app.env`) → archives `0600`; the backups dir
+  is a managed root. LE private keys are NEVER bundled (re-issued on restore).
+- Restore/upload is the untrusted-input path → only `archive.safe_extract_tar`
+  (symlink/hardlink/device/`..`/absolute rejected). Cron exprs validated to `[0-9*/,-]`.
+- Never inline a secret in a shell/ssh/docker command (process table leak) — read
+  from the gitignored `_private_spec/OPS-ACCESS.md` or the on-box `remotes.json` at
+  runtime. Treat any chat-pasted cloud key as exposed and require rotation.

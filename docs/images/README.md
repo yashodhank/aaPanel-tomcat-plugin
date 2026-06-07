@@ -50,3 +50,8 @@ This directory holds the screenshots referenced by the docs (chiefly
 | `logs.png` | **Logs** tab: the unified app + task log viewer (line-count selector + Refresh). | The unified Logs viewer (app logs + task logs). |
 | `settings-danger.png` | **Settings** tab, **Danger zone**: per-category checkboxes (apps/jdks/tomcats/sites/full), dry-run **Preview**, typed **WIPE** confirm. | Settings → Danger zone — granular wipe with preview and typed confirm. |
 | `help-proxy.png` | **Help** tab, **Reverse-proxy hint** card (`GetProxyHint`): the Nginx include snippet. | The Help tab's reverse-proxy include snippet. |
+| `dashboard.png` | **Dashboard** with the v0.17+ operational tiles (apps running, aggregate CPU/RSS, SSL expiry, disk) + cards. | The Dashboard with live operational aggregates. |
+| `backups-tab.png` | The **Backups** tab: Storage destinations table, Backups list with per-location badges, and Schedules with destination badges. | The dedicated Backups tab (multi-destination). |
+| `storage-destinations.png` | The **Storage destinations** card — multiple S3 profiles (provider/bucket/enabled, Test/Edit/Delete). | Managed S3 storage destinations. |
+| `backup-destinations-picker.png` | The **Back up now** modal — app + a multi-select of storage destinations. | Choosing destinations for a backup. |
+| `schedules.png` | The **Schedules** card — per-app cron + destination badges + retention. | Scheduled backups to selected destinations. |

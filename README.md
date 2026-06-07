@@ -17,7 +17,7 @@ Spring Boot / executable-JAR apps, publish them on a domain with **per-site
 Let's Encrypt HTTPS**, and connect them to **PostgreSQL / MySQL / MariaDB /
 MongoDB** — all with integrity-verified downloads, systemd services, and async
 background jobs. It ships a self-contained admin UI (Dashboard · Applications ·
-Runtimes · Databases · Tasks · Logs · Help · Settings) with a fullscreen mode.
+Runtimes · Databases · Backups · Tasks · Logs · Help · Settings) with a fullscreen mode.
 
 > **Why this exists:** the panel's built-in Java manager stalled at Tomcat 7/8/9.
 > JavaHost adds modern Tomcat 10/11 + Java 17/21 the right way, as a clean,
@@ -99,7 +99,7 @@ job flow, SSL decision, and the status-semantics model).
 | Deploy | zip-slip-safe WAR extraction; `javax`→`jakarta` namespace detection & warnings + one-click migrate for Tomcat 10/11; Spring Boot / executable-JAR apps run as services |
 | Proxy / SSL | plugin-owned Nginx vhost generator (never edits other plugins' configs); sites at `<app>.<site_suffix>` (the suffix is a **plugin config**, empty by default — the UI prompts, no FQDN hardcoded); **per-site Let's Encrypt HTTPS** via `SetSiteSSL` (aaPanel-native ACME → **certbot `--webroot` fallback**, 443 vhost + 80→443 redirect + auto-renew hook, cert kept on disable); on-demand cert/site status (`GetSiteStatus`) surfaced in the drawer's **Site & SSL** block |
 | Databases | **PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0)** — a support-matrix reference, per-app DB-env form with a live **search/filter**, connection-URL builder, JVM→driver matrix, secret-safe `app.env` (no creds in WAR/URL/logs); the drawer shows the current env (`GetDbEnv`, **never** the password) |
-| Backup / restore | Per-app **backup** (config + webapp + DB env + vhost + manifest; excludes logs and **never** LE private keys) and **restore** — in place or as a **new app** (reallocated port, domain remap, SSL re-issued). **Remote object storage** (Wasabi / MinIO / B2 / R2 / AWS) via a dependency-free S3 SigV4 client (custom endpoint; secret-safe `0600` config). **Scheduled backups** with local + remote **retention** (managed `cron.d`), and **restore-from-upload** through the hardened tar extractor (symlink/traversal/device rejection) |
+| Backup / restore | A dedicated **Backups** tab. Per-app **backup** (config + webapp + DB env + vhost + manifest; excludes logs and **never** LE private keys) and **restore** — in place (typed confirm) or as a **new app** (reallocated port, domain remap, SSL re-issued). **Multiple S3 storage destinations** (Wasabi / MinIO / B2 / R2 / AWS) — add/test/manage as many named profiles as you like via a dependency-free SigV4 client; pick one or more per backup/schedule; each backup tracks its **locations** (local + every destination). **Scheduled backups** with **per-destination retention** (managed `cron.d`), and **restore-from-upload** through the hardened tar extractor (symlink/traversal/device rejection) |
 | Dashboard | Live operational aggregates (`GetDashboard`, lazy-loaded): apps running / down / **runtime-missing**, aggregate **CPU % + RSS**, **certs expiring <30 days**, instances/backups **disk usage**, and recent tasks |
 | Observability | **Tasks** (background-job status: install/uninstall/lifecycle — running/done/failed + view-log) and **Logs** (unified app + task log viewer) |
 | Maintenance | **Settings → Danger zone:** granular wipe (apps / jdks / tomcats / sites / full) with dry-run preview + typed `WIPE` confirm; wipe **skips runtimes still in use**; `install.sh uninstall` honors a saved plan (default keep-data) |
@@ -173,13 +173,13 @@ make zip      # build javahost.zip
 
 ## Status
 
-Active (`v0.19.0`). The core library, installer, runtimes, Tomcat lifecycle,
+Active (`v0.20.0`). The core library, installer, runtimes, Tomcat lifecycle,
 WAR/JAR deploy, multi-engine databases, reverse-proxy + per-site HTTPS, async
 jobs, the Tasks/Logs/Danger-zone UI, and the offline test suite are all in
-place. The latest cycle added a richer operational **Dashboard** and full
-**backup/restore** — local + remote (S3/Wasabi) object storage, scheduled
-backups with retention, and restore-from-upload through a hardened tar extractor
-(see [Backup, restore & remote storage](docs/backup-restore.md)). Deploy paths
+place. The latest cycle added **multiple S3 storage destinations** (a managed
+profile registry) with per-backup/per-schedule selection and per-destination
+retention, surfaced in a dedicated **Backups** tab (see
+[Backup, restore & storage destinations](docs/backup-restore.md)). Deploy paths
 are validated on Ubuntu 24.04 (and via the opt-in CI deploy matrix / the on-box
 [Test campaign](docs/testbed.md)). Releases are tag-driven: pushing a `vX.Y.Z`
 tag runs `release.yml`, which builds and publishes `javahost.zip`. See

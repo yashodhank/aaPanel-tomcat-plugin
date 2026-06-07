@@ -29,14 +29,28 @@ import shutil
 import time
 from typing import Dict, List, Optional
 
+from .. import config
 from ..deploy import proxy, ssl
 from ..tomcat import instance, service
 from ..util import fs, validate
 from . import archive
 
-BACKUPS_ROOT = "/www/server/javahost/backups"
+BACKUPS_ROOT = "/www/server/javahost/backups"   # default; override via config "backup_dest"
 MANIFEST_NAME = "manifest.json"
 MANIFEST_FORMAT = 1
+
+
+def _backups_root() -> str:
+    """Local backups dir — `config.get('backup_dest')` (absolute) or the default."""
+    d = config.get("backup_dest")
+    if d and os.path.isabs(str(d)):
+        return str(d)
+    return BACKUPS_ROOT
+
+
+def _sidecar(path: str) -> str:
+    """Path of an archive's sidecar manifest (`<archive>.json`) for cheap listing."""
+    return path + ".json"
 
 # backup-<app>-<YYYYmmddTHHMMSSZ>.tar.gz
 _NAME_RE = re.compile(r"^backup-[A-Za-z0-9._-]+-\d{8}T\d{6}Z\.tar\.gz$")
@@ -69,10 +83,10 @@ def _plugin_version() -> str:
 
 
 def _backup_path(name: str) -> str:
-    """Realpath-contained path for a backup file name under BACKUPS_ROOT."""
+    """Realpath-contained path for a backup file name under the backups dir."""
     if not _NAME_RE.match(name or ""):
         raise ValueError("invalid backup name: %r" % name)
-    root = os.path.realpath(BACKUPS_ROOT)
+    root = os.path.realpath(_backups_root())
     path = os.path.realpath(os.path.join(root, name))
     if path != root and not path.startswith(root + os.sep):
         raise ValueError("backup path escapes store: %r" % name)
@@ -118,16 +132,23 @@ def _build_manifest(app: str, base: str) -> Dict:
 # --------------------------------------------------------------------------- #
 # backup
 # --------------------------------------------------------------------------- #
-def backup_app(app: str, remote: bool = False) -> Dict:
-    """Create a local archive of <app>. Returns {app, archive, name, size_bytes,
-    size_mb, remote}. `remote` upload is wired in Phase 3 (core/backup/remote)."""
+def backup_app(app: str, remotes=None) -> Dict:
+    """Create a local archive of <app> and optionally fan it out to storage profiles.
+
+    `remotes`: None/[] → local only; "all" → every enabled profile; a csv string or
+    list of profile ids → those. Returns {app, archive, name, size_*, locations,
+    uploaded_to, upload_results} — partial remote failure still keeps the local copy
+    and is reported per destination (never silently dropped)."""
     app = validate.identifier(app, "app")
     base = instance.base_path(app)
     if not instance.exists(app):
         raise RuntimeError("no such app: %s" % app)
+    if remotes is True:          # legacy bool → all enabled
+        remotes = "all"
 
-    fs.ensure_dir(BACKUPS_ROOT)
-    fs.mark_managed(BACKUPS_ROOT)  # so safe_rmtree/delete can operate here
+    root = _backups_root()
+    fs.ensure_dir(root)
+    fs.mark_managed(root)  # so safe_rmtree/delete can operate here
 
     manifest = _build_manifest(app, base)
     staging = fs.mkdtemp("jh-backup-")
@@ -148,7 +169,7 @@ def backup_app(app: str, remote: bool = False) -> Dict:
             members.append((vhost, "nginx/%s.conf" % app))
 
         name = "backup-%s-%s.tar.gz" % (app, _now_stamp())
-        dest = os.path.join(BACKUPS_ROOT, name)
+        dest = os.path.join(root, name)
         archive.pack(members, dest)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -156,16 +177,30 @@ def backup_app(app: str, remote: bool = False) -> Dict:
     size = os.path.getsize(dest)
     out = {"app": app, "archive": dest, "name": name,
            "size_bytes": size, "size_mb": round(size / (1 << 20), 2),
-           "remote": False}
-    if remote:
+           "locations": ["local"], "uploaded_to": [], "upload_results": {}}
+
+    # fan out to selected destinations (best-effort, per-destination result)
+    ids = []
+    if remotes not in (None, "", []):
         try:
-            from . import remote as remotemod  # Phase 3
-            up = remotemod.upload(dest, name)
-            out["remote"] = bool(up.get("ok"))
-            out["remote_detail"] = up.get("detail", "")
+            from . import remote as remotemod
+            ids = remotemod._resolve_ids(remotes)
+            if ids:
+                up = remotemod.upload(dest, name, ids)
+                out["upload_results"] = up.get("results", {})
+                out["uploaded_to"] = up.get("ok_ids", [])
+                out["locations"] += up.get("ok_ids", [])
         except Exception as e:
-            out["remote"] = False
-            out["remote_detail"] = "remote upload unavailable: %s" % e
+            out["upload_results"] = {"_error": {"ok": False, "detail": str(e)}}
+
+    # sidecar manifest (cheap listing) — records where it was uploaded
+    try:
+        side = dict(manifest)
+        side["name"] = name
+        side["uploaded_to"] = out["uploaded_to"]
+        fs.atomic_write(_sidecar(dest), json.dumps(side, indent=2) + "\n", mode=0o600)
+    except Exception:
+        pass
     return out
 
 
@@ -173,25 +208,42 @@ def backup_app(app: str, remote: bool = False) -> Dict:
 # listing / deletion / retention
 # --------------------------------------------------------------------------- #
 def _read_manifest_file(path: str) -> Dict:
+    """Manifest for a local archive — read the cheap sidecar `<archive>.json` first,
+    falling back to opening the gzip tarball (older backups), and lazily writing the
+    sidecar so the next listing is fast."""
+    side = _sidecar(path)
+    try:
+        if os.path.isfile(side):
+            return json.loads(open(side, errors="replace").read())
+    except Exception:
+        pass
     raw = archive.read_member_bytes(path, MANIFEST_NAME)
     if not raw:
         return {}
     try:
-        return json.loads(raw.decode("utf-8", "replace"))
+        man = json.loads(raw.decode("utf-8", "replace"))
     except Exception:
         return {}
+    try:  # backfill the sidecar for next time
+        m = dict(man)
+        m["name"] = os.path.basename(path)
+        fs.atomic_write(side, json.dumps(m, indent=2) + "\n", mode=0o600)
+    except Exception:
+        pass
+    return man
 
 
 def list_backups(app: Optional[str] = None, include_remote: bool = False) -> List[Dict]:
-    """Newest-first records for local backups (optionally filtered by app). With
-    include_remote=True, remote-only archives are merged in (tagged location)."""
+    """Newest-first backup records. Each carries `locations` — the union of the local
+    store + (when include_remote) every enabled storage profile that holds it."""
     out: List[Dict] = []
-    seen = set()
-    if os.path.isdir(BACKUPS_ROOT):
-        for name in os.listdir(BACKUPS_ROOT):
+    by_name: Dict[str, Dict] = {}
+    root = _backups_root()
+    if os.path.isdir(root):
+        for name in os.listdir(root):
             if not _NAME_RE.match(name):
                 continue
-            path = os.path.join(BACKUPS_ROOT, name)
+            path = os.path.join(root, name)
             if not os.path.isfile(path):
                 continue
             man = _read_manifest_file(path)
@@ -202,93 +254,113 @@ def list_backups(app: Optional[str] = None, include_remote: bool = False) -> Lis
                 size = os.path.getsize(path)
             except OSError:
                 size = 0
-            seen.add(name)
-            out.append({
-                "name": name,
-                "app": entry_app,
-                "type": man.get("type"),
-                "domain": man.get("domain"),
-                "ssl_enabled": man.get("ssl_enabled"),
-                "created_at": man.get("created_at"),
-                "size_bytes": size,
-                "size_mb": round(size / (1 << 20), 2),
-                "location": "local",
-            })
+            rec = {
+                "name": name, "app": entry_app, "type": man.get("type"),
+                "domain": man.get("domain"), "ssl_enabled": man.get("ssl_enabled"),
+                "created_at": man.get("created_at"), "size_bytes": size,
+                "size_mb": round(size / (1 << 20), 2), "locations": ["local"],
+            }
+            out.append(rec)
+            by_name[name] = rec
     if include_remote:
         try:
             from . import remote
-            if remote.configured():
-                for r in remote.list_remote():
-                    if r["name"] in seen:
-                        continue  # already have it locally
+            for pid in remote.enabled_ids():
+                for r in remote.list_remote(pid):
                     if app and r.get("app") != app:
                         continue
-                    out.append(r)
+                    rec = by_name.get(r["name"])
+                    if rec:
+                        rec["locations"].append(pid)
+                    else:
+                        rec = {"name": r["name"], "app": r.get("app"), "type": None,
+                               "domain": None, "ssl_enabled": None, "created_at": None,
+                               "size_bytes": r.get("size_bytes", 0),
+                               "size_mb": r.get("size_mb", 0), "locations": [pid]}
+                        out.append(rec)
+                        by_name[r["name"]] = rec
         except Exception:
             pass
     out.sort(key=lambda b: (b.get("created_at") or b.get("name") or ""), reverse=True)
     return out
 
 
-def ensure_local(name: str) -> str:
-    """Return a local path for backup <name>, downloading it from remote storage
-    first if it isn't present locally. Raises if it can't be made available."""
+def ensure_local(name: str, profile: Optional[str] = None) -> str:
+    """Return a local path for backup <name>, downloading it from storage (the named
+    profile, or any enabled profile that has it) when absent. Raises if unavailable."""
     path = _backup_path(name)
     if os.path.isfile(path):
         return path
-    fs.ensure_dir(BACKUPS_ROOT)
+    fs.ensure_dir(_backups_root())
     from . import remote
     if remote.configured():
-        res = remote.download(name, path)
+        res = remote.download(name, path, profile)
         if res.get("ok") and os.path.isfile(path):
             return path
         raise RuntimeError("remote download failed: %s" % res.get("detail"))
-    raise FileNotFoundError("backup not found locally and no remote configured: %s" % name)
+    raise FileNotFoundError("backup not found locally and no storage profile configured: %s" % name)
 
 
-def delete_backup(name: str) -> Dict:
+def delete_backup(name: str, locations=None) -> Dict:
+    """Delete a backup. `locations` None → everywhere it exists (local + all enabled
+    profiles); else a csv/list selecting `local` and/or specific profile ids."""
     path = _backup_path(name)  # validates name + containment
+    if isinstance(locations, str):
+        locations = [x.strip() for x in locations.split(",") if x.strip()]
+    want_local = locations is None or "local" in locations
     removed = False
-    if os.path.isfile(path):
+    if want_local and os.path.isfile(path):
         os.unlink(path)
         removed = True
-    remote_removed = False
+        try:
+            if os.path.isfile(_sidecar(path)):
+                os.unlink(_sidecar(path))
+        except OSError:
+            pass
+    removed_from = []
     try:
         from . import remote
         if remote.configured():
-            remote_removed = bool(remote.delete(name).get("ok"))
+            rids = None if locations is None else [l for l in locations if l != "local"]
+            if locations is None or rids:
+                removed_from = remote.delete(name, rids).get("removed_from", [])
     except Exception:
         pass
-    return {"name": name, "removed": removed, "remote_removed": remote_removed}
+    return {"name": name, "removed": removed, "removed_from": removed_from}
 
 
 def prune_backups(app: str, keep: int) -> Dict:
-    """Keep the newest `keep` backups for <app>, deleting older local AND remote
-    copies. Backup names embed a sortable UTC timestamp, so name-sort = age-sort."""
+    """Keep the newest `keep` backups for <app> at EACH destination — local and every
+    enabled storage profile, independently. Names embed a sortable UTC timestamp."""
     app = validate.identifier(app, "app")
     keep = max(0, int(keep))
     # local
-    local = list_backups(app=app)  # newest-first
+    local_names = sorted(
+        (b["name"] for b in list_backups(app=app) if "local" in b.get("locations", [])),
+        reverse=True)
     removed: List[str] = []
-    for b in local[keep:]:
+    for n in local_names[keep:]:
         try:
-            delete_backup(b["name"])
-            removed.append(b["name"])
+            delete_backup(n, locations=["local"])
+            removed.append(n)
         except Exception:
             pass
-    # remote (if configured): prune independently by name (timestamp) order
-    remote_removed: List[str] = []
+    # each remote profile, independently
+    remote_removed: Dict[str, List[str]] = {}
     try:
         from . import remote
-        if remote.configured():
-            robj = sorted(remote.list_remote(), key=lambda r: r.get("name") or "", reverse=True)
-            robj = [r for r in robj if r.get("app") == app]
-            for r in robj[keep:]:
-                if remote.delete(r["name"]).get("ok"):
-                    remote_removed.append(r["name"])
+        for pid in remote.enabled_ids():
+            names = sorted((r["name"] for r in remote.list_remote(pid) if r.get("app") == app),
+                           reverse=True)
+            dropped = []
+            for n in names[keep:]:
+                if pid in remote.delete(n, [pid]).get("removed_from", []):
+                    dropped.append(n)
+            if dropped:
+                remote_removed[pid] = dropped
     except Exception:
         pass
-    return {"app": app, "kept": min(keep, len(local)),
+    return {"app": app, "kept": min(keep, len(local_names)),
             "removed": removed, "remote_removed": remote_removed}
 
 

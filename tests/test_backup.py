@@ -207,3 +207,75 @@ def test_prune_keeps_newest(env, monkeypatch):
     remaining = {b["name"] for b in store.list_backups("app")}
     assert len(remaining) == 2
     assert names[0] not in remaining   # oldest pruned
+
+
+# --------------------------------------------------------------------------- #
+# v0.20.0 — sidecar manifest, backup_dest, multi-destination
+# --------------------------------------------------------------------------- #
+def test_sidecar_written_and_used(env, monkeypatch):
+    iroot, broot = env
+    _mk_app(iroot, "myapp", port=8090)
+    res = store.backup_app("myapp")
+    side = res["archive"] + ".json"
+    assert os.path.isfile(side)                                  # sidecar written
+    import json
+    man = json.loads(open(side).read())
+    assert man["app"] == "myapp" and man["uploaded_to"] == []
+    # listing must use the sidecar, NOT open the tarball
+    monkeypatch.setattr(store.archive, "read_member_bytes",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("tar opened despite sidecar")))
+    rows = store.list_backups("myapp")
+    assert rows and rows[0]["app"] == "myapp" and rows[0]["locations"] == ["local"]
+
+
+def test_backup_dest_configurable(env, monkeypatch, tmp_path):
+    iroot, broot = env
+    custom = str(tmp_path / "custom-backups")
+    monkeypatch.setattr(store.config, "get", lambda k, d=None: custom if k == "backup_dest" else d)
+    monkeypatch.setattr(store.fs, "MANAGED_ROOTS", tuple(store.fs.MANAGED_ROOTS) + (custom,))
+    _mk_app(iroot, "myapp", port=8090)
+    res = store.backup_app("myapp")
+    assert res["archive"].startswith(custom + os.sep) and os.path.isfile(res["archive"])
+
+
+def test_backup_multi_destination(env, monkeypatch):
+    iroot, broot = env
+    _mk_app(iroot, "myapp", port=8090)
+    from core.backup import remote as remotemod
+    monkeypatch.setattr(remotemod, "_resolve_ids", lambda ids: ["w", "m"])
+    monkeypatch.setattr(remotemod, "upload",
+                        lambda dest, name, ids: {"results": {"w": {"ok": True}, "m": {"ok": False, "detail": "boom"}},
+                                                 "ok_ids": ["w"]})
+    res = store.backup_app("myapp", remotes="w,m")
+    assert res["uploaded_to"] == ["w"]
+    assert res["locations"] == ["local", "w"]
+    assert res["upload_results"]["m"]["ok"] is False          # partial failure surfaced
+    # sidecar records where it actually landed
+    import json
+    assert json.loads(open(res["archive"] + ".json").read())["uploaded_to"] == ["w"]
+
+
+def test_list_backups_locations_merge(env, monkeypatch):
+    iroot, broot = env
+    _mk_app(iroot, "myapp", port=8090)
+    name = store.backup_app("myapp")["name"]
+    from core.backup import remote as remotemod
+    monkeypatch.setattr(remotemod, "enabled_ids", lambda: ["wasabi"])
+    monkeypatch.setattr(remotemod, "list_remote",
+                        lambda pid: [{"name": name, "app": "myapp", "size_bytes": 10, "size_mb": 0.0}])
+    rows = store.list_backups("myapp", include_remote=True)
+    assert rows[0]["locations"] == ["local", "wasabi"]
+
+
+def test_delete_backup_local_only(env, monkeypatch):
+    iroot, broot = env
+    _mk_app(iroot, "myapp", port=8090)
+    res = store.backup_app("myapp")
+    from core.backup import remote as remotemod
+    called = {"n": 0}
+    monkeypatch.setattr(remotemod, "configured", lambda: True)
+    monkeypatch.setattr(remotemod, "delete", lambda name, ids=None: called.__setitem__("n", called["n"] + 1) or {"removed_from": []})
+    out = store.delete_backup(res["name"], locations=["local"])
+    assert out["removed"] is True
+    assert not os.path.isfile(res["archive"]) and not os.path.isfile(res["archive"] + ".json")
+    assert called["n"] == 0                                   # remote delete NOT called for local-only

@@ -406,16 +406,20 @@ class javahost_main(object):
 
     def StartBackup(self, get):
         """Archive an app as a detached job (tar of a webapp can be slow). Returns
-        {job_id}; the UI polls GetJobs/GetJobLog. Set remote=1 to also upload."""
+        {job_id}. `remotes` selects storage destinations: a csv of profile ids, or
+        "all" for every enabled profile; legacy remote=1 == all."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            remote = str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on")
+            remotes = panel.attr(get, "remotes", "") or ""
+            if not remotes and str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on"):
+                remotes = "all"
             body = ("from core.backup import store\n"
-                    "r = store.backup_app(%r, remote=%r)\n"
-                    "print('backup:', r['name'], r['size_mb'], 'MB', 'remote=' + str(r.get('remote')))\n"
-                    % (app, remote))
+                    "r = store.backup_app(%r, remotes=%r)\n"
+                    "print('backup:', r['name'], r['size_mb'], 'MB', 'uploaded_to=' + str(r.get('uploaded_to')))\n"
+                    "[print('upload FAILED', k, v.get('detail')) for k, v in (r.get('upload_results') or {}).items() if not v.get('ok')]\n"
+                    % (app, remotes))
             job_id = jobs.start("backup", app, jobs.python_work(body))
-            panel.log("StartBackup", "%s remote=%s -> job %s" % (app, remote, job_id))
+            panel.log("StartBackup", "%s remotes=%s -> job %s" % (app, remotes or "(local)", job_id))
             return panel.ok({"job_id": job_id, "app": app})
         except Exception as e:
             return panel.err(str(e))
@@ -430,15 +434,17 @@ class javahost_main(object):
             as_raw = panel.attr(get, "as_name", None)
             as_name = validate.identifier(as_raw, "as_name") if as_raw else None
             dom = panel.attr(get, "domain", None) or None
-            # ensure_local pulls the archive from remote storage first if it isn't
-            # present on disk (so remote-only backups are restorable).
+            prof_raw = panel.attr(get, "profile", None)
+            profile = validate.identifier(prof_raw, "profile") if prof_raw else None
+            # ensure_local pulls the archive from the named storage profile (or any
+            # that has it) when it isn't present on disk — remote-only restores work.
             body = ("from core.backup import store\n"
-                    "p = store.ensure_local(%r)\n"
+                    "p = store.ensure_local(%r, profile=%r)\n"
                     "r = store.restore(p, as_name=%r, domain=%r)\n"
                     "print('restore:', r['app'], r['mode'], 'port=' + str(r.get('port')),"
                     " 'status=' + str(r.get('status')))\n"
                     "print('ssl_warning:', r['ssl_warning']) if r.get('ssl_warning') else None\n"
-                    % (name, as_name, dom))
+                    % (name, profile, as_name, dom))
             job_id = jobs.start("restore", as_name or name, jobs.python_work(body))
             panel.log("StartRestore", "%s as=%s -> job %s" % (name, as_name or "(overwrite)", job_id))
             return panel.ok({"job_id": job_id, "archive": name, "as_name": as_name})
@@ -472,8 +478,9 @@ class javahost_main(object):
 
     def DeleteBackup(self, get):
         try:
-            res = backupstore.delete_backup(panel.attr(get, "archive"))
-            panel.log("DeleteBackup", res["name"])
+            locations = panel.attr(get, "locations", None) or None
+            res = backupstore.delete_backup(panel.attr(get, "archive"), locations=locations)
+            panel.log("DeleteBackup", "%s locations=%s" % (res["name"], locations or "all"))
             return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
@@ -519,6 +526,74 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    # ---- storage profiles (multi-destination) ----
+    def ListRemoteProfiles(self, get=None):
+        """All storage destinations, secret-safe (secret keys never returned)."""
+        try:
+            return panel.ok({"profiles": backupremote.list_profiles(redacted=True)})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def _profile_fields(self, get):
+        path_raw = panel.attr(get, "path_style", "1")
+        enabled_raw = panel.attr(get, "enabled", "1")
+        # NOTE: the display name travels as `label`, never `name` — aaPanel's request
+        # router treats a POST `name` as the plugin/module name and rejects values
+        # with spaces/symbols ("module_name ... cannot contain special symbols").
+        return dict(
+            name=panel.attr(get, "label", ""),
+            provider=panel.attr(get, "provider", "other"),
+            endpoint=panel.attr(get, "endpoint", ""),
+            region=panel.attr(get, "region", "us-east-1"),
+            bucket=panel.attr(get, "bucket", ""),
+            access_key=panel.attr(get, "access_key", ""),
+            secret_key=panel.attr(get, "secret_key", ""),
+            prefix=panel.attr(get, "prefix", ""),
+            path_style=str(path_raw).lower() not in ("0", "false", "no", "off"),
+            enabled=str(enabled_raw).lower() not in ("0", "false", "no", "off"),
+        )
+
+    def AddRemoteProfile(self, get):
+        try:
+            f = self._profile_fields(get)
+            res = backupremote.add_profile(
+                name=f["name"], provider=f["provider"], endpoint=f["endpoint"],
+                region=f["region"], bucket=f["bucket"], access_key=f["access_key"],
+                secret_key=f["secret_key"], prefix=f["prefix"],
+                path_style=f["path_style"], pid=panel.attr(get, "id", ""),
+                enabled=f["enabled"])
+            panel.log("AddRemoteProfile", "%s %s/%s" % (res.get("id"), res.get("endpoint"), res.get("bucket")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def UpdateRemoteProfile(self, get):
+        try:
+            pid = validate.identifier(panel.attr(get, "id"), "profile id")
+            f = self._profile_fields(get)
+            res = backupremote.update_profile(pid, **f)
+            panel.log("UpdateRemoteProfile", pid)
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def DeleteRemoteProfile(self, get):
+        try:
+            pid = validate.identifier(panel.attr(get, "id"), "profile id")
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            res = backupremote.delete_profile(pid, force=force)
+            panel.log("DeleteRemoteProfile", "%s removed=%s" % (pid, res.get("removed")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def TestRemoteProfile(self, get):
+        try:
+            pid = validate.identifier(panel.attr(get, "id"), "profile id")
+            return panel.ok(backupremote.test_profile(pid))
+        except Exception as e:
+            return panel.err(str(e))
+
     # ---- scheduled backups ----
     def GetBackupSchedules(self, get=None):
         try:
@@ -528,11 +603,13 @@ class javahost_main(object):
 
     def SetBackupSchedule(self, get):
         try:
-            remote = str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on")
+            remotes = panel.attr(get, "remotes", "") or ""
+            if not remotes and str(panel.attr(get, "remote", "")).lower() in ("1", "true", "yes", "on"):
+                remotes = "all"
             res = backupschedule.set_schedule(
                 app=validate.identifier(panel.attr(get, "app"), "app"),
                 cron_expr=panel.attr(get, "cron"),
-                remote=remote,
+                remotes=remotes,
                 keep=int(panel.attr(get, "keep", 7)),
             )
             panel.log("SetBackupSchedule", "%s cron=%s keep=%s" % (res["app"], res["cron"], res["keep"]))

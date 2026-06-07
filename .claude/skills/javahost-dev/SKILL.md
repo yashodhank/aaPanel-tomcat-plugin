@@ -72,3 +72,19 @@ Ops/login creds for the test box are in `_private_spec/OPS-ACCESS.md` (gitignore
 - Databases: `docs/databases-java-apps.md` · Hardening: `docs/system-hardening.md` · Packaging: `docs/aaPanel-plugin-packaging.md`
 - Testing: `docs/testing.md` (+ full on-box campaign `docs/testbed.md`); deploy/DB matrix: `javahost-test-deploy` skill.
 - UI edits: `javahost-ui` skill. Releasing: `javahost-release` skill. Security review: `javahost-security` skill.
+
+## Backup / storage model (v0.18+, multi-destination v0.20+)
+- `core/backup/`: `archive.py` (the ONLY tar extractor — realpath-contain + reject
+  symlink/hardlink/device/`..`/absolute), `store.py` (backup/restore/list/prune;
+  archives `0600`, exclude logs + ALL `/etc/letsencrypt`; sidecar `<archive>.json`
+  for cheap listing; `_backups_root()` honors config `backup_dest`), `s3.py`
+  (dependency-free SigV4 client, custom endpoint, path-style), `remote.py` (a
+  **registry of named profiles** in `0600` `remotes.json`; legacy `remote.json`
+  auto-migrates to a `default` profile), `schedule.py`+`run.py` (cron.d + retention).
+- Multi-destination: `backup_app(app, remotes)` (csv ids / `"all"`) fans out and
+  records per-destination results; `list_backups` tags each backup with `locations`
+  (local + each profile holding it); `restore`/`ensure_local` take a source `profile`.
+- **UI param gotcha:** a storage profile's display name MUST travel as `label`, never
+  `name` — aaPanel's router treats a POST `name` as the plugin/module name and
+  rejects values with spaces/symbols ("module_name ... cannot contain special symbols").
+- The whole feature lives under the dedicated **Backups** top-tab. Docs: `docs/backup-restore.md`.

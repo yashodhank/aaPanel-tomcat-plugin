@@ -3,6 +3,41 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.20.0] — 2026-06-07
+
+### Added (multiple storage destinations + dedicated Backups tab)
+- **Multiple S3 storage destinations.** Remote storage is now a **registry of named
+  profiles** (`remotes.json`, `0600`) instead of a single bucket — add/update/delete/
+  test as many as you like (Wasabi · MinIO · Backblaze B2 · Cloudflare R2 · AWS).
+  Endpoints: `ListRemoteProfiles`, `AddRemoteProfile`, `UpdateRemoteProfile`,
+  `DeleteRemoteProfile`, `TestRemoteProfile`. Secret keys are never returned (only a
+  `secret_set` flag). A legacy single-config `remote.json` auto-migrates to a
+  `default` profile. Deleting a profile a schedule uses warns and detaches on confirm.
+- **Select multiple destinations** per backup and per schedule. `StartBackup{remotes}`
+  and `SetBackupSchedule{remotes}` take a csv of profile ids (or `all`); a backup is
+  fanned out to each, with **per-destination success/failure** reported (a partial
+  failure keeps the local copy).
+- **Backup state / locations.** `ListBackups` now tags each backup with `locations`
+  (the union of `local` + every destination that holds it); restore is
+  source-profile-aware (`StartRestore{profile}` / remote-only download). `DeleteBackup`
+  takes a `locations` selector; retention prunes each destination independently.
+- **Dedicated Backups tab.** A new top-level **Backups** tab consolidates Storage
+  destinations, Backups (with location badges, restore, delete, restore-from-file,
+  back-up-now with a destination multiselect), and Schedules — moved out of
+  Applications/Settings. Per-app **Back up** / **Schedule** actions added to the app drawer.
+
+### Changed / Fixed
+- **Destructive overwrite restore now requires typing `RESTORE`** to confirm
+  (restore-as-new stays one-click).
+- **`backup_dest` is configurable** (config key; default `/www/server/javahost/backups`).
+- **Faster listing** via a sidecar `<archive>.json` manifest (no gzip-open per archive).
+
+### Verified
+Live on the box against **MinIO** (full round-trip: test, multi-destination backup,
+locations, remote-only restore, delete) and the **scheduled runner** (cron.d line +
+local & remote retention). The S3 SigV4 client is confirmed correct (MinIO + a real
+Wasabi endpoint accepted the request structure). 169 offline tests + 1 skipped.
+
 ## [0.19.0] — 2026-06-07
 
 ### Performance (Dashboard + status hot path)

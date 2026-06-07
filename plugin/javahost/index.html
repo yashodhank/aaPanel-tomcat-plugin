@@ -578,6 +578,7 @@
           <button type="button" class="jh-tab" role="tab" data-section="apps" aria-selected="false" aria-controls="page-apps" id="tab-apps" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-box"/></svg>Applications</button>
           <button type="button" class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
           <button type="button" class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
+          <button type="button" class="jh-tab" role="tab" data-section="backups" aria-selected="false" aria-controls="page-backups" id="tab-backups" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Backups</button>
           <button type="button" class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
           <button type="button" class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
           <button type="button" class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
@@ -637,19 +638,6 @@
         </div>
         <div id="jh-apps-body">
           <div class="jh-loading">Loading applications…</div>
-        </div>
-      </div>
-      <div class="jh-card" style="margin-top:var(--s4)">
-        <div class="jh-card-h">
-          <div><h3>Backups</h3><p>Archive an app (config, webapp, DB env) and restore it here or as a new app</p></div>
-          <div class="jh-spread" style="gap:var(--s2)">
-            <button class="jh-btn ghost sm" id="jh-backup-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
-            <button class="jh-btn ghost sm" id="jh-restore-upload" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Restore from file</button>
-            <button class="jh-btn accent sm" id="jh-open-backup" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Back up now</button>
-          </div>
-        </div>
-        <div id="jh-backups-body">
-          <div class="jh-loading">Loading backups…</div>
         </div>
       </div>
     </section>
@@ -742,29 +730,47 @@
 
     <!-- ================== PAGE: SETTINGS ================== -->
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
-      <div class="jh-card" style="margin-bottom:var(--s4)">
-        <div class="jh-card-h">
-          <div><h3>Remote storage</h3><p>S3-compatible bucket for off-box backups (Wasabi · MinIO · Backblaze B2 · Cloudflare R2 · AWS)</p></div>
-          <button class="jh-btn ghost sm" id="jh-remote-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
-        </div>
-        <div id="jh-remote-body"><div class="jh-loading">Loading…</div></div>
-      </div>
-      <div class="jh-card" style="margin-bottom:var(--s4)">
-        <div class="jh-card-h">
-          <div><h3>Scheduled backups</h3><p>Automatic per-app backups via cron, with retention</p></div>
-          <div class="jh-spread" style="gap:var(--s2)">
-            <button class="jh-btn ghost sm" id="jh-sched-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
-            <button class="jh-btn accent sm" id="jh-open-sched" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Add schedule</button>
-          </div>
-        </div>
-        <div id="jh-schedules-body"><div class="jh-loading">Loading…</div></div>
-      </div>
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
           <button class="jh-btn ghost sm" id="jh-wipe-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <div id="jh-danger-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+    </section>
+
+    <!-- ================== PAGE: BACKUPS ================== -->
+    <section class="jh-page" id="page-backups" role="tabpanel" aria-labelledby="tab-backups" tabindex="-1">
+      <div class="jh-card" style="margin-bottom:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Storage destinations</h3><p>S3-compatible buckets for off-box backups (Wasabi · MinIO · Backblaze B2 · Cloudflare R2 · AWS) — add as many as you like</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-dest-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn accent sm" id="jh-dest-add" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Add destination</button>
+          </div>
+        </div>
+        <div id="jh-dest-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card" style="margin-bottom:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Backups</h3><p>Archive an app (config, webapp, DB env) and restore it here or as a new app</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-backup-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn ghost sm" id="jh-restore-upload" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Restore from file</button>
+            <button class="jh-btn accent sm" id="jh-open-backup" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Back up now</button>
+          </div>
+        </div>
+        <div id="jh-backups-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
+        <div class="jh-card-h">
+          <div><h3>Schedules</h3><p>Automatic per-app backups via cron, with retention, to selected destinations</p></div>
+          <div class="jh-spread" style="gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-sched-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+            <button class="jh-btn accent sm" id="jh-open-sched" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Add schedule</button>
+          </div>
+        </div>
+        <div id="jh-schedules-body"><div class="jh-loading">Loading…</div></div>
       </div>
     </section>
 
@@ -790,6 +796,8 @@
       <div class="jh-drawer-h">
         <div class="jh-approw-ic" id="jh-drawer-ic" aria-hidden="true"><svg focusable="false"><use href="#i-box"/></svg></div>
         <div class="jh-drawer-ht"><h3 id="jh-drawer-title">App</h3><p id="jh-drawer-sub"></p></div>
+        <button type="button" class="jh-btn ghost sm" id="jh-drawer-backup" title="Back up this app"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Back up</button>
+        <button type="button" class="jh-btn ghost sm" id="jh-drawer-sched" title="Schedule backups for this app"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Schedule</button>
         <button type="button" class="jh-x" id="jh-drawer-x" aria-label="Close detail panel"><svg aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
       </div>
       <div class="jh-drawer-tabs" role="tablist" aria-label="App detail sections" id="jh-drawer-tabs"></div>
@@ -1054,7 +1062,7 @@
         if(b.cls === 'danger') toast(errText(p.message || p.log) || (label+' failed'), 'err', label + ' failed');
         else toast(label + ' completed', 'ok');
         refresh();                       // re-run the runtimes/status refresh
-        if(activeSection === 'apps') refreshBackups();   // backup/restore may have changed the list
+        if(activeSection === 'backups'){ refreshBackups(); refreshSchedules(); }   // a backup/restore/schedule job may have changed the lists
         if(activeSection === 'tasks') refreshTasks();
       });
     }
@@ -1164,177 +1172,6 @@
     var arr = p && p[cat.field];
     return Array.isArray(arr) ? arr.length : 0;
   }
-  // =====================================================================
-  // REMOTE STORAGE (Settings) — S3-compatible off-box backups
-  // =====================================================================
-  var REMOTE_PRESETS = {
-    wasabi:'https://s3.wasabisys.com', aws:'https://s3.us-east-1.amazonaws.com',
-    backblaze:'https://s3.us-west-001.backblazeb2.com', r2:'https://<account>.r2.cloudflarestorage.com',
-    minio:'http://127.0.0.1:9000', other:''
-  };
-  function refreshRemoteStorage(btn){
-    busy(btn, true);
-    call('GetRemoteStorage', {}, function(r){
-      busy(btn, false);
-      var bd = $('jh-remote-body'); if(!bd) return;
-      if(failed(r)){
-        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
-          '<div>Remote storage is not available on this server build.</div></div>';
-        return;
-      }
-      renderRemoteStorage(payload(r) || {});
-    });
-  }
-  function renderRemoteStorage(c){
-    var bd = $('jh-remote-body'); if(!bd) return;
-    var provs = ['wasabi','minio','backblaze','r2','aws','other'];
-    var psel = provs.map(function(p){
-      return '<option value="'+p+'"'+(c.provider===p?' selected':'')+'>'+esc(p)+'</option>';
-    }).join('');
-    var status = c.configured
-      ? '<span class="jh-badge ok"><span class="jh-dot"></span>configured</span>'
-      : '<span class="jh-badge neutral">not configured</span>';
-    bd.innerHTML =
-      '<div style="margin-bottom:var(--s3)">'+status+'</div>'+
-      '<div class="jh-form">'+
-        '<div class="jh-field"><label for="rm-provider">Provider</label><select id="rm-provider">'+psel+'</select></div>'+
-        '<div class="jh-field"><label for="rm-endpoint">Endpoint URL</label><input id="rm-endpoint" type="text" placeholder="https://s3.wasabisys.com" value="'+esc(c.endpoint||'')+'"></div>'+
-        '<div class="jh-field"><label for="rm-region">Region</label><input id="rm-region" type="text" placeholder="us-east-1" value="'+esc(c.region||'')+'"></div>'+
-        '<div class="jh-field"><label for="rm-bucket">Bucket</label><input id="rm-bucket" type="text" placeholder="my-backups" value="'+esc(c.bucket||'')+'"></div>'+
-        '<div class="jh-field"><label for="rm-access">Access key ID</label><input id="rm-access" type="text" autocomplete="off" value="'+esc(c.access_key||'')+'"></div>'+
-        '<div class="jh-field"><label for="rm-secret">Secret access key</label><input id="rm-secret" type="password" autocomplete="new-password" placeholder="'+(c.secret_set?'•••••••• (set — leave blank to keep)':'')+'"></div>'+
-        '<div class="jh-field"><label for="rm-prefix">Path prefix (optional)</label><input id="rm-prefix" type="text" placeholder="javahost" value="'+esc(c.prefix||'')+'"></div>'+
-        '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="rm-pathstyle" type="checkbox"'+((c.path_style!==false)?' checked':'')+'><label for="rm-pathstyle" style="margin:0">Path-style addressing (Wasabi/MinIO)</label></div>'+
-      '</div>'+
-      '<div class="jh-spread" style="gap:var(--s2);margin-top:var(--s4)">'+
-        '<button type="button" class="jh-btn accent" id="jh-remote-save">'+ic('check')+'Save</button>'+
-        '<button type="button" class="jh-btn ghost" id="jh-remote-test">'+ic('refresh')+'Test connection</button>'+
-        (c.configured?'<button type="button" class="jh-btn danger" id="jh-remote-remove">'+ic('trash')+'Remove</button>':'')+
-      '</div>'+
-      '<div class="jh-hint" style="margin-top:var(--s2)">Credentials are stored server-side (0600) and the secret key is never sent back to this UI. Backups uploaded here also contain the app DB env — secure the bucket.</div>';
-    var pv = $('rm-provider');
-    if(pv) pv.addEventListener('change', function(){
-      var ep = $('rm-endpoint'); var preset = REMOTE_PRESETS[pv.value];
-      if(ep && preset && !ep.value) ep.value = preset;
-    });
-  }
-  function saveRemoteStorage(btn){
-    busy(btn, true);
-    var data = {
-      provider:$('rm-provider').value, endpoint:$('rm-endpoint').value.trim(),
-      region:$('rm-region').value.trim(), bucket:$('rm-bucket').value.trim(),
-      access_key:$('rm-access').value.trim(), secret_key:$('rm-secret').value,
-      prefix:$('rm-prefix').value.trim(), path_style:$('rm-pathstyle').checked?'1':'0'
-    };
-    call('SetRemoteStorage', data, function(r){
-      busy(btn, false);
-      if(failed(r)){ toast(errText(payload(r)), 'err', 'Save failed'); return; }
-      toast('Remote storage saved', 'ok'); refreshRemoteStorage();
-    });
-  }
-  function testRemoteStorage(btn){
-    busy(btn, true);
-    call('TestRemoteStorage', {}, function(r){
-      busy(btn, false);
-      var p = payload(r);
-      if(failed(r) || !p || !p.ok){ toast((p && p.detail) || errText(p) || 'connection failed', 'err', 'Test failed'); return; }
-      toast('Bucket reachable', 'ok');
-    });
-  }
-  function removeRemoteStorage(btn){
-    if(!confirm('Remove remote-storage credentials? Future backups will be local only.')) return;
-    busy(btn, true);
-    call('RemoveRemoteStorage', {}, function(r){
-      busy(btn, false);
-      if(failed(r)){ toast(errText(payload(r)), 'err', 'Remove failed'); return; }
-      toast('Remote storage removed', 'ok'); refreshRemoteStorage();
-    });
-  }
-
-  // =====================================================================
-  // SCHEDULED BACKUPS (Settings) — cron-driven per-app backups
-  // =====================================================================
-  var SCHED_FREQ = {
-    'Daily 02:00':'0 2 * * *', 'Weekly (Sun 03:00)':'0 3 * * 0',
-    'Hourly':'0 * * * *', 'Every 6 hours':'0 */6 * * *', 'Custom…':''
-  };
-  function refreshSchedules(btn){
-    busy(btn, true);
-    call('GetBackupSchedules', {}, function(r){
-      busy(btn, false);
-      var bd = $('jh-schedules-body'); if(!bd) return;
-      if(failed(r)){
-        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
-          '<div>Scheduled backups are not available on this server build.</div></div>';
-        return;
-      }
-      renderSchedules((payload(r)||{}).schedules || []);
-    });
-  }
-  function renderSchedules(list){
-    var bd = $('jh-schedules-body'); if(!bd) return;
-    if(!list.length){
-      bd.innerHTML = emptyInline('No schedules', 'Use “Add schedule” to back an app up automatically.');
-      return;
-    }
-    bd.innerHTML = '<div class="jh-table-wrap"><table>'+
-      '<thead><tr><th>App</th><th>Cron</th><th>Remote</th><th>Keep</th><th>Actions</th></tr></thead><tbody>'+
-      list.map(function(s){
-        var rem = s.remote ? '<span class="jh-badge ok"><span class="jh-dot"></span>yes</span>' : '<span class="jh-badge neutral">no</span>';
-        return '<tr>'+
-          '<td><div class="app-name">'+esc(s.app)+'</div></td>'+
-          '<td class="jh-muted"><code>'+esc(s.cron)+'</code></td>'+
-          '<td>'+rem+'</td>'+
-          '<td class="jh-muted">'+esc(String(s.keep))+'</td>'+
-          '<td><button type="button" class="jh-btn ghost sm" data-sched-del="'+esc(s.app)+'">'+ic('trash')+'Remove</button></td>'+
-        '</tr>';
-      }).join('')+'</tbody></table></div>';
-  }
-  function openScheduleModal(){
-    var apps = (STATE && STATE.apps) || [];
-    if(!apps.length){ toast('No apps to schedule', 'err'); return; }
-    var appOpts = apps.map(function(a){ return '<option value="'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('');
-    var freqOpts = Object.keys(SCHED_FREQ).map(function(k){ return '<option value="'+esc(k)+'">'+esc(k)+'</option>'; }).join('');
-    openModal({
-      title:'Schedule backups', sub:'Runs core/backup/run.py via cron',
-      body:'<div class="jh-form">'+
-          '<div class="jh-field"><label for="sc-app">App</label><select id="sc-app">'+appOpts+'</select></div>'+
-          '<div class="jh-field"><label for="sc-freq">Frequency</label><select id="sc-freq">'+freqOpts+'</select></div>'+
-          '<div class="jh-field wide" id="sc-custom-wrap" style="display:none"><label for="sc-cron">Custom cron (5 fields)</label><input id="sc-cron" type="text" placeholder="0 2 * * *" autocomplete="off"></div>'+
-          '<div class="jh-field"><label for="sc-keep">Keep (retention)</label><input id="sc-keep" type="number" value="7" min="0" step="1"></div>'+
-          '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="sc-remote" type="checkbox"><label for="sc-remote" style="margin:0">Also upload to remote storage</label></div>'+
-        '</div>',
-      onMount: function(){
-        var fr = $('sc-freq');
-        if(fr) fr.addEventListener('change', function(){
-          $('sc-custom-wrap').style.display = (fr.value === 'Custom…') ? '' : 'none';
-        });
-      },
-      footer:[ mkBtn('Cancel', 'ghost', closeModal),
-        mkBtn('Save schedule', 'accent', function(b){
-          var app = $('sc-app').value, freq = $('sc-freq').value;
-          var cron = (freq === 'Custom…') ? $('sc-cron').value.trim() : SCHED_FREQ[freq];
-          if(!cron){ toast('Enter a cron expression', 'err'); return; }
-          var data = {app:app, cron:cron, keep:$('sc-keep').value, remote:$('sc-remote').checked?'1':'0'};
-          busy(b, true);
-          call('SetBackupSchedule', data, function(r){
-            busy(b, false);
-            if(failed(r)){ toast(errText(payload(r)), 'err', 'Schedule failed'); return; }
-            toast('Schedule saved', 'ok'); closeModal(); refreshSchedules();
-          });
-        }, 'check') ]
-    });
-  }
-  function removeSchedule(app, btn){
-    if(!confirm('Remove the backup schedule for '+app+'?')) return;
-    busy(btn, true);
-    call('RemoveBackupSchedule', {app:app}, function(r){
-      busy(btn, false);
-      if(failed(r)){ toast(errText(payload(r)), 'err', 'Remove failed'); return; }
-      toast('Schedule removed', 'ok'); refreshSchedules();
-    });
-  }
-
   function refreshDangerZone(btn){
     var body = $('jh-danger-body'); if(!body) return;
     busy(btn, true);
@@ -1691,80 +1528,230 @@
   }
 
   // =====================================================================
-  // BACKUPS (Applications tab) — list / create / restore / delete
+  // BACKUPS TAB — storage destinations (profiles) + backups + schedules
   // =====================================================================
+  var BK_PROFILES = [];   // cached redacted storage profiles (for pickers + badges)
+  var REMOTE_PRESETS = {
+    wasabi:'https://s3.wasabisys.com', aws:'https://s3.us-east-1.amazonaws.com',
+    backblaze:'https://s3.us-west-001.backblazeb2.com', r2:'https://<account>.r2.cloudflarestorage.com',
+    minio:'http://127.0.0.1:9000', other:''
+  };
+  var SCHED_FREQ = {
+    'Daily 02:00':'0 2 * * *', 'Weekly (Sun 03:00)':'0 3 * * 0',
+    'Hourly':'0 * * * *', 'Every 6 hours':'0 */6 * * *', 'Custom…':''
+  };
+  function profName(id){ for(var i=0;i<BK_PROFILES.length;i++){ if(BK_PROFILES[i].id===id) return BK_PROFILES[i].name||id; } return id; }
+  function locBadges(locations){
+    return (locations||[]).map(function(l){
+      if(l==='local') return '<span class="jh-badge neutral">local</span>';
+      return '<span class="jh-badge ok"><span class="jh-dot"></span>'+esc(profName(l))+'</span>';
+    }).join(' ') || '<span class="jh-muted">—</span>';
+  }
+  function destChecks(prefix, selected){
+    var sel = {}; (selected||[]).forEach(function(s){ sel[s]=1; });
+    var usable = BK_PROFILES.filter(function(p){ return p.enabled && p.configured; });
+    if(!usable.length) return '<div class="jh-muted">No storage destinations configured — the backup stays local. Add one under “Storage destinations”.</div>';
+    return usable.map(function(p){
+      return '<label style="display:flex;align-items:center;gap:6px;font-weight:600;margin:2px 0">'+
+        '<input type="checkbox" class="'+prefix+'" value="'+esc(p.id)+'"'+(sel[p.id]?' checked':'')+'> '+esc(p.name||p.id)+
+        ' <span class="jh-muted" style="font-weight:400">'+esc(p.provider)+' · '+esc(p.bucket)+'</span></label>';
+    }).join('');
+  }
+  function selectedDests(prefix){
+    return Array.prototype.slice.call(document.querySelectorAll('input.'+prefix+':checked')).map(function(c){ return c.value; });
+  }
+
+  function refreshBackupsTab(){
+    refreshStorageDestinations();
+    refreshBackups();
+    refreshSchedules();
+  }
+  function refreshStorageDestinations(btn){
+    busy(btn, true);
+    call('ListRemoteProfiles', {}, function(r){
+      busy(btn, false);
+      var bd = $('jh-dest-body'); if(!bd) return;
+      if(failed(r)){ bd.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Storage destinations are not available on this server build.</div></div>'; return; }
+      BK_PROFILES = (payload(r)||{}).profiles || [];
+      renderStorageDestinations(BK_PROFILES);
+    });
+  }
+  function renderStorageDestinations(list){
+    var bd = $('jh-dest-body'); if(!bd) return;
+    if(!list.length){ bd.innerHTML = emptyInline('No destinations', 'Add an S3-compatible bucket to push backups off-box.'); return; }
+    bd.innerHTML = '<div class="jh-table-wrap"><table>'+
+      '<thead><tr><th>Name</th><th>Provider</th><th>Bucket</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(function(p){
+        var en = p.enabled ? '<span class="jh-badge ok"><span class="jh-dot"></span>on</span>' : '<span class="jh-badge neutral">off</span>';
+        return '<tr>'+
+          '<td><div class="app-name">'+esc(p.name||p.id)+'</div><div class="jh-muted">'+esc(p.id)+'</div></td>'+
+          '<td class="jh-muted">'+esc(p.provider)+'</td>'+
+          '<td class="jh-muted">'+esc(p.bucket)+(p.prefix?(' /'+esc(p.prefix)):'')+'</td>'+
+          '<td>'+en+'</td>'+
+          '<td><button type="button" class="jh-btn ghost sm" data-dest-test="'+esc(p.id)+'">'+ic('refresh')+'Test</button> '+
+              '<button type="button" class="jh-btn ghost sm" data-dest-edit="'+esc(p.id)+'">'+ic('wrench')+'Edit</button> '+
+              '<button type="button" class="jh-btn ghost sm" data-dest-delete="'+esc(p.id)+'">'+ic('trash')+'Delete</button></td>'+
+        '</tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  function openProfileModal(editId){
+    var p = null; if(editId){ for(var i=0;i<BK_PROFILES.length;i++){ if(BK_PROFILES[i].id===editId){ p=BK_PROFILES[i]; break; } } }
+    var provs = ['wasabi','minio','backblaze','r2','aws','other'];
+    var psel = provs.map(function(x){ return '<option value="'+x+'"'+((p&&p.provider===x)?' selected':'')+'>'+esc(x)+'</option>'; }).join('');
+    openModal({
+      title: editId ? 'Edit storage destination' : 'Add storage destination',
+      sub: 'S3-compatible bucket (Wasabi · MinIO · B2 · R2 · AWS)',
+      body:'<div class="jh-form">'+
+        '<div class="jh-field"><label for="rm-name">Name</label><input id="rm-name" type="text" placeholder="Wasabi (prod)" value="'+esc(p?p.name:'')+'"></div>'+
+        (editId?'':'<div class="jh-field"><label for="rm-id">Id (optional)</label><input id="rm-id" type="text" placeholder="auto from name" autocomplete="off"></div>')+
+        '<div class="jh-field"><label for="rm-provider">Provider</label><select id="rm-provider">'+psel+'</select></div>'+
+        '<div class="jh-field"><label for="rm-endpoint">Endpoint URL</label><input id="rm-endpoint" type="text" placeholder="https://s3.wasabisys.com" value="'+esc(p?p.endpoint:'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-region">Region</label><input id="rm-region" type="text" placeholder="us-east-1" value="'+esc(p?p.region:'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-bucket">Bucket</label><input id="rm-bucket" type="text" placeholder="my-backups" value="'+esc(p?p.bucket:'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-access">Access key ID</label><input id="rm-access" type="text" autocomplete="off" value="'+esc(p?p.access_key:'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-secret">Secret access key</label><input id="rm-secret" type="password" autocomplete="new-password" placeholder="'+((p&&p.secret_set)?'•••••••• (set — leave blank to keep)':'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-prefix">Path prefix (optional)</label><input id="rm-prefix" type="text" placeholder="javahost" value="'+esc(p?p.prefix:'')+'"></div>'+
+        '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="rm-pathstyle" type="checkbox"'+((!p||p.path_style!==false)?' checked':'')+'><label for="rm-pathstyle" style="margin:0">Path-style addressing (Wasabi/MinIO)</label></div>'+
+        '<div class="jh-field" style="flex-direction:row;align-items:center;gap:var(--s2)"><input id="rm-enabled" type="checkbox"'+((!p||p.enabled!==false)?' checked':'')+'><label for="rm-enabled" style="margin:0">Enabled (selectable as a backup target)</label></div>'+
+      '</div>'+
+      '<div class="jh-hint" style="margin-top:var(--s2)">Stored server-side (0600); the secret key is never sent back to this UI. Backups uploaded here contain the app DB env — secure the bucket.</div>',
+      onMount: function(){
+        var pv=$('rm-provider'); if(pv) pv.addEventListener('change', function(){ var ep=$('rm-endpoint'); var pre=REMOTE_PRESETS[pv.value]; if(ep&&pre&&!ep.value) ep.value=pre; });
+      },
+      footer:[ mkBtn('Cancel','ghost',closeModal),
+        mkBtn(editId?'Save':'Add','accent',function(b){ saveProfile(b, editId); },'check') ]
+    });
+  }
+  function saveProfile(b, editId){
+    var data = {
+      label:$('rm-name').value.trim(), provider:$('rm-provider').value,
+      endpoint:$('rm-endpoint').value.trim(), region:$('rm-region').value.trim(),
+      bucket:$('rm-bucket').value.trim(), access_key:$('rm-access').value.trim(),
+      secret_key:$('rm-secret').value, prefix:$('rm-prefix').value.trim(),
+      path_style:$('rm-pathstyle').checked?'1':'0', enabled:$('rm-enabled').checked?'1':'0'
+    };
+    var method = 'AddRemoteProfile';
+    if(editId){ method='UpdateRemoteProfile'; data.id=editId; }
+    else { var idv=$('rm-id'); if(idv && idv.value.trim()) data.id=idv.value.trim(); }
+    busy(b, true);
+    call(method, data, function(r){
+      busy(b, false);
+      if(failed(r)){ toast(errText(payload(r)), 'err', 'Save failed'); return; }
+      toast('Destination saved', 'ok'); closeModal(); refreshStorageDestinations();
+    });
+  }
+  function testDest(id, btn){
+    busy(btn, true);
+    call('TestRemoteProfile', {id:id}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r) || !p || !p.ok){ toast((p&&p.detail)||errText(p)||'connection failed', 'err', 'Test failed'); return; }
+      toast('Bucket reachable', 'ok');
+    });
+  }
+  function deleteDest(id, btn){
+    if(!confirm('Delete storage destination “'+profName(id)+'”?')) return;
+    busy(btn, true);
+    call('DeleteRemoteProfile', {id:id}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p), 'err', 'Delete failed'); return; }
+      if(p && p.removed===false && p.in_use_by){
+        if(confirm('“'+profName(id)+'” is used by schedules: '+p.in_use_by.join(', ')+'. Detach and delete anyway?')){
+          busy(btn, true);
+          call('DeleteRemoteProfile', {id:id, force:'1'}, function(r2){
+            busy(btn, false);
+            if(failed(r2)){ toast(errText(payload(r2)), 'err', 'Delete failed'); return; }
+            toast('Destination deleted', 'ok'); refreshBackupsTab();
+          });
+        }
+        return;
+      }
+      toast('Destination deleted', 'ok'); refreshStorageDestinations();
+    });
+  }
+
   function refreshBackups(btn){
     busy(btn, true);
     call('ListBackups', {}, function(r){
       busy(btn, false);
       var bd = $('jh-backups-body'); if(!bd) return;
-      if(failed(r)){
-        bd.innerHTML = '<div class="jh-alert info">'+ic('info')+
-          '<div>Backups are not available on this server build.</div></div>';
-        return;
-      }
+      if(failed(r)){ bd.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Backups are not available on this server build.</div></div>'; return; }
       renderBackups((payload(r)||{}).backups || []);
     });
   }
   function renderBackups(list){
     var bd = $('jh-backups-body'); if(!bd) return;
-    if(!list.length){
-      bd.innerHTML = emptyInline('No backups yet', 'Use “Back up now” to archive an app.');
-      return;
-    }
+    if(!list.length){ bd.innerHTML = emptyInline('No backups yet', 'Use “Back up now” to archive an app.'); return; }
     bd.innerHTML = '<div class="jh-table-wrap"><table>'+
-      '<thead><tr><th>App</th><th>Created</th><th>Size</th><th>SSL</th><th>Actions</th></tr></thead><tbody>'+
+      '<thead><tr><th>App</th><th>Created</th><th>Size</th><th>Locations</th><th>Actions</th></tr></thead><tbody>'+
       list.map(function(bk){
-        var ssl = bk.ssl_enabled ? '<span class="jh-badge ok"><span class="jh-dot"></span>yes</span>'
-                                 : '<span class="jh-badge neutral">no</span>';
         return '<tr>'+
-          '<td><div class="app-name">'+esc(bk.app||'—')+'</div><div class="jh-muted">'+esc(bk.type||'')+'</div></td>'+
+          '<td><div class="app-name">'+esc(bk.app||'—')+'</div><div class="jh-muted">'+esc(bk.type||'')+(bk.ssl_enabled?' · ssl':'')+'</div></td>'+
           '<td class="jh-muted">'+esc(bk.created_at||'—')+'</td>'+
           '<td class="jh-muted">'+esc((bk.size_mb!=null?bk.size_mb:'?')+' MB')+'</td>'+
-          '<td>'+ssl+'</td>'+
-          '<td><button type="button" class="jh-btn ghost sm" data-backup-restore="'+esc(bk.name)+'" data-backup-app="'+esc(bk.app||'')+'">'+ic('refresh')+'Restore</button> '+
+          '<td>'+locBadges(bk.locations)+'</td>'+
+          '<td><button type="button" class="jh-btn ghost sm" data-backup-restore="'+esc(bk.name)+'" data-backup-app="'+esc(bk.app||'')+'" data-backup-locs="'+esc((bk.locations||[]).join(','))+'">'+ic('refresh')+'Restore</button> '+
               '<button type="button" class="jh-btn ghost sm" data-backup-delete="'+esc(bk.name)+'">'+ic('trash')+'Delete</button></td>'+
         '</tr>';
       }).join('')+'</tbody></table></div>';
   }
-  function openBackupModal(){
+  function openBackupModal(presetApp){
     var apps = (STATE && STATE.apps) || [];
     if(!apps.length){ toast('No apps to back up', 'err'); return; }
-    var opts = apps.map(function(a){ return '<option value="'+esc(a.app)+'">'+esc(a.app)+'</option>'; }).join('');
+    var opts = apps.map(function(a){ return '<option value="'+esc(a.app)+'"'+(presetApp===a.app?' selected':'')+'>'+esc(a.app)+'</option>'; }).join('');
     openModal({
       title:'Back up an app', sub:'Archives config, the deployed webapp and DB env (logs excluded)',
       body:'<div class="jh-form"><div class="jh-field wide"><label for="bk-app">App</label>'+
-        '<select id="bk-app">'+opts+'</select></div></div>',
+        '<select id="bk-app">'+opts+'</select></div>'+
+        '<div class="jh-field wide"><label>Also upload to destinations</label>'+destChecks('bk-dest', [])+'</div></div>',
       footer:[ mkBtn('Cancel', 'ghost', closeModal),
         mkBtn('Back up', 'accent', function(b){
-          var app = $('bk-app').value; closeModal();
-          startJob('Backup', {app:app}, 'Backup '+app, b);
+          var app = $('bk-app').value; var dests = selectedDests('bk-dest');
+          var data = {app:app}; if(dests.length) data.remotes = dests.join(',');
+          closeModal();
+          startJob('Backup', data, 'Backup '+app, b);
         }, 'upload') ]
     });
   }
-  function openRestoreModal(name, app){
+  function openRestoreModal(name, app, locations){
+    locations = locations || ['local'];
+    // pick a source profile when the archive is remote-only
+    var profile = (locations.indexOf('local') === -1 && locations.length) ? locations[0] : '';
     openModal({
-      title:'Restore backup', sub:name,
+      title:'Restore backup', sub:name + (profile?(' (from '+profName(profile)+')'):''),
       body:'<div class="jh-alert info" style="margin-bottom:var(--s4)">'+ic('info')+
         '<div>Leave <b>Restore as new name</b> empty to <b>overwrite</b> the original app '+
-        '(it is stopped and replaced). Enter a name to restore as a <b>separate</b> app on a new port.</div></div>'+
+        '(it is stopped and replaced) — that requires typing <code>RESTORE</code> to confirm. '+
+        'Enter a name to restore as a <b>separate</b> app on a new port.</div></div>'+
         '<div class="jh-form">'+
           '<div class="jh-field wide"><label for="rs-name">Restore as new name (optional)</label>'+
             '<input id="rs-name" type="text" placeholder="'+esc((app||'app')+'-copy')+'" autocomplete="off"></div>'+
           '<div class="jh-field wide"><label for="rs-domain">Domain for the new app (optional)</label>'+
             '<input id="rs-domain" type="text" placeholder="app.example.com" autocomplete="off"></div>'+
+          '<div class="jh-field wide" id="rs-confirm-wrap"><label for="rs-confirm">Type <code>RESTORE</code> to confirm overwrite</label>'+
+            '<input id="rs-confirm" type="text" placeholder="RESTORE" autocomplete="off" autocapitalize="characters"></div>'+
         '</div>',
+      onMount: function(){
+        var go=$('rs-go'), nm=$('rs-name'), cf=$('rs-confirm'), wrap=$('rs-confirm-wrap');
+        function sync(){
+          var asNew = nm.value.trim() !== '';
+          wrap.style.display = asNew ? 'none' : '';
+          go.disabled = asNew ? false : (cf.value.trim() !== 'RESTORE');
+        }
+        nm.addEventListener('input', sync); cf.addEventListener('input', sync); sync();
+      },
       footer:[ mkBtn('Cancel', 'ghost', closeModal),
-        mkBtn('Restore', 'accent', function(b){
-          var as = $('rs-name').value.trim(), dom = $('rs-domain').value.trim();
-          var data = {archive:name}; if(as) data.as_name = as; if(dom) data.domain = dom;
-          closeModal();
-          startJob('Restore', data, 'Restore '+(as||app||name), b);
-        }, 'refresh') ]
+        (function(){ var b=mkBtn('Restore', 'accent', function(bb){
+            var as = $('rs-name').value.trim(), dom = $('rs-domain').value.trim();
+            var data = {archive:name}; if(as) data.as_name = as; if(dom) data.domain = dom; if(profile) data.profile = profile;
+            closeModal();
+            startJob('Restore', data, 'Restore '+(as||app||name), bb);
+          }, 'refresh'); b.id='rs-go'; b.disabled=true; return b; })() ]
     });
   }
   function deleteBackup(name, btn){
-    if(!confirm('Delete backup '+name+'? This cannot be undone.')) return;
+    if(!confirm('Delete backup '+name+' from ALL locations? This cannot be undone.')) return;
     busy(btn, true);
     call('DeleteBackup', {archive:name}, function(r){
       busy(btn, false);
@@ -1802,6 +1789,77 @@
             });
           });
         }, 'upload') ]
+    });
+  }
+
+  function refreshSchedules(btn){
+    busy(btn, true);
+    call('GetBackupSchedules', {}, function(r){
+      busy(btn, false);
+      var bd = $('jh-schedules-body'); if(!bd) return;
+      if(failed(r)){ bd.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Scheduled backups are not available on this server build.</div></div>'; return; }
+      renderSchedules((payload(r)||{}).schedules || []);
+    });
+  }
+  function renderSchedules(list){
+    var bd = $('jh-schedules-body'); if(!bd) return;
+    if(!list.length){ bd.innerHTML = emptyInline('No schedules', 'Use “Add schedule” to back an app up automatically.'); return; }
+    bd.innerHTML = '<div class="jh-table-wrap"><table>'+
+      '<thead><tr><th>App</th><th>Cron</th><th>Destinations</th><th>Keep</th><th>Actions</th></tr></thead><tbody>'+
+      list.map(function(s){
+        var dests = (s.remotes && s.remotes.length) ? locBadges(s.remotes) : '<span class="jh-muted">local only</span>';
+        return '<tr>'+
+          '<td><div class="app-name">'+esc(s.app)+'</div></td>'+
+          '<td class="jh-muted"><code>'+esc(s.cron)+'</code></td>'+
+          '<td>'+dests+'</td>'+
+          '<td class="jh-muted">'+esc(String(s.keep))+'</td>'+
+          '<td><button type="button" class="jh-btn ghost sm" data-sched-edit="'+esc(s.app)+'">'+ic('wrench')+'Edit</button> '+
+              '<button type="button" class="jh-btn ghost sm" data-sched-del="'+esc(s.app)+'">'+ic('trash')+'Remove</button></td>'+
+        '</tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  function openScheduleModal(presetApp){
+    var apps = (STATE && STATE.apps) || [];
+    if(!apps.length){ toast('No apps to schedule', 'err'); return; }
+    var cur = null;
+    // when editing, prefill from the current schedule list (cached in the table is fine; refetch is cheap)
+    var appOpts = apps.map(function(a){ return '<option value="'+esc(a.app)+'"'+(presetApp===a.app?' selected':'')+'>'+esc(a.app)+'</option>'; }).join('');
+    var freqOpts = Object.keys(SCHED_FREQ).map(function(k){ return '<option value="'+esc(k)+'">'+esc(k)+'</option>'; }).join('');
+    openModal({
+      title:'Schedule backups', sub:'Runs core/backup/run.py via cron',
+      body:'<div class="jh-form">'+
+          '<div class="jh-field"><label for="sc-app">App</label><select id="sc-app">'+appOpts+'</select></div>'+
+          '<div class="jh-field"><label for="sc-freq">Frequency</label><select id="sc-freq">'+freqOpts+'</select></div>'+
+          '<div class="jh-field wide" id="sc-custom-wrap" style="display:none"><label for="sc-cron">Custom cron (5 fields)</label><input id="sc-cron" type="text" placeholder="0 2 * * *" autocomplete="off"></div>'+
+          '<div class="jh-field"><label for="sc-keep">Keep (retention, per destination)</label><input id="sc-keep" type="number" value="7" min="0" step="1"></div>'+
+          '<div class="jh-field wide"><label>Upload to destinations</label>'+destChecks('sc-dest', [])+'</div>'+
+        '</div>',
+      onMount: function(){
+        var fr=$('sc-freq'); if(fr) fr.addEventListener('change', function(){ $('sc-custom-wrap').style.display = (fr.value==='Custom…')?'':'none'; });
+      },
+      footer:[ mkBtn('Cancel','ghost',closeModal),
+        mkBtn('Save schedule','accent',function(b){
+          var app=$('sc-app').value, freq=$('sc-freq').value;
+          var cron=(freq==='Custom…')?$('sc-cron').value.trim():SCHED_FREQ[freq];
+          if(!cron){ toast('Enter a cron expression','err'); return; }
+          var dests=selectedDests('sc-dest');
+          var data={app:app, cron:cron, keep:$('sc-keep').value}; if(dests.length) data.remotes=dests.join(',');
+          busy(b, true);
+          call('SetBackupSchedule', data, function(r){
+            busy(b, false);
+            if(failed(r)){ toast(errText(payload(r)),'err','Schedule failed'); return; }
+            toast('Schedule saved','ok'); closeModal(); refreshSchedules();
+          });
+        }, 'check') ]
+    });
+  }
+  function removeSchedule(app, btn){
+    if(!confirm('Remove the backup schedule for '+app+'?')) return;
+    busy(btn, true);
+    call('RemoveBackupSchedule', {app:app}, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)),'err','Remove failed'); return; }
+      toast('Schedule removed','ok'); refreshSchedules();
     });
   }
 
@@ -3428,6 +3486,7 @@
       if(activeSection === 'apps' || activeSection === 'databases') renderDbPicker(d.apps);
     });
     if(activeSection === 'dashboard') refreshDashboardOps();   // heavier aggregates, lazy
+    if(activeSection === 'backups') refreshBackupsTab();
   }
 
   // =====================================================================
@@ -3492,12 +3551,13 @@
       // list while off-tab), then start the live poll.
       var a = (STATE && STATE.apps) || [];
       APPS_SIG = appsSig(a); renderApps(a); renderDbPicker(a);
-      startAppsPoll(); refreshBackups();
+      startAppsPoll();
     }
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
+    if(name === 'backups') refreshBackupsTab();
     if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
     if(name === 'logs') initLogsSection();
-    if(name === 'settings'){ refreshRemoteStorage(); refreshSchedules(); refreshDangerZone(); }
+    if(name === 'settings') refreshDangerZone();
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -3709,6 +3769,8 @@
     if(ds.dwlogRefresh){ if(DRAWER._logPull) DRAWER._logPull(); return; }
     if(ds.sitestatus){ drawerSiteStatus(ds.sitestatus, b); return; }
     if(b.id === 'jh-drawer-x'){ closeDrawer(); return; }
+    if(b.id === 'jh-drawer-backup'){ if(DRAWER.app) openBackupModal(DRAWER.app); return; }
+    if(b.id === 'jh-drawer-sched'){ if(DRAWER.app) openScheduleModal(DRAWER.app); return; }
 
     // header / toolbar
     if(b.id === 'jh-fullscreen'){ toggleFullscreen(); return; }
@@ -3720,8 +3782,15 @@
     if(b.id === 'jh-open-backup'){ openBackupModal(); return; }
     if(b.id === 'jh-restore-upload'){ openRestoreUploadModal(); return; }
     if(b.id === 'jh-backup-refresh'){ refreshBackups(b); return; }
-    if(ds.backupRestore){ openRestoreModal(ds.backupRestore, ds.backupApp); return; }
+    if(ds.backupRestore){ openRestoreModal(ds.backupRestore, ds.backupApp, (ds.backupLocs||'').split(',').filter(Boolean)); return; }
     if(ds.backupDelete){ deleteBackup(ds.backupDelete, b); return; }
+    // storage destinations
+    if(b.id === 'jh-dest-refresh'){ refreshStorageDestinations(b); return; }
+    if(b.id === 'jh-dest-add'){ openProfileModal(null); return; }
+    if(ds.destTest){ testDest(ds.destTest, b); return; }
+    if(ds.destEdit){ openProfileModal(ds.destEdit); return; }
+    if(ds.destDelete){ deleteDest(ds.destDelete, b); return; }
+    if(ds.schedEdit){ openScheduleModal(ds.schedEdit); return; }
     if(b.id === 'jh-allow-services'){
       if(!confirm('Lift hardening on service directories so JavaHost can register services?')) return;
       busy(b, true); toast('Allowing services…');
@@ -3755,10 +3824,6 @@
     }
 
     // settings / remote storage
-    if(b.id === 'jh-remote-refresh'){ refreshRemoteStorage(b); return; }
-    if(b.id === 'jh-remote-save'){ saveRemoteStorage(b); return; }
-    if(b.id === 'jh-remote-test'){ testRemoteStorage(b); return; }
-    if(b.id === 'jh-remote-remove'){ removeRemoteStorage(b); return; }
     // settings / scheduled backups
     if(b.id === 'jh-sched-refresh'){ refreshSchedules(b); return; }
     if(b.id === 'jh-open-sched'){ openScheduleModal(); return; }
@@ -3846,6 +3911,9 @@
   // =====================================================================
   refresh();
   loadDbSupport();
+  // preload storage profiles so the per-app drawer's Back-up/Schedule destination
+  // pickers are populated even before the Backups tab is opened (no secrets).
+  call('ListRemoteProfiles', {}, function(r){ if(!failed(r)) BK_PROFILES = (payload(r) || {}).profiles || []; });
   loadProxyHint();
 })();
 </script>

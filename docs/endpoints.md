@@ -116,29 +116,35 @@ See [Reverse proxy & per-site HTTPS](user-guide.md#6-reverse-proxy--per-site-htt
 ## Backup & restore
 
 Long operations run as async jobs (`{job_id}`); poll `GetJobLog`. See
-[Backup, restore & remote storage](backup-restore.md).
+[Backup, restore & storage destinations](backup-restore.md).
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `ListBackups` | `app?` | Newest-first backup records (merges remote when configured); each `{name, app, type, domain, ssl_enabled, created_at, size_mb, location}`. |
-| `StartBackup` | `app`, `remote?` | Async — archive the app (excludes logs and LE keys); `remote=1` also uploads. |
-| `StartRestore` | `archive` (store name), `as_name?`, `domain?` | Async — restore in place (no `as_name`) or as a new app (reallocated port). Downloads from remote first if needed. |
+| `ListBackups` | `app?` | Newest-first records; each carries `locations` — the union of `local` + every enabled storage profile that holds it — plus `{name, app, type, domain, ssl_enabled, created_at, size_mb}`. |
+| `StartBackup` | `app`, `remotes?` | Async — archive the app (excludes logs and LE keys). `remotes` = csv of profile ids or `"all"`; legacy `remote=1` == all. Records per-destination upload results. |
+| `StartRestore` | `archive`, `profile?`, `as_name?`, `domain?` | Async — restore in place (no `as_name`) or as a new app (reallocated port). Remote-only archives download from `profile` (or any enabled profile that has it) first. |
 | `StartRestoreUpload` | `tmp` (staged upload path), `as_name?`, `domain?` | Async — restore an **uploaded** `.tar.gz`; unpacked only via the hardened extractor. |
-| `DeleteBackup` | `archive` | Delete a backup (local, and the remote copy if configured). Name strictly validated. |
+| `DeleteBackup` | `archive`, `locations?` | Delete from all locations (default) or a csv selecting `local` and/or profile ids. Name strictly validated. |
 
-## Remote object storage (S3-compatible)
+## Storage destinations (S3-compatible profiles)
+
+Multiple named profiles; secret keys are NEVER returned (only a `secret_set` flag).
+A legacy single-config `remote.json` is auto-migrated to one `default` profile.
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `GetRemoteStorage` | — | Current config **without the secret key** (`secret_set` flag only): `{provider,endpoint,region,bucket,access_key,prefix,path_style,configured,secret_set}`. |
-| `SetRemoteStorage` | `provider`, `endpoint`, `region?`, `bucket`, `access_key`, `secret_key?`, `prefix?`, `path_style?` | Store `0600` `remote.json`. An empty `secret_key` keeps the stored one. |
-| `TestRemoteStorage` | — | `{ok, detail}` — HEADs the bucket. |
-| `RemoveRemoteStorage` | — | Delete the remote config. |
+| `ListRemoteProfiles` | — | `{profiles:[{id,name,provider,endpoint,region,bucket,access_key,prefix,path_style,enabled,secret_set,configured}]}` (secret-safe). |
+| `AddRemoteProfile` | `label`, `provider`, `endpoint`, `region?`, `bucket`, `access_key`, `secret_key`, `prefix?`, `path_style?`, `id?`, `enabled?` | Create a profile. The display name travels as **`label`** (not `name`, which aaPanel reserves for the plugin/module name). |
+| `UpdateRemoteProfile` | `id`, plus any of the above | Update; empty `secret_key` keeps the stored one. |
+| `DeleteRemoteProfile` | `id`, `force?` | Delete. Returns `in_use_by` (schedules) and refuses unless `force` (which detaches it). |
+| `TestRemoteProfile` | `id` | `{ok, detail}` — HEADs the bucket. |
+
+(Deprecated single-config shims `GetRemoteStorage`/`SetRemoteStorage`/`TestRemoteStorage`/`RemoveRemoteStorage` still operate on the `default` profile for one release.)
 
 ## Scheduled backups
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `GetBackupSchedules` | — | `{schedules: [{app, cron, remote, keep}]}`. |
-| `SetBackupSchedule` | `app`, `cron` (5-field), `remote?`, `keep?` | Upsert a schedule; regenerates the managed `/etc/cron.d/javahost-backups`. |
+| `GetBackupSchedules` | — | `{schedules: [{app, cron, remotes, keep}]}`. |
+| `SetBackupSchedule` | `app`, `cron` (5-field), `remotes?`, `keep?` | Upsert; `remotes` = csv of profile ids. Regenerates the managed `/etc/cron.d/javahost-backups`; retention prunes each destination. |
 | `RemoveBackupSchedule` | `app` | Remove the schedule (clears the cron file when empty). |

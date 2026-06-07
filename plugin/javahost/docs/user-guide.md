@@ -12,8 +12,8 @@ server the plugin is installed on (see
 
 ### Top tabs and Fullscreen
 
-The plugin's top bar has eight tabs — **Dashboard · Applications · Runtimes ·
-Databases · Tasks · Logs · Help · Settings** — implemented as an accessible
+The plugin's top bar has nine tabs — **Dashboard · Applications · Runtimes ·
+Databases · Backups · Tasks · Logs · Help · Settings** — implemented as an accessible
 WAI-ARIA Tabs pattern (arrow/Home/End navigation). The header also has a
 **Fullscreen** toggle that pops the plugin out of aaPanel's cramped modal to fill
 the whole viewport (own CSS only, no panel patching); **Esc** exits. Use it
@@ -420,6 +420,26 @@ instance at `<base>/bin/site.ssl`. With SSL on, the app sees `X-Forwarded-Proto:
 https`, so its request scheme reads `https` end-to-end.
 
 ---
+
+## 6b. Backups, restore & storage destinations
+
+The **Backups** tab is the home for protecting and moving apps. It has three cards:
+
+- **Storage destinations** — add as many S3-compatible buckets as you like (Wasabi,
+  MinIO, Backblaze B2, Cloudflare R2, AWS). Each is a named **profile** with its own
+  endpoint/region/bucket/keys; **Test** checks reachability. Secret keys are stored
+  `0600` server-side and never shown back.
+- **Backups** — **Back up now** archives an app (config + webapp + DB env, logs
+  excluded) to local storage and any destinations you tick. Each row's **Locations**
+  shows where the archive lives (`local` + each destination). **Restore** brings it
+  back in place (type `RESTORE` to confirm the destructive overwrite) or as a new app
+  on a fresh port; **Restore from file** accepts an uploaded `.tar.gz`.
+- **Schedules** — automatic per-app backups via cron, to selected destinations, with
+  **retention** (keep newest N per destination).
+
+You can also **Back up** / **Schedule** a single app from its detail drawer. LE
+private keys are never bundled — SSL is re-issued on restore. Full reference:
+[Backup, restore & storage destinations](backup-restore.md).
 
 ## 7. System hardening
 
