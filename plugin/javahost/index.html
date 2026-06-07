@@ -1063,6 +1063,7 @@
         else toast(label + ' completed', 'ok');
         refresh();                       // re-run the runtimes/status refresh
         if(activeSection === 'backups'){ refreshBackups(); refreshSchedules(); }   // a backup/restore/schedule job may have changed the lists
+        if(DRAWER.app && $('jh-drawer-ov').classList.contains('open') && DRAWER.tab === 'backups') drawerBackups();
         if(activeSection === 'tasks') refreshTasks();
       });
     }
@@ -1740,8 +1741,10 @@
   }
   function openBackupModal(presetApp){
     var apps = (STATE && STATE.apps) || [];
-    if(!apps.length){ toast('No apps to back up', 'err'); return; }
-    var opts = apps.map(function(a){ return '<option value="'+esc(a.app)+'"'+(presetApp===a.app?' selected':'')+'>'+esc(a.app)+'</option>'; }).join('');
+    var appList = apps.map(function(a){ return a.app; });
+    if(presetApp && appList.indexOf(presetApp) === -1) appList = [presetApp].concat(appList);
+    if(!appList.length){ toast('No apps to back up', 'err'); return; }
+    var opts = appList.map(function(a){ return '<option value="'+esc(a)+'"'+(presetApp===a?' selected':'')+'>'+esc(a)+'</option>'; }).join('');
     openModal({
       title:'Back up an app', sub:'Archives config, the deployed webapp and DB env (logs excluded)',
       body:'<div class="jh-form"><div class="jh-field wide"><label for="bk-app">App</label>'+
@@ -1798,7 +1801,9 @@
     call('DeleteBackup', {archive:name}, function(r){
       busy(btn, false);
       if(failed(r)){ toast(errText(payload(r)), 'err', 'Delete failed'); return; }
-      toast('Backup deleted', 'ok'); refreshBackups();
+      toast('Backup deleted', 'ok');
+      if($('jh-backups-body')) refreshBackups();
+      if(DRAWER.app && $('jh-drawer-ov').classList.contains('open') && DRAWER.tab === 'backups') drawerBackups();
     });
   }
   function openRestoreUploadModal(){
@@ -1834,13 +1839,15 @@
     });
   }
 
+  var BK_SCHEDULES = [];   // cached schedules (so Edit can prefill the modal)
   function refreshSchedules(btn){
     busy(btn, true);
     call('GetBackupSchedules', {}, function(r){
       busy(btn, false);
       var bd = $('jh-schedules-body'); if(!bd) return;
       if(failed(r)){ bd.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Scheduled backups are not available on this server build.</div></div>'; return; }
-      renderSchedules((payload(r)||{}).schedules || []);
+      BK_SCHEDULES = (payload(r)||{}).schedules || [];
+      renderSchedules(BK_SCHEDULES);
     });
   }
   function renderSchedules(list){
@@ -1862,26 +1869,37 @@
   }
   function openScheduleModal(presetApp){
     var apps = (STATE && STATE.apps) || [];
-    if(!apps.length){ toast('No apps to schedule', 'err'); return; }
+    // editing? find the existing schedule for this app and prefill from it.
     var cur = null;
-    // when editing, prefill from the current schedule list (cached in the table is fine; refetch is cheap)
-    var appOpts = apps.map(function(a){ return '<option value="'+esc(a.app)+'"'+(presetApp===a.app?' selected':'')+'>'+esc(a.app)+'</option>'; }).join('');
-    var freqOpts = Object.keys(SCHED_FREQ).map(function(k){ return '<option value="'+esc(k)+'">'+esc(k)+'</option>'; }).join('');
+    for(var i=0;i<BK_SCHEDULES.length;i++){ if(BK_SCHEDULES[i].app===presetApp){ cur=BK_SCHEDULES[i]; break; } }
+    if(!cur && !apps.length){ toast('No apps to schedule', 'err'); return; }
+    // app list (when editing, the target app is fixed — ensure it's present even if
+    // the status list hasn't loaded yet)
+    var appList = apps.map(function(a){ return a.app; });
+    if(presetApp && appList.indexOf(presetApp) === -1) appList = [presetApp].concat(appList);
+    var appOpts = appList.map(function(a){ return '<option value="'+esc(a)+'"'+(presetApp===a?' selected':'')+'>'+esc(a)+'</option>'; }).join('');
+    var curFreq = 'Custom…';
+    if(cur){ for(var k in SCHED_FREQ){ if(SCHED_FREQ[k]===cur.cron){ curFreq=k; break; } } }
+    var isCustom = (curFreq==='Custom…');
+    var freqOpts = Object.keys(SCHED_FREQ).map(function(k){ return '<option value="'+esc(k)+'"'+(k===curFreq?' selected':'')+'>'+esc(k)+'</option>'; }).join('');
+    var curKeep = cur ? cur.keep : 7;
+    var curDests = cur ? (cur.remotes||[]) : [];
     openModal({
-      title:'Schedule backups', sub:'Runs core/backup/run.py via cron',
+      title: cur ? 'Edit schedule' : 'Schedule backups', sub:'Runs core/backup/run.py via cron',
       body:'<div class="jh-form">'+
-          '<div class="jh-field"><label for="sc-app">App</label><select id="sc-app">'+appOpts+'</select></div>'+
+          '<div class="jh-field"><label for="sc-app">App</label><select id="sc-app"'+(cur?' disabled':'')+'>'+appOpts+'</select></div>'+
           '<div class="jh-field"><label for="sc-freq">Frequency</label><select id="sc-freq">'+freqOpts+'</select></div>'+
-          '<div class="jh-field wide" id="sc-custom-wrap" style="display:none"><label for="sc-cron">Custom cron (5 fields)</label><input id="sc-cron" type="text" placeholder="0 2 * * *" autocomplete="off"></div>'+
-          '<div class="jh-field"><label for="sc-keep">Keep (retention, per destination)</label><input id="sc-keep" type="number" value="7" min="0" step="1"></div>'+
-          '<div class="jh-field wide"><label>Upload to destinations</label>'+destChecks('sc-dest', [])+'</div>'+
+          '<div class="jh-field wide" id="sc-custom-wrap" style="display:'+(isCustom?'':'none')+'"><label for="sc-cron">Custom cron (5 fields)</label><input id="sc-cron" type="text" placeholder="0 2 * * *" value="'+esc(isCustom&&cur?cur.cron:'')+'" autocomplete="off"></div>'+
+          '<div class="jh-field"><label for="sc-keep">Keep (retention, per destination)</label><input id="sc-keep" type="number" value="'+esc(String(curKeep))+'" min="0" step="1"></div>'+
+          '<div class="jh-field wide"><label>Upload to destinations</label>'+destChecks('sc-dest', curDests)+'</div>'+
         '</div>',
       onMount: function(){
         var fr=$('sc-freq'); if(fr) fr.addEventListener('change', function(){ $('sc-custom-wrap').style.display = (fr.value==='Custom…')?'':'none'; });
       },
       footer:[ mkBtn('Cancel','ghost',closeModal),
-        mkBtn('Save schedule','accent',function(b){
-          var app=$('sc-app').value, freq=$('sc-freq').value;
+        mkBtn(cur?'Save changes':'Schedule','accent',function(b){
+          var app = cur ? cur.app : $('sc-app').value;     // app is fixed when editing
+          var freq=$('sc-freq').value;
           var cron=(freq==='Custom…')?$('sc-cron').value.trim():SCHED_FREQ[freq];
           if(!cron){ toast('Enter a cron expression','err'); return; }
           var dests=selectedDests('sc-dest');
@@ -2393,7 +2411,7 @@
   var DRAWER_POLL = 4000;
   var DTABS = [
     ['overview','Overview'], ['logs','Logs'], ['metrics','Metrics'],
-    ['config','Config'], ['db','Database']
+    ['config','Config'], ['db','Database'], ['backups','Backups']
   ];
   function drawerFocusables(){
     return Array.prototype.slice.call($('jh-drawer').querySelectorAll(FOCUSABLE))
@@ -2450,6 +2468,32 @@
     else if(name === 'metrics') drawerMetrics();
     else if(name === 'config') drawerConfig();
     else if(name === 'db') drawerDb();
+    else if(name === 'backups') drawerBackups();
+  }
+  function drawerBackups(){
+    var app = DRAWER.app, p = $('dpanel-backups'); if(!p) return;
+    p.innerHTML = '<div class="jh-loading">…</div>';
+    call('ListBackups', {app:app}, function(r){
+      if(DRAWER.app !== app) return;                 // drawer moved on
+      var p2 = $('dpanel-backups'); if(!p2) return;
+      if(failed(r)){ p2.innerHTML = '<div class="jh-alert info">'+ic('info')+'<div>Backups are not available on this server build.</div></div>'; return; }
+      var list = (payload(r)||{}).backups || [];
+      var head = '<div class="jh-spread" style="margin-bottom:var(--s3)">'+
+        '<div class="jh-muted">'+(list.length ? (list.length+' backup'+(list.length>1?'s':'')+' · last '+esc((list[0].created_at||'').replace('T',' ').replace('Z',''))) : 'No backups yet')+'</div>'+
+        '<button type="button" class="jh-btn accent sm" data-drawer-backup="'+esc(app)+'">'+ic('upload')+'Back up now</button></div>';
+      if(!list.length){ p2.innerHTML = head + emptyInline('No backups for this app', 'Use “Back up now” to create one.'); return; }
+      p2.innerHTML = head + '<div class="jh-table-wrap"><table>'+
+        '<thead><tr><th>Created</th><th>Size</th><th>Locations</th><th>Actions</th></tr></thead><tbody>'+
+        list.map(function(bk){
+          return '<tr>'+
+            '<td class="jh-muted">'+esc(bk.created_at||'—')+'</td>'+
+            '<td class="jh-muted">'+esc((bk.size_mb!=null?bk.size_mb:'?')+' MB')+'</td>'+
+            '<td>'+locBadges(bk.locations)+'</td>'+
+            '<td><button type="button" class="jh-btn ghost sm" data-backup-restore="'+esc(bk.name)+'" data-backup-app="'+esc(app)+'" data-backup-locs="'+esc((bk.locations||[]).join(','))+'">'+ic('refresh')+'Restore</button> '+
+                '<button type="button" class="jh-btn ghost sm" data-backup-delete="'+esc(bk.name)+'">'+ic('trash')+'Delete</button></td>'+
+          '</tr>';
+        }).join('')+'</tbody></table></div>';
+    });
   }
   function kv(k, v, id){
     return '<div class="jh-kv"><span>'+esc(k)+'</span>'+
@@ -3826,6 +3870,7 @@
     if(b.id === 'jh-backup-refresh'){ refreshBackups(b); return; }
     if(ds.backupRestore){ openRestoreModal(ds.backupRestore, ds.backupApp, (ds.backupLocs||'').split(',').filter(Boolean)); return; }
     if(ds.backupDelete){ deleteBackup(ds.backupDelete, b); return; }
+    if(ds.drawerBackup){ openBackupModal(ds.drawerBackup); return; }
     // storage destinations
     if(b.id === 'jh-dest-refresh'){ refreshStorageDestinations(b); return; }
     if(b.id === 'jh-dest-add'){ openProfileModal(null); return; }
@@ -3956,6 +4001,7 @@
   // preload storage profiles so the per-app drawer's Back-up/Schedule destination
   // pickers are populated even before the Backups tab is opened (no secrets).
   call('ListRemoteProfiles', {}, function(r){ if(!failed(r)) BK_PROFILES = (payload(r) || {}).profiles || []; });
+  call('GetBackupSchedules', {}, function(r){ if(!failed(r)) BK_SCHEDULES = (payload(r) || {}).schedules || []; });
   loadProxyHint();
 })();
 </script>

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.20.2] — 2026-06-07
+
+### Fixed (Backups UI polish)
+- **Schedules → Edit now prefills** the existing cron / frequency / retention /
+  destinations (it previously opened with defaults, silently resetting the
+  schedule on save). The app is locked when editing.
+- **App detail drawer gained a Backups tab** — this app's backups with location
+  badges, Restore / Delete, last-backup time, and a **Back up now** button.
+- `openScheduleModal`/`openBackupModal` no longer require the full app list to be
+  loaded when acting on a known app (drawer/edit paths work immediately); the
+  drawer's Back-up/Schedule pickers preload storage profiles + schedules at boot.
+
 ## [0.20.1] — 2026-06-07
 
 ### Fixed (Add storage destination — endpoint intelligence)
