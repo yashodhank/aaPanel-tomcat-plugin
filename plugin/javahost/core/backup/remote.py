@@ -30,6 +30,20 @@ REGISTRY_PATH = "/www/server/javahost/remotes.json"
 LEGACY_PATH = "/www/server/javahost/remote.json"
 PROVIDERS = ("wasabi", "minio", "backblaze", "r2", "aws", "other")
 _REQUIRED = ("endpoint", "bucket", "access_key", "secret_key")
+# Region-specific endpoint templates — for these providers the region MUST be in the
+# endpoint or requests fail (e.g. a us-east-1 endpoint can't reach an ap-southeast-1
+# bucket). Used to derive the endpoint when an API caller omits it.
+_ENDPOINT_TPL = {
+    "wasabi": "https://s3.{region}.wasabisys.com",
+    "aws": "https://s3.{region}.amazonaws.com",
+    "backblaze": "https://s3.{region}.backblazeb2.com",
+}
+
+
+def canonical_endpoint(provider: str, region: str) -> str:
+    """Region-specific endpoint for a known provider, or '' if it can't be derived."""
+    tpl = _ENDPOINT_TPL.get(provider or "")
+    return tpl.replace("{region}", region) if (tpl and region) else ""
 _BACKUP_RE = re.compile(r"^backup-(?P<app>[A-Za-z0-9._-]+)-\d{8}T\d{6}Z\.tar\.gz$")
 
 
@@ -134,8 +148,13 @@ def add_profile(name: str, provider: str, endpoint: str, region: str, bucket: st
     bucket = (bucket or "").strip()
     access_key = (access_key or "").strip()
     secret_key = secret_key or ""
+    region = (region or "us-east-1").strip()
+    # derive a region-specific endpoint when an API caller omits it for a known provider
+    if not endpoint:
+        endpoint = canonical_endpoint(provider, region)
     if not (endpoint and bucket and access_key and secret_key):
-        raise ValueError("endpoint, bucket, access_key and secret_key are required")
+        raise ValueError("endpoint, bucket, access_key and secret_key are required "
+                         "(region-based providers like wasabi/aws/backblaze also need a region)")
     pid = validate.identifier(pid or _slug(name or bucket), "profile id")
     reg = _load()
     if _find(reg, pid):

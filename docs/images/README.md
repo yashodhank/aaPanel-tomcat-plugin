@@ -55,3 +55,4 @@ This directory holds the screenshots referenced by the docs (chiefly
 | `storage-destinations.png` | The **Storage destinations** card — multiple S3 profiles (provider/bucket/enabled, Test/Edit/Delete). | Managed S3 storage destinations. |
 | `backup-destinations-picker.png` | The **Back up now** modal — app + a multi-select of storage destinations. | Choosing destinations for a backup. |
 | `schedules.png` | The **Schedules** card — per-app cron + destination badges + retention. | Scheduled backups to selected destinations. |
+| `add-destination.png` | The **Add storage destination** modal — provider-aware, region-specific endpoint (auto-built from provider + region) with a guidance hint. | Adding an S3 destination (region-aware endpoint). |

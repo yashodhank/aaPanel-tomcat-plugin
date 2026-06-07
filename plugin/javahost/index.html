@@ -1531,11 +1531,22 @@
   // BACKUPS TAB — storage destinations (profiles) + backups + schedules
   // =====================================================================
   var BK_PROFILES = [];   // cached redacted storage profiles (for pickers + badges)
-  var REMOTE_PRESETS = {
-    wasabi:'https://s3.wasabisys.com', aws:'https://s3.us-east-1.amazonaws.com',
-    backblaze:'https://s3.us-west-001.backblazeb2.com', r2:'https://<account>.r2.cloudflarestorage.com',
-    minio:'http://127.0.0.1:9000', other:''
+  // Per-provider endpoint intelligence. `tpl` may embed {region} (region-specific
+  // endpoint — required, e.g. Wasabi/AWS/B2) or {account} (R2). regionReq marks
+  // providers where the region MUST be in the endpoint or nothing works.
+  var PROVIDER_META = {
+    wasabi:    { tpl:'https://s3.{region}.wasabisys.com',        regionReq:true,  defRegion:'us-east-1',   pathStyle:true,  hint:'Wasabi needs the region in the endpoint, e.g. s3.ap-southeast-1.wasabisys.com.' },
+    aws:       { tpl:'https://s3.{region}.amazonaws.com',        regionReq:true,  defRegion:'us-east-1',   pathStyle:false, hint:'AWS uses a region-specific S3 endpoint.' },
+    backblaze: { tpl:'https://s3.{region}.backblazeb2.com',      regionReq:true,  defRegion:'us-west-001', pathStyle:true,  hint:'Backblaze B2 endpoint includes its region, e.g. us-west-001.' },
+    r2:        { tpl:'https://{account}.r2.cloudflarestorage.com', regionReq:false, defRegion:'auto',       pathStyle:true,  hint:'Cloudflare R2: replace {account} with your account id; region is “auto”.' },
+    minio:     { tpl:'',                                          regionReq:false, defRegion:'us-east-1',   pathStyle:true,  hint:'MinIO / other: enter the server URL, e.g. http://host:9000.' },
+    other:     { tpl:'',                                          regionReq:false, defRegion:'us-east-1',   pathStyle:true,  hint:'Enter the full S3-compatible endpoint URL.' }
   };
+  function buildEndpoint(provider, region){
+    var m = PROVIDER_META[provider]; if(!m || !m.tpl) return '';
+    if(m.tpl.indexOf('{region}') >= 0) return region ? m.tpl.replace('{region}', region) : '';
+    return m.tpl;   // {account}-style template: prefilled for the user to complete
+  }
   var SCHED_FREQ = {
     'Daily 02:00':'0 2 * * *', 'Weekly (Sun 03:00)':'0 3 * * 0',
     'Hourly':'0 * * * *', 'Every 6 hours':'0 */6 * * *', 'Custom…':''
@@ -1605,7 +1616,7 @@
         '<div class="jh-field"><label for="rm-name">Name</label><input id="rm-name" type="text" placeholder="Wasabi (prod)" value="'+esc(p?p.name:'')+'"></div>'+
         (editId?'':'<div class="jh-field"><label for="rm-id">Id (optional)</label><input id="rm-id" type="text" placeholder="auto from name" autocomplete="off"></div>')+
         '<div class="jh-field"><label for="rm-provider">Provider</label><select id="rm-provider">'+psel+'</select></div>'+
-        '<div class="jh-field"><label for="rm-endpoint">Endpoint URL</label><input id="rm-endpoint" type="text" placeholder="https://s3.wasabisys.com" value="'+esc(p?p.endpoint:'')+'"></div>'+
+        '<div class="jh-field"><label for="rm-endpoint">Endpoint URL</label><input id="rm-endpoint" type="text" placeholder="https://s3.{region}.wasabisys.com" value="'+esc(p?p.endpoint:'')+'"><div class="jh-hint" id="rm-ep-hint" style="margin-top:4px"></div></div>'+
         '<div class="jh-field"><label for="rm-region">Region</label><input id="rm-region" type="text" placeholder="us-east-1" value="'+esc(p?p.region:'')+'"></div>'+
         '<div class="jh-field"><label for="rm-bucket">Bucket</label><input id="rm-bucket" type="text" placeholder="my-backups" value="'+esc(p?p.bucket:'')+'"></div>'+
         '<div class="jh-field"><label for="rm-access">Access key ID</label><input id="rm-access" type="text" autocomplete="off" value="'+esc(p?p.access_key:'')+'"></div>'+
@@ -1616,7 +1627,23 @@
       '</div>'+
       '<div class="jh-hint" style="margin-top:var(--s2)">Stored server-side (0600); the secret key is never sent back to this UI. Backups uploaded here contain the app DB env — secure the bucket.</div>',
       onMount: function(){
-        var pv=$('rm-provider'); if(pv) pv.addEventListener('change', function(){ var ep=$('rm-endpoint'); var pre=REMOTE_PRESETS[pv.value]; if(ep&&pre&&!ep.value) ep.value=pre; });
+        var pv=$('rm-provider'), ep=$('rm-endpoint'), rg=$('rm-region'), ps=$('rm-pathstyle'), hint=$('rm-ep-hint');
+        if(!pv) return;
+        // `auto` = keep the endpoint synced to provider+region. True until the user
+        // edits the endpoint by hand (clearing it re-enables auto).
+        var auto = !ep.value;
+        function setHint(){ var m=PROVIDER_META[pv.value]||{}; if(hint) hint.textContent = m.hint||''; }
+        function rebuild(){ if(auto) ep.value = buildEndpoint(pv.value, rg.value.trim()); }
+        pv.addEventListener('change', function(){
+          var m=PROVIDER_META[pv.value]||{};
+          if(!rg.value && m.defRegion) rg.value = m.defRegion;   // sensible default region
+          if(ps) ps.checked = m.pathStyle !== false;             // provider-appropriate addressing
+          setHint(); rebuild();
+        });
+        rg.addEventListener('input', rebuild);                   // region drives a region-specific endpoint
+        ep.addEventListener('input', function(){ auto = ep.value.trim() === ''; });
+        setHint();
+        if(!editId) pv.dispatchEvent(new Event('change'));       // initialise add-mode from the first provider
       },
       footer:[ mkBtn('Cancel','ghost',closeModal),
         mkBtn(editId?'Save':'Add','accent',function(b){ saveProfile(b, editId); },'check') ]
@@ -1630,6 +1657,21 @@
       secret_key:$('rm-secret').value, prefix:$('rm-prefix').value.trim(),
       path_style:$('rm-pathstyle').checked?'1':'0', enabled:$('rm-enabled').checked?'1':'0'
     };
+    var m = PROVIDER_META[data.provider] || {};
+    // validation — catch the common "region-less endpoint → nothing works" trap
+    if(m.regionReq && !data.region){ toast('Region is required for '+data.provider+' (it’s part of the endpoint).', 'err'); $('rm-region').focus(); return; }
+    if(!/^https?:\/\/[^\s{}]+$/i.test(data.endpoint)){
+      if(/[{}]/.test(data.endpoint)) toast('Replace the placeholder in the endpoint (e.g. {account} / {region}).', 'err');
+      else toast('Enter a valid endpoint URL (https://…).', 'err');
+      $('rm-endpoint').focus(); return;
+    }
+    if(!data.bucket){ toast('Bucket is required', 'err'); $('rm-bucket').focus(); return; }
+    if(!data.access_key){ toast('Access key ID is required', 'err'); $('rm-access').focus(); return; }
+    if(!editId && !data.secret_key){ toast('Secret access key is required', 'err'); $('rm-secret').focus(); return; }
+    // region-specific endpoint sanity: warn if the region isn't reflected in the URL
+    if(m.tpl && m.tpl.indexOf('{region}')>=0 && data.region && data.endpoint.toLowerCase().indexOf(data.region.toLowerCase())===-1){
+      if(!confirm('The endpoint doesn’t contain the region “'+data.region+'”. '+data.provider+' usually needs a region-specific endpoint and may reject every request. Save anyway?')) return;
+    }
     var method = 'AddRemoteProfile';
     if(editId){ method='UpdateRemoteProfile'; data.id=editId; }
     else { var idv=$('rm-id'); if(idv && idv.value.trim()) data.id=idv.value.trim(); }

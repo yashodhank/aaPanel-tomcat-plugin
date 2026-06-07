@@ -39,6 +39,13 @@ them via a custom endpoint.
 - Each profile has an `id`, display name, provider, endpoint, region, bucket, access
   key, secret key, optional path prefix, **path-style** toggle (on for Wasabi/MinIO),
   and an **enabled** flag (only enabled profiles are offered as targets).
+- The **endpoint is region-aware**: picking a provider (and entering a region) builds
+  the correct URL automatically — e.g. Wasabi/AWS/Backblaze need a *region-specific*
+  endpoint (`s3.<region>.wasabisys.com`), or requests fail. Editing the endpoint by
+  hand switches off the auto-fill; the form validates that the region is present for
+  region-based providers and that the endpoint is a real URL.
+
+  ![Add storage destination — provider- and region-aware endpoint](images/add-destination.png)
 - Credentials are stored server-side in `0600` `remotes.json`; the **secret key is
   never returned** to the UI (only a `secret_set` flag), like `GetDbEnv`.
 - **Test** does a `HEAD` on the bucket. **Edit**/**Delete** manage a profile; deleting

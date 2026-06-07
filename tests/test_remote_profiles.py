@@ -85,3 +85,18 @@ def test_resolve_ids(reg):
     assert remote._resolve_ids(None) == []
     assert remote._resolve_ids("a,b") == ["a", "b"]
     assert remote._resolve_ids(["a"]) == ["a"]
+
+
+def test_canonical_endpoint_and_derivation(reg):
+    assert remote.canonical_endpoint("wasabi", "ap-southeast-1") == "https://s3.ap-southeast-1.wasabisys.com"
+    assert remote.canonical_endpoint("aws", "eu-west-1") == "https://s3.eu-west-1.amazonaws.com"
+    assert remote.canonical_endpoint("minio", "x") == ""        # no template
+    assert remote.canonical_endpoint("wasabi", "") == ""        # needs a region
+    # add_profile derives the endpoint when omitted for a region-based provider
+    p = remote.add_profile(name="W", provider="wasabi", endpoint="", region="ap-southeast-1",
+                           bucket="b", access_key="AK", secret_key="SK", pid="w")
+    assert p["endpoint"] == "https://s3.ap-southeast-1.wasabisys.com"
+    # but a provider with no template + no endpoint still errors
+    with pytest.raises(ValueError):
+        remote.add_profile(name="M", provider="minio", endpoint="", region="x",
+                           bucket="b", access_key="AK", secret_key="SK", pid="m")

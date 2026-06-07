@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.20.1] — 2026-06-07
+
+### Fixed (Add storage destination — endpoint intelligence)
+- The **Endpoint URL now updates when you change the Provider** (it previously only
+  prefilled when empty) and is **region-aware**: Wasabi / AWS / Backblaze get a
+  *region-specific* endpoint built from the region you enter (`s3.<region>.…`) — a
+  region-less endpoint silently fails for those providers. R2 prefills an
+  `{account}` template; MinIO/other clear it for a manual URL. Editing the endpoint
+  by hand disables auto-fill (your value is kept across provider changes).
+- **Validation:** region is required for region-based providers; the endpoint must
+  be a real URL with no leftover `{…}` placeholder; a warning fires if a
+  region-based endpoint doesn't contain the region. A provider-specific hint is
+  shown under the field, and the path-style default follows the provider.
+- Server-side: `AddRemoteProfile` derives the canonical endpoint when a caller omits
+  it for a known region-based provider (`remote.canonical_endpoint`).
+
 ## [0.20.0] — 2026-06-07
 
 ### Added (multiple storage destinations + dedicated Backups tab)
