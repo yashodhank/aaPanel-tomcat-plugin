@@ -644,7 +644,10 @@
     <!-- ================== PAGE: RUNTIMES ================== -->
     <section class="jh-page" id="page-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" tabindex="-1">
       <div class="jh-card">
-        <div class="jh-card-h"><div><h3>Java (Temurin / OpenJDK)</h3><p>Install runtimes via verified Adoptium downloads</p></div></div>
+        <div class="jh-card-h">
+          <div><h3>Java (Temurin / OpenJDK)</h3><p>Install runtimes via verified Adoptium downloads</p></div>
+          <button class="jh-btn ghost sm" id="jh-check-updates" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Check for updates</button>
+        </div>
         <div class="jh-rows" id="rt-java"><div class="jh-loading">Loading…</div></div>
         <div class="jh-hint">Click a version to install. Java 17/21 are recommended for Tomcat 10.1/11; Java 8 for legacy apps.</div>
       </div>
@@ -2039,6 +2042,28 @@
     if(/^\/www\/server\/javahost\/runtimes(\/|$)/.test(p)) return false;
     return false;
   }
+  // Upstream-update status for managed runtimes (GetRuntimeUpdates). Empty until
+  // the Runtimes tab is opened; drives the "update available" badges + buttons.
+  var RT_UPDATES = { java:{}, tomcat:{} };
+  function checkRuntimeUpdates(force, btn){
+    busy(btn, true);
+    call('GetRuntimeUpdates', {force: force ? 1 : 0}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(!failed(r) && p && typeof p === 'object'){
+        RT_UPDATES = { java: p.java || {}, tomcat: p.tomcat || {} };
+        if(STATE) renderRuntimes(STATE);
+        if(force){
+          var n = 0, kk;
+          for(kk in RT_UPDATES.java) if(RT_UPDATES.java[kk] && RT_UPDATES.java[kk].update) n++;
+          for(kk in RT_UPDATES.tomcat) if(RT_UPDATES.tomcat[kk] && RT_UPDATES.tomcat[kk].update) n++;
+          toast(n ? (n + ' update(s) available') : 'Everything is up to date', 'ok');
+        }
+      } else if(force){
+        toast(errText(p) || 'update check unavailable', 'err', 'Check for updates');
+      }
+    });
+  }
   function renderRuntimes(d){
     var java = d.java || {};
     var majors = ['8','11','17','21'];
@@ -2060,8 +2085,15 @@
         btns = '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'+
           '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'" data-to-plugin-dir="1" title="Install a private copy into the plugin runtimes dir">'+ic('refresh')+'Reinstall into plugin dir</button>';
       } else {
-        // plugin-managed: reinstall + uninstall (danger)
+        // plugin-managed: reinstall + uninstall (danger), plus Update when a
+        // newer Temurin build is available upstream (RT_UPDATES, only-when-newer)
+        var uj = (RT_UPDATES.java || {})[k];
+        var jUp = (uj && uj.update)
+          ? '<span class="jh-badge neutral" title="Latest: '+esc(uj.latest||'')+'">update available</span>'+
+            '<button type="button" class="jh-btn accent sm" data-jdk-update="'+ek+'" title="Update to '+esc(uj.latest||'latest')+'">'+ic('refresh')+'Update</button>'
+          : '';
         btns = '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'+
+          jUp+
           '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'">'+ic('refresh')+'Reinstall</button>'+
           '<button type="button" class="jh-btn danger ghost sm" data-jdk-uninstall="'+ek+'">'+ic('trash')+'Uninstall</button>';
       }
@@ -2074,15 +2106,28 @@
     $('rt-tomcat').innerHTML = supp.map(function(k){
       var info = tom[k];
       var meta = info ? ('patch '+info.patch+' · '+info.namespace+' · min Java '+info.min_java) : 'not installed';
+      var ut = (RT_UPDATES.tomcat || {})[k];
+      var tcBtns;
+      if(!info){
+        tcBtns = '<button type="button" class="jh-btn accent sm" data-tc-install="'+esc(k)+'">'+ic('plus')+'Install</button>';
+      } else {
+        var updBtn;
+        if(ut === undefined){
+          // not checked yet (or endpoint unavailable): keep the manual Update
+          updBtn = '<button type="button" class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>';
+        } else if(ut.update){
+          updBtn = '<span class="jh-badge neutral" title="Latest: '+esc(ut.latest||'')+'">update available</span>'+
+            '<button type="button" class="jh-btn accent sm" data-tc-update="'+esc(k)+'" title="Update to '+esc(ut.latest||'latest')+'">'+ic('refresh')+'Update</button>';
+        } else {
+          updBtn = '<span class="jh-badge ok" title="Latest patch installed">up to date</span>';
+        }
+        tcBtns = updBtn +
+          '<button type="button" class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>';
+      }
       return '<div class="jh-kv jh-rt-row"><div class="jh-rt-label">'+
           '<div class="jh-rt-name">Tomcat '+esc(k)+'</div>'+
           '<div class="jh-path">'+esc(meta)+'</div></div>'+
-        '<span class="btns">'+
-        (info
-          ? '<button type="button" class="jh-btn ghost sm" data-tc-update="'+esc(k)+'">'+ic('refresh')+'Update</button>'+
-            '<button type="button" class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>'
-          : '<button type="button" class="jh-btn accent sm" data-tc-install="'+esc(k)+'">'+ic('plus')+'Install</button>')+
-        '</span></div>';
+        '<span class="btns">'+tcBtns+'</span></div>';
     }).join('');
   }
 
@@ -3741,6 +3786,7 @@
       APPS_SIG = appsSig(a); renderApps(a); renderDbPicker(a);
       startAppsPoll();
     }
+    if(name === 'runtimes') checkRuntimeUpdates(false);   // cached; instant if fresh
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
     if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
@@ -4025,6 +4071,13 @@
       if(!confirm(rLabel)) return;
       reinstallJava(ds.jdkReinstall, toPlugin, b); return;
     }
+    // runtimes — Java update to latest Temurin build (async)
+    if(ds.jdkUpdate){
+      busy(b, true);
+      startJob('UpdateJava', {version:ds.jdkUpdate}, 'Java '+ds.jdkUpdate+' update', b); return;
+    }
+    // runtimes — manual upstream-update check (bypasses the cache)
+    if(b.id === 'jh-check-updates'){ checkRuntimeUpdates(true, b); return; }
     // runtimes — Java uninstall (block-with-dependents flow)
     if(ds.jdkUninstall){ uninstallJava(ds.jdkUninstall, b); return; }
     // runtimes — Tomcat (async)
