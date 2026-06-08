@@ -644,6 +644,10 @@
     <!-- ================== PAGE: RUNTIMES ================== -->
     <section class="jh-page" id="page-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" tabindex="-1">
       <div class="jh-card">
+        <div class="jh-card-h"><div><h3>Which versions go together?</h3><p>New to Java hosting? Start here</p></div></div>
+        <div id="rt-compat"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Java (Temurin / OpenJDK)</h3><p>Install runtimes via verified Adoptium downloads</p></div>
           <button class="jh-btn ghost sm" id="jh-check-updates" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Check for updates</button>
@@ -2066,6 +2070,14 @@
   }
   function renderRuntimes(d){
     var java = d.java || {};
+    // beginner compatibility guidance: which Java each Tomcat line needs, what's
+    // recommended for a fresh app, and whether this server already satisfies it.
+    var tom = d.tomcat || {};
+    var lines = {}; (d.tomcat_lines || []).forEach(function(L){ lines[L.major] = L; });
+    var rec = d.recommended || {java:17, tomcat:'11'};
+    var jInstalled = Object.keys(java).map(Number);
+    function javaSatisfies(minj){ return jInstalled.some(function(x){ return x >= minj; }); }
+    renderCompat(d, lines, rec, javaSatisfies);
     var majors = ['8','11','17','21'];
     $('rt-java').innerHTML = majors.map(function(k){
       var on = java[k] != null;
@@ -2097,15 +2109,24 @@
           '<button type="button" class="jh-btn ghost sm" data-jdk-reinstall="'+ek+'">'+ic('refresh')+'Reinstall</button>'+
           '<button type="button" class="jh-btn danger ghost sm" data-jdk-uninstall="'+ek+'">'+ic('trash')+'Uninstall</button>';
       }
+      var recChip = (String(rec.java) === k)
+        ? ' <span class="jh-badge ok" title="Recommended for new apps">'+ic('heart')+'recommended</span>' : '';
       return '<div class="jh-kv jh-rt-row"><div class="jh-rt-label">'+
-          '<div class="jh-rt-name">Java '+ek+panelBadge+'</div>'+subHtml+'</div>'+
+          '<div class="jh-rt-name">Java '+ek+panelBadge+recChip+'</div>'+subHtml+'</div>'+
         '<span class="btns">'+btns+'</span></div>';
     }).join('');
 
-    var tom = d.tomcat || {}, supp = d.supported_tomcat || ['9','10','11'];
+    var supp = d.supported_tomcat || ['9','10','11'];
     $('rt-tomcat').innerHTML = supp.map(function(k){
       var info = tom[k];
-      var meta = info ? ('patch '+info.patch+' · '+info.namespace+' · min Java '+info.min_java) : 'not installed';
+      var L = lines[k] || (info ? {min_java:info.min_java, namespace:info.namespace} : null);
+      var meta = info
+        ? ('patch '+info.patch+' · '+info.namespace+' · min Java '+info.min_java)
+        : (L ? ('not installed · '+L.namespace+'.* · needs Java '+L.min_java+'+') : 'not installed');
+      var recT = (String(rec.tomcat) === k)
+        ? ' <span class="jh-badge ok" title="Recommended for new apps">'+ic('heart')+'recommended</span>' : '';
+      var needHint = (L && !javaSatisfies(L.min_java))
+        ? '<div class="jh-hint" style="color:var(--hi)">'+ic('warn')+'Install Java '+L.min_java+'+ first — no compatible JDK yet</div>' : '';
       var ut = (RT_UPDATES.tomcat || {})[k];
       var tcBtns;
       if(!info){
@@ -2125,10 +2146,36 @@
           '<button type="button" class="jh-btn danger ghost sm" data-tc-uninstall="'+esc(k)+'">'+ic('trash')+'Uninstall</button>';
       }
       return '<div class="jh-kv jh-rt-row"><div class="jh-rt-label">'+
-          '<div class="jh-rt-name">Tomcat '+esc(k)+'</div>'+
-          '<div class="jh-path">'+esc(meta)+'</div></div>'+
+          '<div class="jh-rt-name">Tomcat '+esc(k)+recT+'</div>'+
+          '<div class="jh-path">'+esc(meta)+'</div>'+needHint+'</div>'+
         '<span class="btns">'+tcBtns+'</span></div>';
     }).join('');
+  }
+  // Beginner compatibility card: recommended pairing + a Tomcat↔Java matrix that
+  // shows, per line, what Java it needs and whether this server already has it.
+  function renderCompat(d, lines, rec, javaSatisfies){
+    var el = $('rt-compat'); if(!el) return;
+    var tom = d.tomcat || {};
+    var rows = (d.tomcat_lines || []).map(function(L){
+      var ok = javaSatisfies(L.min_java);
+      var legacy = L.legacy ? ' <span class="jh-badge neutral">legacy</span>' : '';
+      var here = tom[L.major]
+        ? '<span class="jh-badge ok"><span class="jh-dot"></span>installed</span>'
+        : (ok ? '<span class="jh-badge ok">Java ready</span>'
+              : '<span class="jh-badge neutral">needs Java '+L.min_java+'+</span>');
+      return '<tr><td>Tomcat '+esc(L.line)+legacy+'</td>'+
+        '<td>Java '+esc(L.min_java)+'+</td>'+
+        '<td><code>'+esc(L.namespace)+'.*</code></td>'+
+        '<td>'+here+'</td></tr>';
+    }).join('');
+    el.innerHTML =
+      '<div class="jh-alert info">'+ic('info')+'<div>New to this? For a fresh app use '+
+        '<b>Java '+esc(rec.java)+' + Tomcat '+esc(rec.tomcat)+'</b> — the current mainstream pairing. '+
+        'Pick <b>Tomcat 9 + Java 8</b> only for older apps written against the <code>javax.*</code> servlet API; '+
+        'Tomcat 10.1/11 use <code>jakarta.*</code> and won’t run unmigrated <code>javax</code> apps.</div></div>'+
+      '<div class="jh-table-wrap"><table>'+
+        '<thead><tr><th>Tomcat line</th><th>Requires</th><th>Servlet API</th><th>On this server</th></tr></thead>'+
+        '<tbody>'+rows+'</tbody></table></div>';
   }
 
   // =====================================================================
