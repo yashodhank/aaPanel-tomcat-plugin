@@ -12,12 +12,12 @@ server the plugin is installed on (see
 
 ### Top tabs and Fullscreen
 
-The plugin's top bar has nine tabs — **Dashboard · Applications · Runtimes ·
-Databases · Backups · Tasks · Logs · Help · Settings** — implemented as an accessible
+The plugin's top bar has eight tabs — **Dashboard · Applications · Runtimes ·
+Databases · Backups · Activity · Help · Settings** — implemented as an accessible
 WAI-ARIA Tabs pattern (arrow/Home/End navigation). The header also has a
 **Fullscreen** toggle that pops the plugin out of aaPanel's cramped modal to fill
 the whole viewport (own CSS only, no panel patching); **Esc** exits. Use it
-whenever you work with the Applications drawer, Tasks, or Logs.
+whenever you work with the Applications drawer or the Activity tab.
 
 ![Fullscreen mode](images/fullscreen.png)
 
@@ -89,7 +89,7 @@ each row has **Install**, **Reinstall**, and **Uninstall** actions.
   server queries the Adoptium API for the latest Temurin build, verifies it
   (**SHA-256**, refusing unverified artifacts), and extracts it to
   `/www/server/javahost/runtimes/jdk-<major>`. Watch it finish in
-  [Tasks](#9-tasks--logs).
+  [Activity](#9-activity-tasks--logs).
 - **Reinstall** → `StartReinstallJava` (async) reinstalls the same major.
 - **Uninstall** → `StartUninstallJava` (async; sync `UninstallJava` too). It is
   **blocked while the JDK is in use** by deployed apps — JavaHost shows a **"Java N
@@ -116,7 +116,7 @@ Supported majors are **9** (legacy, `javax.*`), **10.1**, and **11** (both
   `UpdateTomcat` (resolves and stages the latest patch, atomic with rollback);
   **Uninstall** → `StartUninstallTomcat` (async) / `UninstallTomcat`.
 - Downloads are **SHA-512 + OpenPGP verified** before use. Watch installs finish
-  in [Tasks](#9-tasks--logs).
+  in [Activity](#9-activity-tasks--logs).
 
 **Java floors are enforced** ([Tomcat 10.1](tomcat-10.md),
 [Tomcat 11](tomcat-11.md)):
@@ -153,7 +153,7 @@ prominently:
 
 The Start/Stop/Restart actions are **async**: they call `StartAppAction{app,
 action}`, which runs the lifecycle change as a background job so a slow systemd
-transition can't time out the panel (watch it in [Tasks](#9-tasks--logs)). The
+transition can't time out the panel (watch it in [Activity](#9-activity-tasks--logs)). The
 list and health auto-refresh (~5s) while the section is visible.
 
 #### The deploy lifecycle
@@ -271,7 +271,7 @@ Each row has an inline **Start / Stop / Restart** control and a **More actions**
 menu:
 
 - **Start / Stop / Restart** → `StartAppAction{app, action}` — runs as an **async
-  background job** (non-blocking; pollable in [Tasks](#9-tasks--logs)). The
+  background job** (non-blocking; pollable in [Activity](#9-activity-tasks--logs)). The
   synchronous `AppAction` is kept for CLI / back-compat.
 - **Repair** → `RepairApp` (re-renders the service/config; also the recovery step
   after authorizing hardening). Available async via `StartAppAction{action:
@@ -471,8 +471,10 @@ in **Security → bt_security**, then **Repair** the app.
 
 ---
 
-## 9. Tasks & Logs
+## 9. Activity (tasks & logs)
 
+The **Activity** tab is one place for everything that runs and everything that
+logs: a **Background tasks** table on top and a **unified log viewer** below.
 Long operations — JDK/Tomcat install, reinstall, uninstall, and the async app
 lifecycle — run as **detached background jobs** so they can't time out the panel
 AJAX request (a slow download no longer flashes a false error).
@@ -495,22 +497,26 @@ sequenceDiagram
     end
 ```
 
-### Tasks
+### Background tasks
 
-The **Tasks** tab lists every job with its **status** (`running` / `done` /
-`failed`), target, elapsed time, and a **view-log** action. It's backed by
-`GetJobs` (list, auto-polled) and `GetJobLog` (one job's output). Only treat an
-install as failed when its task shows **failed**.
+The tasks table lists every job with its **status** (`running` / `done` /
+`failed` / `cancelled`), target, elapsed time, and a **View log** action that
+loads that job's output in the viewer below. It's backed by `GetJobs` (list,
+auto-polled) and `GetJobLog` (one job's output). Only treat an install as failed
+when its task shows **failed**. A *running* job that hasn't printed yet shows
+**"Running — waiting for output…"** (never a blank pane).
 
-![Tasks](images/tasks.png)
+![Background tasks](images/tasks.png)
 
-### Logs
+### Log viewer
 
-The **Logs** tab is a unified viewer over both **app logs** (per-app Catalina /
-JAR output) and **task logs** (the per-job output). Look for the app's startup
-marker in app logs and download/verify lines in task logs.
+The viewer is unified over both **app logs** (per-app Catalina / JAR output, via
+`GetLogs`) and **task logs** (the per-job output, via `GetJobLog`). Pick a source
+(or click a task's **View log**), choose how many **lines** to tail, and toggle
+**Auto-tail** to follow it live. Look for the app's startup marker in app logs
+and download/verify lines in task logs.
 
-![Logs](images/logs.png)
+![Log viewer](images/logs.png)
 
 ---
 

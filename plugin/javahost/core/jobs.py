@@ -96,6 +96,22 @@ def _write_meta(jdir: str, meta: Dict) -> None:
     os.replace(tmp, _meta_path(jdir))
 
 
+def _mark_launch_failed(jdir: str) -> None:
+    """Best-effort: flip a job's meta to failed when its supervisor can't exec."""
+    try:
+        meta = _read_meta(jdir)
+    except Exception:
+        meta = {"id": os.path.basename(jdir), "kind": "", "target": None,
+                "state": "running", "started": time.time(), "pid": None}
+    meta["state"] = "failed"
+    meta["ended"] = time.time()
+    meta["message"] = "failed to launch worker"
+    try:
+        _write_meta(jdir, meta)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
@@ -167,8 +183,15 @@ def _spawn_detached(jdir: str, argv: Sequence[str]) -> None:
         env = dict(os.environ)
         # Ensure the supervisor (and the work it imports) can `import core.*`.
         env["PYTHONPATH"] = _PLUGIN_DIR + os.pathsep + env.get("PYTHONPATH", "")
-        os.execve(supervisor[0], supervisor, env) \
-            if os.path.isabs(supervisor[0]) else os.execvpe(supervisor[0], supervisor, env)
+        try:
+            os.execve(supervisor[0], supervisor, env) \
+                if os.path.isabs(supervisor[0]) else os.execvpe(supervisor[0], supervisor, env)
+        except BaseException:
+            # exec never returns on success; reaching here means the supervisor
+            # could not be launched. Finalize meta so the UI sees a terminal
+            # state instead of polling a "running" job that will never advance.
+            _mark_launch_failed(jdir)
+            os._exit(127)
     except BaseException:
         os._exit(127)
 
@@ -199,19 +222,53 @@ def list_jobs(limit: int = 50) -> List[Dict]:
     return metas[: max(0, int(limit))]
 
 
-def read_log(job_id: str, lines: int = 200) -> Dict:
-    """Tail of a job's combined output plus its current state/message."""
-    jdir = job_dir(job_id)
-    state, message = "unknown", ""
+def count_skipped() -> int:
+    """How many job dirs exist that list_jobs() could not parse (corrupt meta).
+
+    Surfaced to the UI so a shorter task list doesn't read as silent data loss.
+    """
+    if not os.path.isdir(JOBS_ROOT):
+        return 0
     try:
-        meta = _read_meta(jdir)
-        state = meta.get("state", "unknown")
-        message = meta.get("message", "")
-    except Exception:
-        pass
-    log = _tail(_log_path(jdir), max(1, min(int(lines), 5000)))
+        names = os.listdir(JOBS_ROOT)
+    except OSError:
+        return 0
+    skipped = 0
+    for name in names:
+        if not _JOB_ID_RE.match(name):
+            continue
+        jdir = os.path.join(JOBS_ROOT, name)
+        if not os.path.isdir(jdir):
+            continue
+        try:
+            _read_meta(jdir)
+        except Exception:
+            skipped += 1
+    return skipped
+
+
+def read_log(job_id: str, lines: int = 200) -> Dict:
+    """Tail of a job's combined output plus its current state/message.
+
+    `exists` lets the UI tell apart "job dir is gone" (pruned / never created)
+    from "running but no output yet" — without it the frontend can't decide
+    whether to keep polling, and a vanished job would be tailed forever.
+    State is normalised to one of running|done|failed|cancelled|missing|unknown.
+    """
+    jdir = job_dir(job_id)
+    exists = os.path.isdir(jdir)
+    state, message = "missing", ""
+    if exists:
+        state = "unknown"
+        try:
+            meta = _read_meta(jdir)
+            state = (meta.get("state") or "unknown")
+            message = (meta.get("message") or "")
+        except Exception:
+            pass  # dir present but meta unreadable -> "unknown" (not "running")
+    log = _tail(_log_path(jdir), max(1, min(int(lines), 5000))) if exists else ""
     return {"id": _validate_job_id(job_id), "state": state,
-            "message": message, "log": log}
+            "message": message, "log": log, "exists": exists}
 
 
 def prune(keep: int = 50) -> int:

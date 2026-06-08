@@ -134,7 +134,7 @@ background jobs** (`StartInstallJava` / `StartInstallTomcat` / `StartReinstallJa
 / `StartUninstallJava` / `StartUninstallTomcat` / `StartAppAction`), each returning
 a `{job_id}` immediately. A slow Adoptium/Apache download therefore no longer
 times out the panel request. Only treat an operation as failed when its **Task**
-shows `failed` (Tasks tab → `GetJobs` / `GetJobLog`) — not because the click took
+shows `failed` (Activity tab → `GetJobs` / `GetJobLog`) — not because the click took
 a while.
 
 ## SSL / certificate issuance failures

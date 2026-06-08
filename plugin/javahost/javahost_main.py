@@ -244,7 +244,8 @@ class javahost_main(object):
                 jobs.prune()
             except Exception:
                 pass
-            return panel.ok({"jobs": jobs.list_jobs()})
+            return panel.ok({"jobs": jobs.list_jobs(),
+                             "skipped": jobs.count_skipped()})
         except Exception as e:
             return panel.err(str(e))
 

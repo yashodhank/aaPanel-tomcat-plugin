@@ -60,10 +60,33 @@ def test_read_log_and_list_jobs_shapes(tmp_path, monkeypatch):
     job_id = jobs.start("test", "x", [jobs.sys.executable or "python3", "-c", "print(1)"])
     _wait_done(job_id)
     rec = jobs.read_log(job_id, lines=10)
-    assert set(rec.keys()) == {"id", "state", "message", "log"}
+    assert set(rec.keys()) == {"id", "state", "message", "log", "exists"}
+    assert rec["exists"] is True
     meta = jobs.list_jobs()[0]
     for k in ("id", "kind", "target", "state", "started", "ended", "message"):
         assert k in meta
+
+
+def test_read_log_missing_job_reports_not_running(tmp_path, monkeypatch):
+    """A pruned/never-created job must report exists=False and a non-running
+    state so the UI shows 'no longer available' and STOPS polling (the old
+    behaviour returned state='' which the frontend treated as running)."""
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    rec = jobs.read_log("never-existed-20200101T000000Z-abc123")
+    assert rec["exists"] is False
+    assert rec["state"] == "missing"
+    assert rec["log"] == ""
+
+
+def test_count_skipped_counts_corrupt_dirs(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(root))
+    good = jobs.start("test", "g", [jobs.sys.executable or "python3", "-c", "print(1)"])
+    _wait_done(good)
+    # a dir with a valid-looking id but no/garbage meta.json
+    os.makedirs(str(root / "broken-20200101T000000Z-deadbe"), exist_ok=True)
+    assert jobs.count_skipped() == 1
+    assert good in [m["id"] for m in jobs.list_jobs()]
 
 
 def test_list_jobs_newest_first_and_tolerates_malformed(tmp_path, monkeypatch):

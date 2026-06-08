@@ -579,8 +579,7 @@
           <button type="button" class="jh-tab" role="tab" data-section="runtimes" aria-selected="false" aria-controls="page-runtimes" id="tab-runtimes" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-layers"/></svg>Runtimes</button>
           <button type="button" class="jh-tab" role="tab" data-section="databases" aria-selected="false" aria-controls="page-databases" id="tab-databases" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-db"/></svg>Databases</button>
           <button type="button" class="jh-tab" role="tab" data-section="backups" aria-selected="false" aria-controls="page-backups" id="tab-backups" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-upload"/></svg>Backups</button>
-          <button type="button" class="jh-tab" role="tab" data-section="tasks" aria-selected="false" aria-controls="page-tasks" id="tab-tasks" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Tasks</button>
-          <button type="button" class="jh-tab" role="tab" data-section="logs" aria-selected="false" aria-controls="page-logs" id="tab-logs" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-doc"/></svg>Logs</button>
+          <button type="button" class="jh-tab" role="tab" data-section="activity" aria-selected="false" aria-controls="page-activity" id="tab-activity" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Activity</button>
           <button type="button" class="jh-tab" role="tab" data-section="help" aria-selected="false" aria-controls="page-help" id="tab-help" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-help"/></svg>Help</button>
           <button type="button" class="jh-tab" role="tab" data-section="settings" aria-selected="false" aria-controls="page-settings" id="tab-settings" tabindex="-1"><svg aria-hidden="true" focusable="false"><use href="#i-settings"/></svg>Settings</button>
         </div>
@@ -674,11 +673,12 @@
       </div>
     </section>
 
-    <!-- ================== PAGE: TASKS ================== -->
-    <section class="jh-page" id="page-tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="-1">
+    <!-- ================== PAGE: ACTIVITY (tasks + logs, unified) ================== -->
+    <section class="jh-page" id="page-activity" role="tabpanel" aria-labelledby="tab-activity" tabindex="-1">
+      <!-- Background tasks: row-select loads that task's log in the viewer below -->
       <div class="jh-card">
         <div class="jh-card-h">
-          <div><h3>Background tasks</h3><p>Asynchronous installs, updates &amp; uninstalls</p></div>
+          <div><h3>Background tasks</h3><p>Asynchronous installs, updates &amp; uninstalls — select a row to view its log</p></div>
           <button class="jh-btn ghost sm" id="jh-tasks-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <div class="jh-table-wrap">
@@ -688,10 +688,8 @@
           </table>
         </div>
       </div>
-    </section>
 
-    <!-- ================== PAGE: LOGS ================== -->
-    <section class="jh-page" id="page-logs" role="tabpanel" aria-labelledby="tab-logs" tabindex="-1">
+      <!-- Unified log viewer: app logs (GetLogs) + background-task output (GetJobLog) -->
       <div class="jh-card">
         <div class="jh-card-h"><div><h3>Log viewer</h3><p>Application logs and background-task output</p></div></div>
         <div class="jh-spread" style="margin-bottom:var(--s3)">
@@ -945,7 +943,6 @@
       if(DRAWER.logTimer){ clearInterval(DRAWER.logTimer); DRAWER.logTimer = null; }
       if(DRAWER.metTimer){ clearInterval(DRAWER.metTimer); DRAWER.metTimer = null; }
     }
-    if(typeof JOBLOG === 'object' && JOBLOG && JOBLOG.timer){ clearInterval(JOBLOG.timer); JOBLOG.timer = null; }
     if(typeof METRICS === 'object' && METRICS && METRICS.timer){ clearInterval(METRICS.timer); METRICS.timer = null; }
     if(typeof LIFECYCLE_TIMERS === 'object' && LIFECYCLE_TIMERS){
       for(var jk in LIFECYCLE_TIMERS){ clearInterval(LIFECYCLE_TIMERS[jk]); }
@@ -1009,13 +1006,31 @@
     var s = (state == null ? '' : String(state)).toLowerCase();
     if(s === 'done' || s === 'success' || s === 'completed') return {cls:'ok', label:'done'};
     if(s === 'failed' || s === 'error') return {cls:'danger', label:'failed'};
+    if(s === 'cancelled' || s === 'canceled') return {cls:'neutral', label:'cancelled'};
     if(s === 'running' || s === 'active') return {cls:'neutral running', label:'running…'};
-    if(s === '') return {cls:'neutral', label:'unknown'};
+    if(s === 'missing') return {cls:'neutral', label:'gone'};
+    if(s === '' || s === 'unknown') return {cls:'neutral', label:'unknown'};
     return {cls:'neutral', label:s};
   }
+  // Only genuine in-progress states keep pollers alive. Empty/unknown/missing
+  // are NOT running — treating them as running (the old behaviour) made a
+  // pruned or corrupt job get polled forever.
   function jobIsRunning(state){
     var s = (state == null ? '' : String(state)).toLowerCase();
-    return s === 'running' || s === 'active' || s === '';
+    return s === 'running' || s === 'active';
+  }
+  // State-aware text for a log pane. A *running* job legitimately returns an
+  // empty log AND an empty message; the old code then set textContent to ''
+  // (an empty string is not null), which rendered a blank black box. Decide the
+  // placeholder from the job state, never blank the pane.
+  function logText(p){
+    if(!p) return '(no output)';
+    if(p.log != null && p.log !== '') return p.log;
+    if(p.exists === false || (p.state && String(p.state).toLowerCase() === 'missing'))
+      return 'Task record is no longer available (it may have been cleared).';
+    if(p.message != null && p.message !== '') return p.message;
+    if(jobIsRunning(p.state)) return 'Running — waiting for output…';
+    return '(no output)';
   }
 
   // Start an async operation: try Start<Method> first; if the backend doesn't
@@ -1042,7 +1057,7 @@
       }
       toast('Started ' + label, 'ok');
       trackJob(jid, label);
-      if(activeSection === 'tasks') refreshTasks();
+      if(activeSection === 'activity') refreshTasks();
     });
   }
   // Poll one job id until it stops running, then toast + refresh.
@@ -1064,7 +1079,7 @@
         refresh();                       // re-run the runtimes/status refresh
         if(activeSection === 'backups'){ refreshBackups(); refreshSchedules(); }   // a backup/restore/schedule job may have changed the lists
         if(DRAWER.app && $('jh-drawer-ov').classList.contains('open') && DRAWER.tab === 'backups') drawerBackups();
-        if(activeSection === 'tasks') refreshTasks();
+        if(activeSection === 'activity') refreshTasks();
       });
     }
     rec.timer = setInterval(poll, JOB_POLL);
@@ -2236,7 +2251,7 @@
         toast(label + ' completed', 'ok'); refresh(); return;
       }
       // surface the job in the Tasks section, then poll its log to completion
-      if(activeSection === 'tasks') refreshTasks();
+      if(activeSection === 'activity') refreshTasks();
       pollAppJob(jid, app, action, btn);
     });
   }
@@ -2256,7 +2271,7 @@
         else toast(label + ' completed', 'ok');
         refreshHealthAll(STATE.apps);         // live health for the (un)started app
         refresh();                            // re-pull status / list
-        if(activeSection === 'tasks') refreshTasks();
+        if(activeSection === 'activity') refreshTasks();
       });
     }
     tick();
@@ -2688,7 +2703,8 @@
         if(DRAWER.app !== app) return;
         var pr = $('dw-log'); if(!pr) return;
         var d = payload(r);
-        pr.textContent = failed(r) ? ('error: '+errText(d)) : ((d&&d.log!=null)?d.log:errText(d));
+        if(failed(r)){ pr.textContent = 'error: ' + (errText(d) || 'request failed'); }
+        else { pr.textContent = (d && d.log != null && d.log !== '') ? d.log : '(no log output yet)'; }
         pr.scrollTop = pr.scrollHeight;
       });
     }
@@ -3641,8 +3657,7 @@
     }
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
-    if(name === 'tasks'){ refreshTasks(); startTasksPoll(); }
-    if(name === 'logs') initLogsSection();
+    if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
     if(name === 'settings') refreshDangerZone();
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
@@ -3650,7 +3665,7 @@
     if(document.hidden){ stopAppsPoll(); stopTasksPoll(); }
     else {
       if(activeSection === 'apps') startAppsPoll();
-      if(activeSection === 'tasks') startTasksPoll();
+      if(activeSection === 'activity') startTasksPoll();
     }
   });
 
@@ -3695,7 +3710,7 @@
     });
   }
   function tasksTick(){
-    if(document.hidden || activeSection !== 'tasks') return;
+    if(document.hidden || activeSection !== 'activity') return;
     if(TASKS.inflight) return;
     var anyRunning = JOBS.some(function(j){ return jobIsRunning(j.state); }) ||
       Object.keys(trackedJobs).length > 0;
@@ -3703,52 +3718,29 @@
     TASKS.inflight = true;
     call('GetJobs', {}, function(r){
       TASKS.inflight = false;
-      if(activeSection !== 'tasks') return;
+      if(activeSection !== 'activity') return;
       var p = payload(r);
       if(failed(r)) return;
       renderTasks((p && p.jobs) || []);
+      // keep the task picker current while new jobs appear/finish
+      populateLogSources();
     });
   }
   function startTasksPoll(){ stopTasksPoll(); TASKS.timer = setInterval(tasksTick, TASKS_INTERVAL); }
   function stopTasksPoll(){ if(TASKS && TASKS.timer){ clearInterval(TASKS.timer); TASKS.timer = null; } }
 
-  // job-log modal — streams GetJobLog (tail), auto-refreshing while running
-  var JOBLOG = { id:null, timer:null };
-  function openJobLog(jid, label){
-    JOBLOG.id = jid;
-    openModal({
-      title:'Task log', sub:label || jid, large:true, fill:true,
-      body: '<pre class="jh-pre" id="jl-pre" tabindex="0" role="region" aria-label="Task log output">Loading…</pre>',
-      footer: [ mkBtn('Refresh', 'ghost', function(b){ loadJobLog(jid, b); }, 'refresh'), mkBtn('Close', 'ghost', closeModal) ],
-      onMount: function(){
-        loadJobLog(jid);
-        JOBLOG.timer = setInterval(function(){
-          if(document.hidden) return;
-          loadJobLog(jid);
-        }, JOB_POLL);
-      },
-      onClose: function(){
-        if(JOBLOG.timer){ clearInterval(JOBLOG.timer); JOBLOG.timer = null; }
-        JOBLOG.id = null;
-      }
-    });
-  }
-  function loadJobLog(jid, btn){
-    var pre = $('jl-pre'); if(!pre) return;
-    busy(btn, true);
-    call('GetJobLog', {job_id: jid, lines: 1000}, function(r){
-      busy(btn, false);
-      var pr = $('jl-pre'); if(!pr) return;
-      var p = payload(r);
-      if(failed(r)){ pr.textContent = 'error: ' + errText(p); return; }
-      pr.textContent = (p && p.log != null && p.log !== '') ? p.log
-        : (p && p.message != null ? p.message : '(no output)');
-      pr.scrollTop = pr.scrollHeight;
-      // once the job stops, stop auto-refreshing the modal
-      if(!jobIsRunning(p && p.state) && JOBLOG.timer){
-        clearInterval(JOBLOG.timer); JOBLOG.timer = null;
-      }
-    });
+  // "View log" on a task row no longer opens a modal — it selects that task in
+  // the unified log viewer below (one place to read every log), ensures the
+  // option exists, loads it, and scrolls the viewer into view.
+  function viewTaskLog(jid){
+    var sel = $('lg-source'); if(!sel) return;
+    var val = 'job:' + jid;
+    var have = Array.prototype.some.call(sel.options, function(o){ return o.value === val; });
+    if(!have) populateLogSources();
+    sel.value = val;
+    loadUnifiedLog();
+    var pre = $('lg-pre');
+    if(pre && pre.scrollIntoView) pre.scrollIntoView({block:'nearest'});
   }
 
   // =====================================================================
@@ -3779,7 +3771,7 @@
     if(auto) auto.checked = !!(LOGS && LOGS.timer);
     // pull fresh jobs so the task picker is current, then populate + load
     call('GetJobs', {}, function(r){
-      if(activeSection !== 'logs') return;
+      if(activeSection !== 'activity') return;
       var p = payload(r);
       if(!failed(r)) JOBS = (p && p.jobs) || [];
       populateLogSources();
@@ -3797,9 +3789,8 @@
       busy(btn, false);
       var pr = $('lg-pre'); if(!pr) return;
       var p = payload(r);
-      if(failed(r)){ pr.textContent = 'error: ' + errText(p); return; }
-      pr.textContent = (p && p.log != null && p.log !== '') ? p.log
-        : (p && p.message != null ? p.message : '(no output)');
+      if(failed(r)){ pr.textContent = 'error: ' + (errText(p) || 'request failed'); return; }
+      pr.textContent = logText(p);
       pr.scrollTop = pr.scrollHeight;
     }
     if(kind === 'app') call('GetLogs', {app:key, lines:lines}, show);
@@ -3807,7 +3798,7 @@
     else { busy(btn, false); pre.textContent = 'Pick a source to view its log.'; }
   }
   function logsAutoTick(){
-    if(document.hidden || activeSection !== 'logs') return;
+    if(document.hidden || activeSection !== 'activity') return;
     // if the auto-tailed source has vanished (app deleted / job pruned), stop
     // the timer, uncheck the toggle, and tell the operator instead of silently
     // tailing nothing.
@@ -3921,7 +3912,7 @@
 
     // tasks / logs sections
     if(b.id === 'jh-tasks-refresh'){ refreshTasks(b); return; }
-    if(ds.joblog){ openJobLog(ds.joblog, ds.joblabel); return; }
+    if(ds.joblog){ viewTaskLog(ds.joblog); return; }
     if(b.id === 'jh-logs-refresh'){ loadUnifiedLog(b); return; }
 
     // reverse-proxy setup for an app with no domain yet
