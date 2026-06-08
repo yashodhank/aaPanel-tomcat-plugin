@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.23.0] — 2026-06-08
+
+### Added (Settings — log management)
+- **Automatic log rotation + purge.** New `core/logrotate.py` rotates any app
+  `catalina.out` / `logs/*.log` (and the plugin's cron logs) that exceeds a size
+  limit by gzipping to `<name>.1.gz` and **copy-truncating** the live file in
+  place (Tomcat keeps writing — no restart), keeping N rotations; purge deletes
+  rotations older than a retention window. A live log is never deleted.
+- A managed **/etc/cron.d/javahost-logrotate** (hardening-aware, mirrors the
+  backup-schedule pattern) runs it on a configurable cadence (daily/weekly/
+  monthly). Installed by default; removed on uninstall.
+- **Settings → Log management** card: rotation toggle, frequency, size limit,
+  rotations-to-keep, retention days, live/rotated disk usage, and a **Purge now**
+  button. Endpoints `GetLogConfig` / `SetLogConfig` / `PurgeLogsNow`.
+- `core/config.py` gained a `set()`/`update()` writer (atomic, cache-invalidating)
+  and typed log-config getters.
+
 ## [0.22.0] — 2026-06-08
 
 ### Added (Activity — job control)
