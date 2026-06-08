@@ -733,6 +733,13 @@
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
+          <div><h3>Log management</h3><p>Automatic rotation keeps logs from filling the disk; purge reclaims old rotations</p></div>
+          <button class="jh-btn ghost sm" id="jh-logcfg-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-logcfg-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
+        <div class="jh-card-h">
           <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
           <button class="jh-btn ghost sm" id="jh-wipe-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
@@ -1207,6 +1214,82 @@
       }
       WIPE_PREVIEW = p;
       renderDangerZone(p);
+    });
+  }
+  // --- Settings: Log management (rotation + purge) ---------------------------
+  var LOGCFG = null;
+  function fmtKB(n){
+    n = Number(n) || 0;
+    if(n < 1024) return n + ' B';
+    if(n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    if(n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+    return (n/1073741824).toFixed(2) + ' GB';
+  }
+  function refreshLogConfig(btn){
+    var body = $('jh-logcfg-body'); if(!body) return;
+    busy(btn, true);
+    call('GetLogConfig', {}, function(r){
+      busy(btn, false);
+      var b = $('jh-logcfg-body'); if(!b) return;
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object'){
+        b.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>Log management is unavailable on this server build.</div></div>';
+        return;
+      }
+      LOGCFG = p; renderLogConfig(p);
+    });
+  }
+  function renderLogConfig(p){
+    var body = $('jh-logcfg-body'); if(!body) return;
+    var whenSel = '<select id="logcfg-when" style="width:auto" aria-label="Rotation frequency">'+
+      ['daily','weekly','monthly'].map(function(w){
+        return '<option value="'+w+'"'+(p.when===w?' selected':'')+'>'+w+'</option>'; }).join('')+'</select>';
+    body.innerHTML =
+      '<div class="jh-rows">'+
+        '<label class="jh-kv" style="cursor:pointer"><span><b>Automatic rotation</b>'+
+          '<div class="jh-hint">Gzip and truncate logs over the size limit, on a schedule</div></span>'+
+          '<input type="checkbox" id="logcfg-enabled"'+(p.enabled?' checked':'')+' style="width:auto"></label>'+
+        '<div class="jh-kv"><span><label for="logcfg-when" style="margin:0">Frequency</label></span>'+whenSel+'</div>'+
+        '<div class="jh-kv"><span><label for="logcfg-maxmb" style="margin:0">Rotate when larger than (MB)</label></span>'+
+          '<input type="number" id="logcfg-maxmb" min="1" value="'+(p.max_mb)+'" style="width:90px"></div>'+
+        '<div class="jh-kv"><span><label for="logcfg-keep" style="margin:0">Rotations to keep</label></span>'+
+          '<input type="number" id="logcfg-keep" min="0" value="'+(p.keep)+'" style="width:90px"></div>'+
+        '<div class="jh-kv"><span><label for="logcfg-purge" style="margin:0">Delete rotations older than (days)</label></span>'+
+          '<input type="number" id="logcfg-purge" min="0" value="'+(p.purge_days)+'" style="width:90px"></div>'+
+        '<div class="jh-hint">Live logs: '+fmtKB(p.live_bytes)+' · rotated: '+fmtKB(p.rotated_bytes)+
+          ' in '+(p.rotated_files||0)+' file(s)'+(p.cron_installed?' · schedule active':' · schedule off')+'</div>'+
+        '<div class="jh-spread" style="margin-top:var(--s3);gap:var(--s2)">'+
+          '<button class="jh-btn accent sm" id="jh-logcfg-save" type="button">'+ic('check')+'Save settings</button>'+
+          '<button class="jh-btn ghost sm" id="jh-logcfg-purge" type="button">'+ic('trash')+'Purge now</button>'+
+        '</div>'+
+      '</div>';
+  }
+  function saveLogConfig(btn){
+    busy(btn, true);
+    var data = {
+      enabled: ($('logcfg-enabled') && $('logcfg-enabled').checked) ? 1 : 0,
+      when: ($('logcfg-when') && $('logcfg-when').value) || 'daily',
+      max_mb: ($('logcfg-maxmb') && $('logcfg-maxmb').value) || 50,
+      keep: ($('logcfg-keep') && $('logcfg-keep').value) || 7,
+      purge_days: ($('logcfg-purge') && $('logcfg-purge').value) || 30
+    };
+    call('SetLogConfig', data, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'save failed', 'err', 'Log settings'); return; }
+      toast('Log settings saved', 'ok'); LOGCFG = p; renderLogConfig(p);
+    });
+  }
+  function purgeLogsNow(btn){
+    busy(btn, true);
+    call('PurgeLogsNow', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'purge failed', 'err', 'Purge logs'); return; }
+      toast('Rotated '+((p&&p.rotated)||0)+', removed '+((p&&p.removed)||0)+
+        ' file(s), freed '+fmtKB((p&&p.freed_bytes)||0), 'ok');
+      refreshLogConfig();
     });
   }
   function previewList(items, emptyLabel){
@@ -3661,7 +3744,7 @@
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
     if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
-    if(name === 'settings') refreshDangerZone();
+    if(name === 'settings'){ refreshLogConfig(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -3960,6 +4043,9 @@
     if(b.id === 'jh-open-sched'){ openScheduleModal(); return; }
     if(ds.schedDel){ removeSchedule(ds.schedDel, b); return; }
     // settings / danger zone
+    if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }
+    if(b.id === 'jh-logcfg-save'){ saveLogConfig(b); return; }
+    if(b.id === 'jh-logcfg-purge'){ purgeLogsNow(b); return; }
     if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
     if(b.id === 'jh-wipe-run'){ runWipe(b); return; }
 
