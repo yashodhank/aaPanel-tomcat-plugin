@@ -13,6 +13,16 @@ _DEFAULTS = {
     # Set false to forbid touching chattr +i (plugin then errors and asks the
     # operator to disable hardening / lift the lock manually).
     "manage_hardening": True,
+
+    # Log management (rotation + purge). Rotation copy-truncates oversized app/cron
+    # logs (gzip, keep N) so a runaway log can't fill the disk; purge deletes
+    # rotated artifacts older than the retention window. Driven by a managed
+    # /etc/cron.d/javahost-logrotate (hardening-aware), configurable from Settings.
+    "log_rotate_enabled": True,
+    "log_rotate_when": "daily",     # daily | weekly | monthly
+    "log_rotate_keep": 7,           # number of gzipped rotations kept per log
+    "log_rotate_max_mb": 50,        # rotate a log once it exceeds this size
+    "log_purge_days": 30,           # delete rotated *.gz older than this many days
 }
 
 
@@ -47,6 +57,69 @@ def get(key: str, default=None):
     if default is None:
         default = _DEFAULTS.get(key)
     return _load().get(key, default)
+
+
+def set(key: str, value):
+    """Persist a single config key to config.json (atomic) and invalidate the
+    mtime cache so the next get() sees it. Read-mostly file; no secrets here."""
+    return update({key: value})
+
+
+def update(values: dict) -> dict:
+    """Merge `values` into config.json atomically. Returns the merged dict."""
+    try:
+        with open(CONFIG_PATH) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data.update(values or {})
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, CONFIG_PATH)
+    _CACHE.pop("k", None)  # force re-read on next get()
+    return data
+
+
+def _as_bool(v, default: bool) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def log_rotate_enabled() -> bool:
+    return _as_bool(get("log_rotate_enabled", True), True)
+
+
+def log_rotate_when() -> str:
+    v = str(get("log_rotate_when", "daily") or "daily").strip().lower()
+    return v if v in ("daily", "weekly", "monthly") else "daily"
+
+
+def log_rotate_keep(default: int = 7) -> int:
+    try:
+        return max(0, int(get("log_rotate_keep", default) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def log_rotate_max_mb(default: int = 50) -> int:
+    try:
+        return max(1, int(get("log_rotate_max_mb", default) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def log_purge_days(default: int = 30) -> int:
+    try:
+        return max(0, int(get("log_purge_days", default) or default))
+    except (TypeError, ValueError):
+        return default
 
 
 def aapanel_api_key():

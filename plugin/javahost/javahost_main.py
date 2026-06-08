@@ -31,6 +31,7 @@ from core.db import engines as dbengines        # noqa: E402
 from core import jobs                            # noqa: E402
 from core import config                          # noqa: E402
 from core import maintenance                      # noqa: E402
+from core import logrotate                         # noqa: E402
 from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
@@ -282,6 +283,56 @@ class javahost_main(object):
             removed = jobs.clear()
             panel.log("ClearJobs", "removed=%d" % removed)
             return panel.ok({"removed": removed})
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- log management (rotation + purge) ----------------------------------
+    def GetLogConfig(self, get=None):
+        """Current rotation/purge settings plus live + rotated log disk usage."""
+        try:
+            return panel.ok(logrotate.status())
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetLogConfig(self, get):
+        """Update rotation/purge settings and regenerate the managed cron.d job."""
+        try:
+            vals = {}
+            if panel.attr(get, "enabled", None) is not None:
+                vals["log_rotate_enabled"] = str(panel.attr(get, "enabled")).lower() in ("1", "true", "yes", "on")
+            when = panel.attr(get, "when", None)
+            if when is not None:
+                if str(when) not in ("daily", "weekly", "monthly"):
+                    return panel.err("invalid 'when' (daily|weekly|monthly)")
+                vals["log_rotate_when"] = str(when)
+            if panel.attr(get, "keep", None) is not None:
+                vals["log_rotate_keep"] = max(0, int(panel.attr(get, "keep")))
+            if panel.attr(get, "max_mb", None) is not None:
+                vals["log_rotate_max_mb"] = max(1, int(panel.attr(get, "max_mb")))
+            if panel.attr(get, "purge_days", None) is not None:
+                vals["log_purge_days"] = max(0, int(panel.attr(get, "purge_days")))
+            if vals:
+                config.update(vals)
+            sched = logrotate.apply_schedule()
+            panel.log("SetLogConfig", str(vals))
+            out = logrotate.status()
+            out["schedule"] = sched
+            return panel.ok(out)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def PurgeLogsNow(self, get=None):
+        """Rotate oversized logs now, then delete rotated artifacts older than the
+        retention window (or all of them when ?all=1). Frees disk on demand."""
+        try:
+            rot = logrotate.rotate()
+            days = 0 if str(panel.attr(get, "all", "")).lower() in ("1", "true", "yes", "on") \
+                else logrotate.config.log_purge_days()
+            prg = logrotate.purge(days)
+            panel.log("PurgeLogsNow", "rotated=%d removed=%d freed=%d" %
+                      (rot["count"], prg["removed"], prg["freed_bytes"]))
+            return panel.ok({"rotated": rot["count"], "removed": prg["removed"],
+                             "freed_bytes": prg["freed_bytes"]})
         except Exception as e:
             return panel.err(str(e))
 

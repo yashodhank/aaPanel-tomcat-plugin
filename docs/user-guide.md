@@ -526,11 +526,28 @@ and download/verify lines in task logs.
 
 ---
 
-## 10. Settings — config & Danger zone
+## 10. Settings — log management, config & Danger zone
 
 The **Settings** tab exposes plugin config (including the `site_suffix` used for
-reverse-proxy domains) and a **Danger zone** for tearing the plugin down
-granularly.
+reverse-proxy domains), a **Log management** card, and a **Danger zone** for
+tearing the plugin down granularly.
+
+### Log management
+
+JavaHost rotates and purges its logs itself (no dependency on the system
+`logrotate`). The card controls:
+
+- **Automatic rotation** (on/off) + **Frequency** (daily / weekly / monthly) — a
+  managed `/etc/cron.d/javahost-logrotate` (hardening-aware) runs the rotation.
+- **Rotate when larger than (MB)** — any app `catalina.out` / `logs/*.log` (and
+  the plugin's own cron logs) over this size is gzipped to `<name>.1.gz` and
+  **truncated in place** (copy-truncate, so Tomcat keeps writing — no restart).
+- **Rotations to keep** — older gzips shift `…1.gz → …2.gz` up to this count.
+- **Delete rotations older than (days)** — the purge retention window.
+- **Purge now** — rotate oversized logs immediately, then delete rotations past
+  the retention window, freeing disk on demand (`SetLogConfig` / `PurgeLogsNow`).
+
+A live log is **never deleted** — only its gzipped rotations.
 
 ![Settings — Danger zone](images/settings-danger.png)
 

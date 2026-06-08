@@ -23,9 +23,15 @@ register_icon() {
 }
 
 install_javahost() {
-    mkdir -p "${DATA_ROOT}"/{runtimes,tomcat,instances,vhost/nginx,.keys}
+    mkdir -p "${DATA_ROOT}"/{runtimes,tomcat,instances,vhost/nginx,.keys,logs}
     chmod 700 "${DATA_ROOT}/.keys"
     register_icon
+    # Install the managed log-rotation cron from default config (best-effort; a
+    # missing /etc/cron.d or no python just leaves it inert until Settings → Save).
+    pybin="$(command -v /www/server/panel/pyenv/bin/python 2>/dev/null \
+        || command -v python3 2>/dev/null || true)"
+    plugin_dir="$(cd "$(dirname "$0")" && pwd)"
+    [ -n "$pybin" ] && "$pybin" -c "import sys;sys.path.insert(0,'${plugin_dir}');from core import logrotate;logrotate.apply_schedule()" >/dev/null 2>&1 || true
     echo "JavaHost installed. Data root: ${DATA_ROOT}"
 }
 
@@ -61,6 +67,16 @@ uninstall_javahost() {
     # the code). Managed runtimes/apps under DATA_ROOT are kept unless either a
     # plan file requests a granular wipe, or the operator sets PURGE=1.
     for d in "${ICON_DIRS[@]}"; do rm -f "${d}/ico-${PLUGIN_NAME}.png" 2>/dev/null || true; done
+    # Remove the managed log-rotation cron. Only lift/relock the immutable bit if
+    # /etc/cron.d was ALREADY hardened — never harden a dir that wasn't.
+    if [ -f /etc/cron.d/javahost-logrotate ]; then
+        was_locked=0
+        if command -v lsattr >/dev/null 2>&1 && lsattr -d /etc/cron.d 2>/dev/null | awk '{print $1}' | grep -q i; then
+            was_locked=1; chattr -i /etc/cron.d 2>/dev/null || true
+        fi
+        rm -f /etc/cron.d/javahost-logrotate 2>/dev/null || true
+        [ "$was_locked" = 1 ] && chattr +i /etc/cron.d 2>/dev/null || true
+    fi
     if [ -f "$UNINSTALL_PLAN" ]; then
         local scope
         scope="$(head -n1 "$UNINSTALL_PLAN" 2>/dev/null | tr -d '[:space:]')"
