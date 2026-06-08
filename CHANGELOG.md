@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.21.0] — 2026-06-08
+
+### Changed (Tasks + Logs merged into one **Activity** tab)
+- The separate **Tasks** and **Logs** tabs are now a single **Activity** tab: a
+  Background-tasks table on top, a unified log viewer below. Clicking a task's
+  **View log** loads its output inline (the old task-log modal is gone). The task
+  picker stays current while you watch (it refreshed only once on entry before).
+
+### Fixed (log rendering — the "blank black box")
+- A **running** job legitimately returns an empty log *and* an empty message; the
+  viewer used to set the pane to that empty string and render a **blank box**. It
+  now shows state-aware text — *"Running — waiting for output…"*, *"(no output)"*
+  for a finished job with none, or a *"no longer available"* note for a cleared
+  job — and **never blanks the pane**. Same fix in the per-app drawer Logs tab.
+- A pruned/corrupt job no longer gets **polled forever**: `read_log` returns an
+  `exists` flag and a normalised state (`running|done|failed|cancelled|missing|
+  unknown`), and the UI stops treating empty/unknown as "running".
+- If a background job's supervisor **fails to launch**, its meta is now flipped to
+  `failed` instead of being stuck `running` (no more zombie "running" rows).
+- `GetJobs` reports a `skipped` count of unreadable job dirs instead of silently
+  dropping them.
+
 ## [0.20.2] — 2026-06-07
 
 ### Fixed (Backups UI polish)
