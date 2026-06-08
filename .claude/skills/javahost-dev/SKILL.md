@@ -72,6 +72,7 @@ Ops/login creds for the test box are in `_private_spec/OPS-ACCESS.md` (gitignore
 - Databases: `docs/databases-java-apps.md` · Hardening: `docs/system-hardening.md` · Packaging: `docs/aaPanel-plugin-packaging.md`
 - Testing: `docs/testing.md` (+ full on-box campaign `docs/testbed.md`); deploy/DB matrix: `javahost-test-deploy` skill.
 - UI edits: `javahost-ui` skill. Releasing: `javahost-release` skill. Security review: `javahost-security` skill.
+- Cleanup / reset the test box (full or partial `dev-reset`): `javahost-teardown` skill.
 
 ## Backup / storage model (v0.18+, multi-destination v0.20+)
 - `core/backup/`: `archive.py` (the ONLY tar extractor — realpath-contain + reject
