@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.25.0] — 2026-06-08
+
+### Added (Runtimes — beginner compatibility guidance)
+- A **"Which versions go together?"** card at the top of Runtimes: a recommended
+  pairing for new apps (**Java 17 + Tomcat 11**) and a Tomcat↔Java **matrix** —
+  per line, the Java it requires, its servlet namespace (`javax` vs `jakarta`),
+  whether it's legacy, and whether this server already satisfies it.
+- **Recommended** chips on the suggested Java/Tomcat rows, and an inline
+  **"Install Java N+ first"** hint on any Tomcat line whose minimum Java isn't
+  installed. Driven by new `tomcat_lines` + `recommended` fields in `GetStatus`
+  (`registry.matrix()` / `registry.recommended()` — derived, not hardcoded).
+
 ## [0.24.0] — 2026-06-08
 
 ### Added (Runtimes — upstream-update detection)

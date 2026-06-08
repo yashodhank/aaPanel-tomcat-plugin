@@ -5,7 +5,7 @@
     "panel_type": "soft",
     "type": "environment",
     "ps": "Manage Java (8/11/17/21) and Apache Tomcat 9/10.1/11 with verified downloads, systemd services, and reverse-proxy + PostgreSQL helpers. Independent OSS plugin (Apache-2.0).",
-    "versions": "0.24.0",
+    "versions": "0.25.0",
     "shell": "install.sh",
     "checks": "/www/server/javahost",
     "author": "yashodhank",
