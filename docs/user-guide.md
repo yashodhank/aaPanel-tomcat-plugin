@@ -75,8 +75,14 @@ because JavaHost manages hardening transparently.
 
 ## 2. Runtimes — install Java and Tomcat
 
-Open the **Runtimes** tab. It has two cards, both driven by the latest
-`GetStatus` data.
+Open the **Runtimes** tab. The first card, **"Which versions go together?"**, is
+beginner guidance: it recommends a pairing for a fresh app (**Java 17 + Tomcat
+11**) and shows a Tomcat↔Java matrix — each line's required Java, its servlet
+namespace (`javax.*` for Tomcat 9 vs `jakarta.*` for 10.1/11), and whether this
+server already satisfies it. The Java/Tomcat rows below carry a **recommended**
+chip on the suggested versions and a **"Install Java N+ first"** hint on any
+Tomcat line whose minimum Java isn't installed yet. The cards are driven by the
+latest `GetStatus` data.
 
 ![Runtimes — Java](images/runtimes-java.png)
 
