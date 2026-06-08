@@ -153,6 +153,45 @@ def test_cancel_running_job(tmp_path, monkeypatch):
         os.killpg(os.getpgid(int(meta["pid"])), 0)
 
 
+def test_cancel_escalates_to_sigkill(tmp_path, monkeypatch):
+    """Work that IGNORES SIGTERM must still be killed (SIGKILL escalation) — the
+    recorded 'cancelled' state must mean the process is actually gone."""
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    job_id = jobs.start("test", "stubborn", [jobs.sys.executable or "python3", "-c", code])
+    meta = _wait_running_with_pid(job_id)
+    pid = int(meta["pid"])
+    res = jobs.cancel(job_id)            # SIGTERM ignored -> escalates to SIGKILL
+    assert res["state"] == "cancelled"
+    time.sleep(0.3)
+    with pytest.raises((ProcessLookupError, OSError)):
+        os.killpg(os.getpgid(pid), 0)    # process group is gone
+
+
+def test_cancel_keeps_terminal_state_on_natural_finish(tmp_path, monkeypatch):
+    """If the supervisor finalizes the job (done/failed) in the window between the
+    initial state check and the kill, cancel() must respect that terminal state,
+    not clobber a succeeded job to 'cancelled'."""
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    job_id = jobs.start("test", "q", [jobs.sys.executable or "python3", "-c", "print(1)"])
+    _wait_done(job_id)
+    base = jobs._read_meta(jobs.job_dir(job_id))
+    seq = {"n": 0}
+
+    def fake_read(jdir):
+        seq["n"] += 1
+        m = dict(base)
+        m["state"] = "running" if seq["n"] == 1 else "done"   # finishes during cancel
+        m["pid"] = 999999
+        return m
+
+    monkeypatch.setattr(jobs, "_read_meta", fake_read)
+    monkeypatch.setattr(jobs.os, "getpgid",
+                        lambda p: (_ for _ in ()).throw(ProcessLookupError()))
+    res = jobs.cancel(job_id)
+    assert res["state"] == "done"     # natural finish respected, not overwritten
+
+
 def test_cancel_finished_job_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
     job_id = jobs.start("test", "x", [jobs.sys.executable or "python3", "-c", "print(1)"])

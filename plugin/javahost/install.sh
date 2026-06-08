@@ -67,14 +67,15 @@ uninstall_javahost() {
     # the code). Managed runtimes/apps under DATA_ROOT are kept unless either a
     # plan file requests a granular wipe, or the operator sets PURGE=1.
     for d in "${ICON_DIRS[@]}"; do rm -f "${d}/ico-${PLUGIN_NAME}.png" 2>/dev/null || true; done
-    # Remove the managed log-rotation cron. Only lift/relock the immutable bit if
+    # Remove BOTH managed crons (log-rotation + scheduled backups) so neither
+    # keeps firing against a removed plugin. Only lift/relock the immutable bit if
     # /etc/cron.d was ALREADY hardened — never harden a dir that wasn't.
-    if [ -f /etc/cron.d/javahost-logrotate ]; then
+    if [ -f /etc/cron.d/javahost-logrotate ] || [ -f /etc/cron.d/javahost-backups ]; then
         was_locked=0
         if command -v lsattr >/dev/null 2>&1 && lsattr -d /etc/cron.d 2>/dev/null | awk '{print $1}' | grep -q i; then
             was_locked=1; chattr -i /etc/cron.d 2>/dev/null || true
         fi
-        rm -f /etc/cron.d/javahost-logrotate 2>/dev/null || true
+        rm -f /etc/cron.d/javahost-logrotate /etc/cron.d/javahost-backups 2>/dev/null || true
         [ "$was_locked" = 1 ] && chattr +i /etc/cron.d 2>/dev/null || true
     fi
     if [ -f "$UNINSTALL_PLAN" ]; then

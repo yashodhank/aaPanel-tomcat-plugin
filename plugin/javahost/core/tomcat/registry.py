@@ -66,8 +66,14 @@ def recommended():
     return {"java": best.min_java, "tomcat": best.major, "line": best.line}
 
 
-def resolve_latest_patch(major: str, *, timeout: int = 20) -> str:
-    """Return newest X.Y.Z for the given major's line, from the live index."""
+def resolve_latest_patch(major: str, *, timeout: int = 20, strict: bool = False) -> str:
+    """Return newest X.Y.Z for the given major's line, from the live index.
+
+    By default a fetch failure falls back to a conservative pinned patch (so an
+    INSTALL can still proceed with verified integrity). Pass strict=True for the
+    update-CHECK path, where a network failure must be reported (not masked as a
+    confident "latest") — it re-raises instead of returning the stale fallback.
+    """
     line = get_line(major)
     index = "%s/tomcat-%s/" % (DLCDN, major)
     try:
@@ -76,8 +82,11 @@ def resolve_latest_patch(major: str, *, timeout: int = 20) -> str:
         versions = [v for v in _HREF_RE.findall(html) if v.startswith(line.line + ".")]
         if versions:
             return max(versions, key=_ver_key)
+        if strict:
+            raise RuntimeError("no Tomcat %s patch found in the Apache index" % major)
     except Exception:
-        pass
+        if strict:
+            raise
     return _FALLBACK_PATCH[major]
 
 

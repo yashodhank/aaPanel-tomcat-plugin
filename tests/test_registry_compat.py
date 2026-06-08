@@ -1,7 +1,23 @@
 # coding: utf-8
 """Tests for the Tomcat↔Java compatibility matrix + recommended pairing that
-drives the Runtimes beginner guidance."""
+drives the Runtimes beginner guidance, and the strict latest-patch resolver."""
+import urllib.request
+
+import pytest
+
 from core.tomcat import registry
+
+
+def test_resolve_latest_patch_strict_raises_on_fetch_failure(monkeypatch):
+    """The update-CHECK path uses strict=True: a network failure must raise (so it
+    is reported), not silently return the stale pinned fallback (which would show
+    a false 'up to date'). The INSTALL path (non-strict) still falls back."""
+    def boom(*a, **k):
+        raise OSError("offline")
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert registry.resolve_latest_patch("11") == registry._FALLBACK_PATCH["11"]  # lenient
+    with pytest.raises(Exception):
+        registry.resolve_latest_patch("11", strict=True)                          # strict
 
 
 def test_matrix_covers_all_lines_sorted():

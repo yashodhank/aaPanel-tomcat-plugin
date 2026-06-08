@@ -96,7 +96,9 @@ def check(force: bool = False, now: float = None) -> Dict:
             continue
         latest = None
         try:
-            latest = registry.resolve_latest_patch(major)
+            # strict: a network failure must surface as an error, not be masked
+            # as a confident "latest == installed" (which would show "up to date")
+            latest = registry.resolve_latest_patch(major, strict=True)
         except Exception as e:
             errors["tomcat-%s" % major] = str(e)
         tomcat_res[major] = {

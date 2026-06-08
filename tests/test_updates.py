@@ -81,6 +81,19 @@ def test_network_error_surfaces_not_crashes(tmp_path, monkeypatch):
     assert res["java"]["17"]["update"] is False
 
 
+def test_tomcat_network_error_surfaced_not_false_uptodate(tmp_path, monkeypatch):
+    """A Tomcat index fetch failure must record an error + latest=None + update=False
+    — never a confident 'up to date' (update=False with a real latest)."""
+    _patch_common(monkeypatch, tmp_path)
+    def boom(m, **k):
+        raise RuntimeError("offline")
+    monkeypatch.setattr(registry, "resolve_latest_patch", boom)
+    res = updates.check(force=True, now=1000.0)
+    assert "tomcat-11" in res["errors"]
+    assert res["tomcat"]["11"]["latest"] is None
+    assert res["tomcat"]["11"]["update"] is False
+
+
 def test_invalidate_removes_cache(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)
     updates.check(force=True, now=1000.0)
