@@ -333,6 +333,45 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    # ---- first-run setup wizard ---------------------------------------------
+    def GetFirstRunState(self, get=None):
+        """Lightweight signal for the onboarding wizard: is this a brand-new
+        install (no JDK, no Tomcat, no apps), is a site suffix unset, and has the
+        wizard already been completed/dismissed (so it doesn't auto-open again)."""
+        try:
+            jdks = java.detect()
+            toms = [m for m in registry.LINES if installer.is_installed(m)]
+            napps = len(instance.list_apps())
+            return panel.ok({
+                "is_fresh": (not jdks and not toms and napps == 0),
+                "needs_suffix": not config.site_suffix(),
+                "wizard_done": bool(config.get("wizard_done", False)),
+            })
+        except Exception as e:
+            return panel.err(str(e))
+
+    def MarkWizardDone(self, get=None):
+        """Record that the setup wizard was finished or dismissed (so it won't
+        auto-open on future loads). It can still be re-run from Help."""
+        try:
+            config.set("wizard_done", True)
+            return panel.ok({"wizard_done": True})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetSiteSuffix(self, get):
+        """Set (or clear) the default reverse-proxy domain suffix from the wizard
+        or Settings. Empty clears it; a non-empty value must be a valid domain."""
+        try:
+            val = str(panel.attr(get, "suffix", "") or "").strip().strip(".")
+            if val:
+                validate.domain(val)
+            config.set("site_suffix", val)
+            panel.log("SetSiteSuffix", val or "(cleared)")
+            return panel.ok({"site_suffix": val})
+        except Exception as e:
+            return panel.err(str(e))
+
     # ---- log management (rotation + purge) ----------------------------------
     def GetLogConfig(self, get=None):
         """Current rotation/purge settings plus live + rotated log disk usage."""

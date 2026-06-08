@@ -726,6 +726,13 @@
     <!-- ================== PAGE: HELP ================== -->
     <section class="jh-page" id="page-help" role="tabpanel" aria-labelledby="tab-help" tabindex="-1">
       <div class="jh-card">
+        <div class="jh-card-h">
+          <div><h3>Getting started</h3><p>A guided walkthrough for a fresh install</p></div>
+          <button class="jh-btn accent sm" id="jh-run-wizard" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-play"/></svg>Run setup wizard</button>
+        </div>
+        <div class="jh-hint">The setup wizard helps you set a domain suffix, install the recommended runtime (Java + Tomcat), and create your first app. It opens automatically on a brand-new install; run it again any time from here.</div>
+      </div>
+      <div class="jh-card">
         <div class="jh-card-h"><div><h3>Reverse-proxy hint</h3><p>Include snippet to front a managed app with the panel's web server</p></div></div>
         <div id="help-proxy"><div class="jh-loading">Loading…</div></div>
       </div>
@@ -4143,6 +4150,7 @@
     if(b.id === 'jh-open-sched'){ openScheduleModal(); return; }
     if(ds.schedDel){ removeSchedule(ds.schedDel, b); return; }
     // settings / danger zone
+    if(b.id === 'jh-run-wizard'){ openWizard(); return; }
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }
     if(b.id === 'jh-logcfg-save'){ saveLogConfig(b); return; }
     if(b.id === 'jh-logcfg-purge'){ purgeLogsNow(b); return; }
@@ -4227,9 +4235,110 @@
   });
 
   // =====================================================================
+  // FIRST-RUN SETUP WIZARD — 4-step guided onboarding (auto-opens once on a
+  // fresh install; re-runnable from Help). Steps swap the modal body/footer in
+  // place so focus-trap + return-focus keep working across steps.
+  // =====================================================================
+  var WIZ = { step:1, completed:false };
+  function markWizardDone(){ call('MarkWizardDone', {}, function(){}); }
+  function wizFooter(btns){ var f=$('jh-modal-foot'); if(!f) return; f.innerHTML=''; btns.forEach(function(b){ f.appendChild(b); }); }
+  function wizBody(html){ var b=$('jh-modal-body'); if(b) b.innerHTML = html; }
+  function wizSub(s){ var el=$('jh-modal-sub'); if(el) el.textContent = s; }
+  function openWizard(){
+    WIZ = { step:1, completed:false };
+    openModal({
+      title:'JavaHost setup', sub:'Step 1 of 4', large:true,
+      body:'<div class="jh-rows" id="wiz-body"></div>', footer:[],
+      onClose: function(){ if(!WIZ.completed) markWizardDone(); }  // dismissed: don't auto-reopen
+    });
+    wizGoto(1);
+  }
+  function wizGoto(step){
+    WIZ.step = step; wizSub('Step '+step+' of 4');
+    var d = STATE || {};
+    if(step === 1) wizWelcome(d);
+    else if(step === 2) wizDomain(d);
+    else if(step === 3) wizRuntime(d);
+    else wizFinish(d);
+    var nodes = modalFocusables(); if(nodes.length){ try{ nodes[0].focus(); }catch(_){} }
+  }
+  function wizWelcome(d){
+    wizBody('<p>Welcome! This gets you from a fresh install to a running Java app in a few steps:</p>'+
+      (d.service_dirs_locked
+        ? '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(d.hardening_hint ||
+            'Service directories are locked by system hardening — service registration may fail until it is lifted.')+'</div></div>'
+        : '')+
+      '<ul style="margin:var(--s2) 0 0;padding-left:var(--s5);color:var(--muted)">'+
+        '<li>Set a default domain suffix (optional)</li>'+
+        '<li>Install the recommended runtime</li>'+
+        '<li>Create your first application</li></ul>');
+    wizFooter([ mkBtn('Skip setup','ghost', function(){ closeModal(); }),
+                mkBtn('Next','accent', function(){ wizGoto(2); }) ]);
+  }
+  function wizDomain(d){
+    var cur = d.site_suffix || '';
+    wizBody('<p>Apps are reverse-proxied at <code>&lt;app&gt;.&lt;suffix&gt;</code>. Set a domain you control '+
+      '(e.g. <code>apps.example.com</code>), or skip and pass a domain per app later.</p>'+
+      '<div class="jh-field"><label for="wiz-suffix">Domain suffix (optional)</label>'+
+      '<input id="wiz-suffix" type="text" placeholder="apps.example.com" value="'+esc(cur)+'"></div>');
+    wizFooter([ mkBtn('Back','ghost', function(){ wizGoto(1); }),
+                mkBtn('Skip','ghost', function(){ wizGoto(3); }),
+                mkBtn('Save & continue','accent', function(b){ wizSaveSuffix(b); }) ]);
+  }
+  function wizSaveSuffix(btn){
+    var v = (($('wiz-suffix') && $('wiz-suffix').value) || '').trim();
+    if(!v){ wizGoto(3); return; }
+    busy(btn, true);
+    call('SetSiteSuffix', {suffix:v}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'invalid domain', 'err', 'Domain suffix'); return; }
+      if(STATE) STATE.site_suffix = (p && p.site_suffix) || '';
+      wizGoto(3);
+    });
+  }
+  function wizRuntime(d){
+    var rec = d.recommended || {java:17, tomcat:'11'};
+    var haveJava = !!(d.java && d.java[String(rec.java)]);
+    var haveTom = !!(d.tomcat && d.tomcat[String(rec.tomcat)]);
+    var done = haveJava && haveTom;
+    wizBody('<p>The recommended runtime for new apps is <b>Java '+esc(rec.java)+' + Tomcat '+esc(rec.tomcat)+'</b>.</p>'+
+      (done
+        ? '<div class="jh-alert info">'+ic('check')+'<div>Already installed — you’re ready.</div></div>'
+        : '<div class="jh-alert info">'+ic('info')+'<div>Installing Tomcat '+esc(rec.tomcat)+
+            ' also installs Java '+esc(rec.java)+' automatically. It runs in the background — follow it on the Activity tab.</div></div>')+
+      '<div id="wiz-rt-status" class="jh-hint" aria-live="polite"></div>');
+    var btns = [ mkBtn('Back','ghost', function(){ wizGoto(2); }) ];
+    if(!done) btns.push(mkBtn('Install recommended','accent', function(b){ wizInstallRuntime(rec, b); }, 'plus'));
+    btns.push(mkBtn('Next','ghost', function(){ wizGoto(4); }));
+    wizFooter(btns);
+  }
+  function wizInstallRuntime(rec, btn){
+    startJob('InstallTomcat', {version:String(rec.tomcat)}, 'Tomcat '+rec.tomcat+' install', btn);
+    var s = $('wiz-rt-status');
+    if(s) s.textContent = 'Installation started — track progress on the Activity tab. You can continue.';
+  }
+  function wizFinish(){
+    wizBody('<p>That’s the essentials. Next, create your first application — deploy a WAR or a Spring Boot '+
+      'JAR — and JavaHost scaffolds the instance, picks a compatible JDK, and starts it.</p>');
+    wizFooter([
+      mkBtn('Create first app','accent', function(){ WIZ.completed = true; markWizardDone(); closeModal(); showSection('apps'); }, 'plus'),
+      mkBtn('Finish','ghost', function(){ WIZ.completed = true; markWizardDone(); closeModal(); })
+    ]);
+  }
+  function maybeOpenWizard(){
+    call('GetFirstRunState', {}, function(r){
+      if(failed(r)) return;     // older build without the endpoint: no wizard
+      var p = payload(r) || {};
+      if(p.is_fresh && !p.wizard_done) openWizard();
+    });
+  }
+
+  // =====================================================================
   // BOOT
   // =====================================================================
   refresh();
+  maybeOpenWizard();
   loadDbSupport();
   // preload storage profiles so the per-app drawer's Back-up/Schedule destination
   // pickers are populated even before the Backups tab is opened (no secrets).
