@@ -1101,6 +1101,10 @@
         if(b.cls === 'danger') toast(errText(p.message || p.log) || (label+' failed'), 'err', label + ' failed');
         else toast(label + ' completed', 'ok');
         refresh();                       // re-run the runtimes/status refresh
+        // a runtime install/update/uninstall changes upstream-update status — the
+        // job server-side invalidated the cache; re-fetch so badges clear/update
+        // instead of going stale until the tab is reopened.
+        if(/\b(java|jdk|tomcat)\b/i.test(label || '')) checkRuntimeUpdates(false);
         if(activeSection === 'backups'){ refreshBackups(); refreshSchedules(); }   // a backup/restore/schedule job may have changed the lists
         if(DRAWER.app && $('jh-drawer-ov').classList.contains('open') && DRAWER.tab === 'backups') drawerBackups();
         if(activeSection === 'activity') refreshTasks();
@@ -2146,6 +2150,11 @@
         } else if(ut.update){
           updBtn = '<span class="jh-badge neutral" title="Latest: '+esc(ut.latest||'')+'">update available</span>'+
             '<button type="button" class="jh-btn accent sm" data-tc-update="'+esc(k)+'" title="Update to '+esc(ut.latest||'latest')+'">'+ic('refresh')+'Update</button>';
+        } else if(!ut.latest || (info && String(info.patch) === 'unknown')){
+          // couldn't determine the latest patch (network error) or the installed
+          // patch is unknown — don't claim "up to date"; keep the manual Update
+          // (re-resolve + reinstall) path available.
+          updBtn = '<button type="button" class="jh-btn ghost sm" data-tc-update="'+esc(k)+'" title="Re-resolve and reinstall the latest patch">'+ic('refresh')+'Update</button>';
         } else {
           updBtn = '<span class="jh-badge ok" title="Latest patch installed">up to date</span>';
         }
@@ -3771,6 +3780,7 @@
       // is wasted DOM work + an extra round-trip. Render lazily per active tab.
       if(activeSection === 'apps'){ APPS_SIG = appsSig(d.apps); renderApps(d.apps); }
       if(activeSection === 'apps' || activeSection === 'databases') renderDbPicker(d.apps);
+      maybeOpenWizard();           // STATE is populated now — the wizard reads it safely (once)
     });
     if(activeSection === 'dashboard') refreshDashboardOps();   // heavier aggregates, lazy
     if(activeSection === 'backups') refreshBackupsTab();
@@ -3860,15 +3870,20 @@
   // =====================================================================
   var TASKS = { timer:null, inflight:false };
   var TASKS_INTERVAL = 2000;
-  function renderTasks(jobs){
+  function renderTasks(jobs, skipped){
     JOBS = jobs || [];
+    skipped = skipped || 0;
     var tb = $('jh-tasks-body'); if(!tb) return;
+    var skipRow = skipped > 0
+      ? '<tr><td colspan="5" class="jh-muted" style="font-size:12px">'+ic('info')+
+        esc(skipped + ' unreadable task record(s) hidden')+'</td></tr>'
+      : '';
     if(!JOBS.length){
-      tb.innerHTML = '<tr><td colspan="5"><div class="jh-empty" style="padding:var(--s4)">'+ic('clock')+
+      tb.innerHTML = skipRow + '<tr><td colspan="5"><div class="jh-empty" style="padding:var(--s4)">'+ic('clock')+
         '<b>No background tasks</b><div>Installs, updates and uninstalls you start will appear here.</div></div></td></tr>';
       return;
     }
-    tb.innerHTML = JOBS.map(function(j){
+    tb.innerHTML = skipRow + JOBS.map(function(j){
       var b = jobStateBadge(j.state);
       var kind = j.kind != null ? j.kind : '—';
       var target = j.target != null ? j.target : '—';
@@ -3898,7 +3913,7 @@
           '<div>Background tasks are not available on this server build.</div></div></td></tr>';
         return;
       }
-      renderTasks((p && p.jobs) || []);
+      renderTasks((p && p.jobs) || [], (p && p.skipped) || 0);
       populateLogSources();
     });
   }
@@ -3914,7 +3929,7 @@
       if(activeSection !== 'activity') return;
       var p = payload(r);
       if(failed(r)) return;
-      renderTasks((p && p.jobs) || []);
+      renderTasks((p && p.jobs) || [], (p && p.skipped) || 0);
       // keep the task picker current while new jobs appear/finish
       populateLogSources();
     });
@@ -3931,6 +3946,7 @@
     var have = Array.prototype.some.call(sel.options, function(o){ return o.value === val; });
     if(!have) populateLogSources();
     sel.value = val;
+    LOGS.want = val;            // remember the explicit choice for auto-tail
     loadUnifiedLog();
     var pre = $('lg-pre');
     if(pre && pre.scrollIntoView) pre.scrollIntoView({block:'nearest'});
@@ -3954,7 +3970,7 @@
       busy(btn, false);
       if(failed(r)){ toast(errText(payload(r)) || 'could not cancel', 'err', (label||'task')+' — cancel failed'); }
       else toast((label || 'Task') + ' cancelled', 'ok');
-      refreshTasks();
+      refreshTasks(); focusTasksRefresh();   // the cancelled row's button is gone — don't drop focus to <body>
     });
   }
   function retryJob(jid, label, btn){
@@ -3965,7 +3981,7 @@
       if(failed(r) || !(p && p.job_id)){ toast(errText(p) || 'could not retry', 'err', (label||'task')+' — retry failed'); return; }
       toast('Retrying ' + (label || 'task'), 'ok');
       trackJob(p.job_id, label || 'task');
-      refreshTasks();
+      refreshTasks(); focusTasksRefresh();
     });
   }
   function clearFinishedJobs(btn){
@@ -3975,14 +3991,19 @@
       var p = payload(r);
       if(failed(r)){ toast(errText(p) || 'could not clear', 'err', 'Clear failed'); return; }
       toast('Cleared ' + ((p && p.removed) || 0) + ' finished task(s)', 'ok');
-      refreshTasks();
+      refreshTasks(); focusTasksRefresh();
     });
+  }
+  function focusTasksRefresh(){
+    // the Refresh button lives in the card header (not re-rendered by renderTasks),
+    // so it's a stable focus target after the table body is rebuilt.
+    var rb = $('jh-tasks-refresh'); if(rb){ try { rb.focus(); } catch(_){} }
   }
 
   // =====================================================================
   // LOGS SECTION — unified viewer over app logs (GetLogs) + task logs (GetJobLog)
   // =====================================================================
-  var LOGS = { timer:null };
+  var LOGS = { timer:null, want:null };   // `want` = the source the operator explicitly chose to tail
   // populate the source picker from the current apps + jobs lists
   function populateLogSources(){
     var sel = $('lg-source'); if(!sel) return;
@@ -4005,14 +4026,11 @@
     // sync the auto-tail checkbox to the actual timer state on (re)entry
     var auto = $('lg-auto');
     if(auto) auto.checked = !!(LOGS && LOGS.timer);
-    // pull fresh jobs so the task picker is current, then populate + load
-    call('GetJobs', {}, function(r){
-      if(activeSection !== 'activity') return;
-      var p = payload(r);
-      if(!failed(r)) JOBS = (p && p.jobs) || [];
-      populateLogSources();
-      loadUnifiedLog();
-    });
+    // refreshTasks() (called alongside this on Activity entry) already fetches
+    // GetJobs and repopulates the source picker — reuse that instead of a second
+    // GetJobs round-trip. Just populate from the current JOBS/STATE and load.
+    populateLogSources();
+    loadUnifiedLog();
   }
   function loadUnifiedLog(btn){
     var sel = $('lg-source'), pre = $('lg-pre'); if(!sel || !pre) return;
@@ -4035,19 +4053,21 @@
   }
   function logsAutoTick(){
     if(document.hidden || activeSection !== 'activity') return;
-    // if the auto-tailed source has vanished (app deleted / job pruned), stop
-    // the timer, uncheck the toggle, and tell the operator instead of silently
-    // tailing nothing.
+    // Stop+notify if the EXPLICITLY-chosen source has vanished (app deleted / job
+    // pruned). Track the intended value (LOGS.want) rather than trusting the
+    // <select>, which silently falls back to another option when its current one
+    // is removed — that fallback would otherwise tail the wrong log unnoticed.
     var sel = $('lg-source');
-    var v = sel && sel.value;
-    var present = !!v && Array.prototype.some.call((sel && sel.options) || [],
-      function(o){ return o.value === v && !o.disabled; });
+    var want = LOGS.want || (sel && sel.value);
+    var present = !!want && Array.prototype.some.call((sel && sel.options) || [],
+      function(o){ return o.value === want && !o.disabled; });
     if(!present){
       stopLogsAuto();
       var auto = $('lg-auto'); if(auto) auto.checked = false;
       toast('Auto-tail stopped — log source is no longer available', 'err');
       return;
     }
+    if(sel && sel.value !== want) sel.value = want;   // restore if it fell back
     loadUnifiedLog();
   }
   function startLogsAuto(){ stopLogsAuto(); LOGS.timer = setInterval(logsAutoTick, JOB_POLL); }
@@ -4215,8 +4235,8 @@
     // danger-zone category checkboxes -> re-evaluate the Run button
     if(t.getAttribute && t.getAttribute('data-wipe-cat') != null){ updateWipeRunState(); return; }
     if(!t.id) return;
-    if(t.id === 'lg-source' || t.id === 'lg-lines'){ loadUnifiedLog(); return; }
-    if(t.id === 'lg-auto'){ if(t.checked){ startLogsAuto(); loadUnifiedLog(); } else stopLogsAuto(); return; }
+    if(t.id === 'lg-source' || t.id === 'lg-lines'){ if(t.id === 'lg-source') LOGS.want = t.value; loadUnifiedLog(); return; }
+    if(t.id === 'lg-auto'){ if(t.checked){ LOGS.want = ($('lg-source')||{}).value || null; startLogsAuto(); loadUnifiedLog(); } else stopLogsAuto(); return; }
   });
   // typed-confirm input ("WIPE") gates the destructive Run button live
   $('jh-root').addEventListener('input', function(e){
@@ -4326,7 +4346,10 @@
       mkBtn('Finish','ghost', function(){ WIZ.completed = true; markWizardDone(); closeModal(); })
     ]);
   }
+  var WIZARD_CHECKED = false;
   function maybeOpenWizard(){
+    if(WIZARD_CHECKED) return;     // auto-open at most once per page load
+    WIZARD_CHECKED = true;
     call('GetFirstRunState', {}, function(r){
       if(failed(r)) return;     // older build without the endpoint: no wizard
       var p = payload(r) || {};
@@ -4337,8 +4360,7 @@
   // =====================================================================
   // BOOT
   // =====================================================================
-  refresh();
-  maybeOpenWizard();
+  refresh();   // its GetStatus success calls maybeOpenWizard() once STATE is set
   loadDbSupport();
   // preload storage profiles so the per-app drawer's Back-up/Schedule destination
   // pickers are populated even before the Backups tab is opened (no secrets).
