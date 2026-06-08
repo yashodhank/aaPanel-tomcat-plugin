@@ -72,6 +72,10 @@ class javahost_main(object):
                 "apps": instance.list_apps(),
                 "systemd": service.have_systemd(),
                 "supported_tomcat": sorted(registry.LINES),
+                # Full Tomcat↔Java matrix + recommended pairing for beginner
+                # guidance in the Runtimes tab (covers lines that aren't installed).
+                "tomcat_lines": registry.matrix(),
+                "recommended": registry.recommended(),
                 "service_dirs_locked": hardening_locked,
                 "hardening_hint": (
                     "Service directories are immutable (likely aaPanel 'System "
