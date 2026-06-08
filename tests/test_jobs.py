@@ -153,6 +153,21 @@ def test_cancel_running_job(tmp_path, monkeypatch):
         os.killpg(os.getpgid(int(meta["pid"])), 0)
 
 
+def test_cancel_escalates_to_sigkill(tmp_path, monkeypatch):
+    """Work that IGNORES SIGTERM must still be killed (SIGKILL escalation) — the
+    recorded 'cancelled' state must mean the process is actually gone."""
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    job_id = jobs.start("test", "stubborn", [jobs.sys.executable or "python3", "-c", code])
+    meta = _wait_running_with_pid(job_id)
+    pid = int(meta["pid"])
+    res = jobs.cancel(job_id)            # SIGTERM ignored -> escalates to SIGKILL
+    assert res["state"] == "cancelled"
+    time.sleep(0.3)
+    with pytest.raises((ProcessLookupError, OSError)):
+        os.killpg(os.getpgid(pid), 0)    # process group is gone
+
+
 def test_cancel_finished_job_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
     job_id = jobs.start("test", "x", [jobs.sys.executable or "python3", "-c", "print(1)"])
