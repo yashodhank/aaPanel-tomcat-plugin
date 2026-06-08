@@ -47,6 +47,25 @@ def get_line(major: str) -> TomcatLine:
     return LINES[major]
 
 
+def matrix():
+    """Full Tomcat↔Java compatibility matrix (all lines, installed or not) for the
+    UI's beginner guidance. Sorted by major ascending."""
+    return [
+        {"major": L.major, "line": L.line, "min_java": L.min_java,
+         "namespace": L.namespace, "legacy": L.legacy}
+        for _, L in sorted(LINES.items(), key=lambda kv: int(kv[0]))
+    ]
+
+
+def recommended():
+    """Recommended pairing for a brand-new app: the newest NON-legacy Tomcat line
+    and the Java major it requires (today: Tomcat 11 + Java 17). Derived from the
+    matrix, not hardcoded, so it tracks future lines."""
+    modern = [L for L in LINES.values() if not L.legacy]
+    best = max(modern, key=lambda L: int(L.major)) if modern else LINES["11"]
+    return {"java": best.min_java, "tomcat": best.major, "line": best.line}
+
+
 def resolve_latest_patch(major: str, *, timeout: int = 20) -> str:
     """Return newest X.Y.Z for the given major's line, from the live index."""
     line = get_line(major)
