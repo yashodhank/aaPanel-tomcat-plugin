@@ -105,13 +105,11 @@ _ADOPTIUM_API = "https://api.adoptium.net/v3"
 _UA = "JavaHost/1.0 (+https://github.com/yashodhank/aaPanel-tomcat-plugin)"
 
 
-def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
-    """Download + verify + extract Temurin JDK <major>. Returns JAVA_HOME."""
-    if major not in (17, 21, 11, 8):
-        raise ValueError("unsupported JDK major to install: %s" % major)
+def _latest_asset(major: int, arch: str = "x64", os_name: str = "linux") -> Dict:
+    """Adoptium's latest Temurin JDK asset metadata for a major (dict). Raises on
+    empty/HTTP error. Shared by install + update-check so they agree on 'latest'."""
     import json as _json
     import urllib.request
-
     api = ("%s/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=%s"
            % (_ADOPTIUM_API, major, arch, os_name))
     req = urllib.request.Request(api, headers={"User-Agent": _UA})
@@ -119,7 +117,66 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
         assets = _json.load(r)
     if not assets:
         raise RuntimeError("Adoptium returned no JDK %d asset" % major)
-    pkg = assets[0]["binary"]["package"]
+    return assets[0]
+
+
+def _asset_semver(asset: Dict) -> Optional[str]:
+    ver = asset.get("version") or {}
+    return ver.get("semver") or ver.get("openjdk_version") or asset.get("release_name")
+
+
+def resolve_latest_jdk(major: int, *, arch: str = "x64", os_name: str = "linux") -> Optional[str]:
+    """Latest upstream Temurin semver for a major (e.g. '17.0.11+9'), or None."""
+    return _asset_semver(_latest_asset(int(major), arch, os_name))
+
+
+def _version_marker(dest: str) -> str:
+    return os.path.join(dest, ".javahost-jdk-version")
+
+
+def installed_jdk_version(major: int) -> Optional[str]:
+    """Recorded semver of a plugin-managed JDK (from its install marker), or None
+    for JDKs installed before markers existed / not plugin-managed."""
+    dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % int(major))
+    try:
+        with open(_version_marker(dest), encoding="utf-8") as f:
+            v = f.read().strip()
+        return v or None
+    except OSError:
+        return None
+
+
+def plugin_majors() -> List[int]:
+    """Majors the plugin manages under runtimes/ (the only ones it can update)."""
+    out = []
+    if os.path.isdir(_PLUGIN_RUNTIMES):
+        for name in os.listdir(_PLUGIN_RUNTIMES):
+            m = re.match(r"jdk-(\d+)$", name)
+            if m and os.path.isdir(os.path.join(_PLUGIN_RUNTIMES, name)):
+                out.append(int(m.group(1)))
+    return sorted(out)
+
+
+def version_newer(latest: str, installed: str) -> bool:
+    """True if `latest` is a newer JDK semver than `installed`. Unknown/None
+    inputs are treated conservatively as 'no update' (False)."""
+    if not latest or not installed:
+        return False
+    def _t(s):
+        nums = re.findall(r"\d+", str(s))
+        return tuple(int(n) for n in nums[:4]) if nums else ()
+    a, b = _t(latest), _t(installed)
+    return bool(a) and bool(b) and a > b
+
+
+def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
+    """Download + verify + extract Temurin JDK <major>. Returns JAVA_HOME."""
+    if major not in (17, 21, 11, 8):
+        raise ValueError("unsupported JDK major to install: %s" % major)
+
+    asset = _latest_asset(major, arch, os_name)
+    semver = _asset_semver(asset)
+    pkg = asset["binary"]["package"]
     url = pkg["link"]
     sha = pkg.get("checksum")  # Adoptium provides sha256; we also accept .sha256.txt
     if not sha:
@@ -139,6 +196,11 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
         fs.ensure_dir(dest)
         shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", dest])
         fs.mark_managed(dest)
+        if semver:
+            try:
+                fs.atomic_write(_version_marker(dest), semver + "\n", 0o644)
+            except OSError:
+                pass
     finally:
         # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
         # directly: safe_rmtree only permits MANAGED_ROOTS and would refuse /tmp.

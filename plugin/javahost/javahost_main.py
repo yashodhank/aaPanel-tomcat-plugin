@@ -32,6 +32,7 @@ from core import jobs                            # noqa: E402
 from core import config                          # noqa: E402
 from core import maintenance                      # noqa: E402
 from core import logrotate                         # noqa: E402
+from core import updates                           # noqa: E402
 from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
@@ -234,6 +235,48 @@ class javahost_main(object):
                 "installer.uninstall(%r)\n" % major)
             job_id = jobs.start("uninstall-tomcat", major, argv)
             panel.log("StartUninstallTomcat", "tomcat %s -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    # ---- upstream-update detection (JDK + Tomcat) ---------------------------
+    def GetRuntimeUpdates(self, get=None):
+        """Compare managed JDKs + installed Tomcats to the latest upstream
+        versions. Cached (24h TTL) unless ?force=1 (the 'Check for updates'
+        button)."""
+        try:
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            return panel.ok(updates.check(force=force))
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartUpdateJava(self, get):
+        """Reinstall a managed JDK major to the latest Temurin build (async). Apps
+        reference runtimes/jdk-<major> by path, so the path is unchanged."""
+        try:
+            major = validate.java_major(panel.attr(get, "version"))
+            argv = jobs.python_work(
+                "from core.runtime import java\n"
+                "from core import updates\n"
+                "java.install_temurin(%d)\n"
+                "updates.invalidate()\n" % major)
+            job_id = jobs.start("update-java", major, argv)
+            panel.log("StartUpdateJava", "jdk %d -> job %s" % (major, job_id))
+            return panel.ok({"job_id": job_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def StartUpdateTomcat(self, get):
+        """Update a Tomcat major to the latest patch (async, atomic + rollback)."""
+        try:
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            argv = jobs.python_work(
+                "from core.tomcat import installer\n"
+                "from core import updates\n"
+                "installer.install(%r)\n"
+                "updates.invalidate()\n" % major)
+            job_id = jobs.start("update-tomcat", major, argv)
+            panel.log("StartUpdateTomcat", "tomcat %s -> job %s" % (major, job_id))
             return panel.ok({"job_id": job_id})
         except Exception as e:
             return panel.err(str(e))
