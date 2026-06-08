@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.24.0] — 2026-06-08
+
+### Added (Runtimes — upstream-update detection)
+- **JDKs now have an Update path** (parity with Tomcat). JavaHost records each
+  Temurin build at install (`.javahost-jdk-version`) and compares it to the latest
+  Adoptium build; an **"update available"** badge + **Update** button appear only
+  when newer. `StartUpdateJava` reinstalls the major in place (apps reference the
+  path, so it's unchanged).
+- **`GetRuntimeUpdates`** compares every managed JDK and installed Tomcat to the
+  latest upstream version, **cached ~24h** (TTL) so the Runtimes tab is instant; a
+  **Check for updates** button forces a fresh query. Live fetch errors surface in
+  `errors` instead of silently falling back.
+- The **Tomcat Update** button is now gated to **only-when-newer** (shows "up to
+  date" otherwise) instead of always offering an update. Added async
+  `StartUpdateTomcat`.
+
 ## [0.23.0] — 2026-06-08
 
 ### Added (Settings — log management)
