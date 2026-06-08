@@ -312,6 +312,21 @@ def prune(keep: int = 50) -> int:
     return removed
 
 
+def _pid_is_supervisor(pid, jdir: str) -> bool:
+    """Best-effort check that `pid` is still THIS job's supervisor (guards pid
+    reuse before we signal its process group). Reads /proc/<pid>/cmdline and
+    confirms it is our `jobs.py exec <jdir>` invocation. Where /proc isn't
+    available (e.g. macOS) we can't verify, so return True — same exposure as
+    before the check, and the surrounding kill calls already tolerate failures."""
+    try:
+        with open("/proc/%d/cmdline" % int(pid), "rb") as f:
+            cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+    except OSError:
+        return True  # no /proc, or pid already gone — don't block on it
+    real = os.path.realpath(jdir)
+    return ("jobs.py" in cmd and " exec " in (" " + cmd + " ") and real in cmd)
+
+
 def cancel(job_id: str) -> Dict:
     """Stop a running job. The supervisor is a session/process-group leader
     (setsid), so killpg() reaps both it and the work it spawned. We then finalize
@@ -329,6 +344,12 @@ def cancel(job_id: str) -> Dict:
         pgid = os.getpgid(int(pid))
     except (ProcessLookupError, OSError):
         pgid = None  # supervisor already exited; just finalize meta below
+    # Guard pid reuse: the recorded pid may have been recycled to an UNRELATED
+    # process since the job ended. Escalating to SIGKILL against a stranger's
+    # group would be destructive, so verify the pid is still THIS job's
+    # supervisor before signaling. Best-effort (skipped where /proc is absent).
+    if pgid is not None and not _pid_is_supervisor(pid, jdir):
+        pgid = None
     if pgid is not None:
         # graceful first, then ESCALATE to SIGKILL so work that ignores/blocks
         # SIGTERM can't keep running while meta says "cancelled".
@@ -341,9 +362,11 @@ def cancel(job_id: str) -> Dict:
         while time.time() < deadline:
             try:
                 os.killpg(pgid, 0)
-            except OSError:
-                alive = False
+            except ProcessLookupError:
+                alive = False  # group is gone
                 break
+            except OSError:
+                break  # can't probe (e.g. EPERM) — stop waiting, still try SIGKILL
             time.sleep(0.1)
         if alive:
             try:
