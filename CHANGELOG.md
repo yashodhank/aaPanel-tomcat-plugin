@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.26.0] — 2026-06-08
+
+### Added (first-run setup wizard)
+- A **4-step onboarding wizard** that auto-opens once on a brand-new install
+  (no JDK / Tomcat / apps): welcome (+ hardening warning) → optional domain suffix
+  → install the recommended runtime (Java 17 + Tomcat 11, background job) → create
+  your first app. Focus-trapped, steps swap in place. Dismiss or finish records a
+  flag so it never auto-reopens; **re-run from Help → Run setup wizard**.
+- Endpoints `GetFirstRunState`, `MarkWizardDone`, `SetSiteSuffix` (validates the
+  domain; empty clears it).
+
 ## [0.25.0] — 2026-06-08
 
 ### Added (Runtimes — beginner compatibility guidance)
