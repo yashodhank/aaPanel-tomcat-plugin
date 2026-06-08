@@ -679,7 +679,10 @@
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Background tasks</h3><p>Asynchronous installs, updates &amp; uninstalls — select a row to view its log</p></div>
-          <button class="jh-btn ghost sm" id="jh-tasks-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+          <div style="display:flex;gap:var(--s2)">
+            <button class="jh-btn ghost sm" id="jh-tasks-clear" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-trash"/></svg>Clear finished</button>
+            <button class="jh-btn ghost sm" id="jh-tasks-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+          </div>
         </div>
         <div class="jh-table-wrap">
           <table>
@@ -3686,12 +3689,18 @@
       var b = jobStateBadge(j.state);
       var kind = j.kind != null ? j.kind : '—';
       var target = j.target != null ? j.target : '—';
+      var st = (j.state == null ? '' : String(j.state)).toLowerCase();
+      var actions = '<button type="button" class="jh-btn ghost sm" data-joblog="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('doc')+'View log</button>';
+      if(jobIsRunning(j.state))
+        actions += ' <button type="button" class="jh-btn ghost sm danger" data-jobcancel="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('x')+'Cancel</button>';
+      else if(st === 'failed' || st === 'cancelled' || st === 'canceled')
+        actions += ' <button type="button" class="jh-btn ghost sm" data-jobretry="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('refresh')+'Retry</button>';
       return '<tr>'+
         '<td><div class="app-name">'+esc(kind)+'</div></td>'+
         '<td>'+esc(target)+'</td>'+
         '<td><span class="jh-badge '+b.cls+'"><span class="jh-dot"></span>'+esc(b.label)+'</span></td>'+
         '<td class="jh-muted">'+esc(fmtElapsed(j.started, j.ended))+'</td>'+
-        '<td><button type="button" class="jh-btn ghost sm" data-joblog="'+esc(j.id)+'" data-joblabel="'+esc(kind+' '+target)+'">'+ic('doc')+'View log</button></td>'+
+        '<td>'+actions+'</td>'+
       '</tr>';
     }).join('');
   }
@@ -3707,6 +3716,7 @@
         return;
       }
       renderTasks((p && p.jobs) || []);
+      populateLogSources();
     });
   }
   function tasksTick(){
@@ -3741,6 +3751,49 @@
     loadUnifiedLog();
     var pre = $('lg-pre');
     if(pre && pre.scrollIntoView) pre.scrollIntoView({block:'nearest'});
+  }
+  // --- job control: cancel / retry / clear -----------------------------------
+  function confirmCancelJob(jid, label, btn){
+    openModal({
+      title:'Cancel task', sub:label || jid, returnFocus: btn,
+      body:'<div class="jh-alert danger" role="alert">'+ic('warn')+
+        '<div>This stops the running task and the process it spawned. A partially '+
+        'completed install may need to be re-run.</div></div>',
+      footer: [
+        mkBtn('Keep running', 'ghost', closeModal),
+        mkBtn('Cancel task', 'danger', function(){ closeModal(); cancelJob(jid, label, btn); }, 'x')
+      ]
+    });
+  }
+  function cancelJob(jid, label, btn){
+    busy(btn, true);
+    call('CancelJob', {job_id: jid}, function(r){
+      busy(btn, false);
+      if(failed(r)){ toast(errText(payload(r)) || 'could not cancel', 'err', (label||'task')+' — cancel failed'); }
+      else toast((label || 'Task') + ' cancelled', 'ok');
+      refreshTasks();
+    });
+  }
+  function retryJob(jid, label, btn){
+    busy(btn, true);
+    call('RetryJob', {job_id: jid}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r) || !(p && p.job_id)){ toast(errText(p) || 'could not retry', 'err', (label||'task')+' — retry failed'); return; }
+      toast('Retrying ' + (label || 'task'), 'ok');
+      trackJob(p.job_id, label || 'task');
+      refreshTasks();
+    });
+  }
+  function clearFinishedJobs(btn){
+    busy(btn, true);
+    call('ClearJobs', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'could not clear', 'err', 'Clear failed'); return; }
+      toast('Cleared ' + ((p && p.removed) || 0) + ' finished task(s)', 'ok');
+      refreshTasks();
+    });
   }
 
   // =====================================================================
@@ -3910,9 +3963,12 @@
     if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
     if(b.id === 'jh-wipe-run'){ runWipe(b); return; }
 
-    // tasks / logs sections
+    // activity section (tasks + logs)
     if(b.id === 'jh-tasks-refresh'){ refreshTasks(b); return; }
+    if(b.id === 'jh-tasks-clear'){ clearFinishedJobs(b); return; }
     if(ds.joblog){ viewTaskLog(ds.joblog); return; }
+    if(ds.jobcancel){ confirmCancelJob(ds.jobcancel, ds.joblabel, b); return; }
+    if(ds.jobretry){ retryJob(ds.jobretry, ds.joblabel, b); return; }
     if(b.id === 'jh-logs-refresh'){ loadUnifiedLog(b); return; }
 
     // reverse-proxy setup for an app with no domain yet
