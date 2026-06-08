@@ -39,6 +39,15 @@ The panel loads `index.html` and immediately calls `GetStatus` to populate the
 `POST /plugin?action=a&name=javahost&s=<Method>`; responses use the standard
 `{status, msg}` envelope.
 
+### First-run setup wizard
+
+On a **brand-new install** (no JDK, no Tomcat, no apps), a 4-step **setup wizard**
+opens automatically: welcome (with a hardening warning if relevant) → set an
+optional domain suffix → install the recommended runtime (Java 17 + Tomcat 11) →
+create your first app. It opens only once; dismissing or finishing it sets a flag
+(`MarkWizardDone`) so it won't reappear. Re-run it any time from **Help → Run
+setup wizard**. Backed by `GetFirstRunState` / `SetSiteSuffix`.
+
 ### The Dashboard
 
 ![Dashboard](images/dashboard.png)
