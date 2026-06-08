@@ -60,6 +60,15 @@ make lint      # shellcheck plugin/javahost/*.sh + py_compile
 ```
 Add a unit test for any new pure logic (parsers, URL builders, validators, templating, zip-slip). Tests must not hit the network or a real panel.
 
+## Shipping & the PR gate (non-negotiable)
+Ship a body of work as **focused, cherry-pickable PRs** (one feature each, its own
+minor release). **Every PR gets an adversarial code review before it merges** —
+`/code-review high` for one, or the `javahost-parallel-review` fleet for many —
+and every confirmed `medium`+ finding is fixed or explicitly accepted with a
+reason. A green CI is necessary but **not sufficient**. Full runbook (branch,
+concern-split commits, verify, review, live-verify, merge, tag, rollback):
+**`javahost-pr-workflow` skill**.
+
 ## Deploy to a panel (your own box only)
 ```bash
 make deploy VPS_HOST=root@<host>     # rsync plugin/javahost + restart panel
