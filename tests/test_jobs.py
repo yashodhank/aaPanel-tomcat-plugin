@@ -123,6 +123,70 @@ def test_python_work_builds_argv_with_plugin_on_path(tmp_path, monkeypatch):
     assert "ok-from-work" in rec["log"]
 
 
+def _wait_running_with_pid(job_id, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            meta = jobs.list_jobs()[0]
+        except IndexError:
+            meta = {}
+        if meta.get("state") == "running" and meta.get("pid"):
+            return meta
+        time.sleep(0.05)
+    return jobs.list_jobs()[0] if jobs.list_jobs() else {}
+
+
+def test_cancel_running_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    sleeper = [jobs.sys.executable or "python3", "-c", "import time; time.sleep(60)"]
+    job_id = jobs.start("test", "sleep", sleeper)
+    meta = _wait_running_with_pid(job_id)
+    assert meta.get("state") == "running" and meta.get("pid")
+    res = jobs.cancel(job_id)
+    assert res["state"] == "cancelled"
+    rec = jobs.read_log(job_id)
+    assert rec["state"] == "cancelled"
+    assert "cancelled" in rec["message"]
+    # the supervisor's process group is gone
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(os.getpgid(int(meta["pid"])), 0)
+
+
+def test_cancel_finished_job_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    job_id = jobs.start("test", "x", [jobs.sys.executable or "python3", "-c", "print(1)"])
+    _wait_done(job_id)
+    with pytest.raises(ValueError):
+        jobs.cancel(job_id)
+
+
+def test_retry_reruns_recorded_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    job_id = jobs.start("test", "r", [jobs.sys.executable or "python3", "-c", "print('again-please')"])
+    _wait_done(job_id)
+    new_id = jobs.retry(job_id)
+    assert new_id != job_id
+    rec = _wait_done(new_id)
+    assert rec["state"] == "done"
+    assert "again-please" in rec["log"]
+    new_meta = [m for m in jobs.list_jobs() if m["id"] == new_id][0]
+    assert new_meta["kind"] == "test" and new_meta["target"] == "r"
+
+
+def test_clear_removes_finished_keeps_running(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
+    done_id = jobs.start("test", "d", [jobs.sys.executable or "python3", "-c", "print(1)"])
+    _wait_done(done_id)
+    run_id = jobs.start("test", "s", [jobs.sys.executable or "python3", "-c", "import time; time.sleep(60)"])
+    _wait_running_with_pid(run_id)
+    removed = jobs.clear()
+    assert removed == 1
+    ids = [m["id"] for m in jobs.list_jobs()]
+    assert run_id in ids and done_id not in ids
+    jobs.cancel(run_id)  # don't leak the sleeper
+
+
 def test_prune_keeps_newest(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
     for i in range(4):

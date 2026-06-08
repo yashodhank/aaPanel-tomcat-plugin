@@ -506,6 +506,12 @@ auto-polled) and `GetJobLog` (one job's output). Only treat an install as failed
 when its task shows **failed**. A *running* job that hasn't printed yet shows
 **"Running — waiting for output…"** (never a blank pane).
 
+Each row also offers job control: **Cancel** a running task (`CancelJob` — stops
+the supervisor and the work it spawned, after a confirm), **Retry** a
+failed/cancelled task (`RetryJob` — reruns the exact recorded command), and a
+header **Clear finished** button (`ClearJobs`) that removes all done/failed/
+cancelled records while keeping running ones.
+
 ![Background tasks](images/tasks.png)
 
 ### Log viewer

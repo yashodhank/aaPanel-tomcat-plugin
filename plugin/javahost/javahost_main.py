@@ -257,6 +257,34 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def CancelJob(self, get):
+        """Terminate a running background job (killpg the supervisor group)."""
+        try:
+            job_id = panel.attr(get, "job_id")
+            res = jobs.cancel(job_id)
+            panel.log("CancelJob", str(job_id))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RetryJob(self, get):
+        """Re-run a finished job from its recorded kind/target/command."""
+        try:
+            new_id = jobs.retry(panel.attr(get, "job_id"))
+            panel.log("RetryJob", new_id)
+            return panel.ok({"job_id": new_id})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def ClearJobs(self, get=None):
+        """Remove all finished (done/failed/cancelled) task records."""
+        try:
+            removed = jobs.clear()
+            panel.log("ClearJobs", "removed=%d" % removed)
+            return panel.ok({"removed": removed})
+        except Exception as e:
+            return panel.err(str(e))
+
     # ---- reverse-proxy sites ------------------------------------------------
     def SetSite(self, get):
         """Publish <app> at <domain> reverse-proxied to its loopback port. The

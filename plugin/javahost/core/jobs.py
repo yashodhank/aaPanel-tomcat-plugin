@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -44,7 +45,7 @@ JOBS_ROOT = "/www/server/javahost/jobs"
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-_VALID_STATES = ("running", "done", "failed")
+_VALID_STATES = ("running", "done", "failed", "cancelled")
 
 
 # --------------------------------------------------------------------------- #
@@ -80,6 +81,22 @@ def _meta_path(jdir: str) -> str:
 
 def _log_path(jdir: str) -> str:
     return os.path.join(jdir, "output.log")
+
+
+def _argv_path(jdir: str) -> str:
+    return os.path.join(jdir, "argv.json")
+
+
+def _read_argv(jdir: str) -> Optional[List[str]]:
+    """The original command, recorded at start() so a failed job can be retried
+    without the panel having to reconstruct it. Kept out of meta.json so the
+    (UI-facing) job list stays small."""
+    try:
+        with open(_argv_path(jdir), encoding="utf-8") as f:
+            data = json.load(f)
+        return [str(a) for a in data] if isinstance(data, list) and data else None
+    except Exception:
+        return None
 
 
 def _read_meta(jdir: str) -> Dict:
@@ -138,6 +155,12 @@ def start(kind: str, target, argv: Sequence[str]) -> str:
         "message": "",
         "pid": None,
     })
+    # record the command so a failed/cancelled job can be retried verbatim
+    try:
+        with open(_argv_path(jdir), "w", encoding="utf-8") as f:
+            json.dump(argv, f)
+    except OSError:
+        pass
     # touch the log so read_log works before the child opens it
     open(_log_path(jdir), "a").close()
     _spawn_detached(jdir, argv)
@@ -277,6 +300,61 @@ def prune(keep: int = 50) -> int:
     metas = list_jobs(limit=10 ** 9)
     removed = 0
     for meta in metas[max(0, int(keep)):]:
+        try:
+            jdir = job_dir(meta.get("id", ""))
+        except ValueError:
+            continue
+        try:
+            shutil.rmtree(jdir)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def cancel(job_id: str) -> Dict:
+    """Stop a running job. The supervisor is a session/process-group leader
+    (setsid), so killpg() reaps both it and the work it spawned. We then finalize
+    meta as 'cancelled' (the killed supervisor can no longer write it itself).
+    Idempotent-ish: raises only if the job isn't running."""
+    jdir = job_dir(job_id)
+    meta = _read_meta(jdir)
+    state = (meta.get("state") or "").lower()
+    if state != "running":
+        raise ValueError("job is not running (state=%s)" % (state or "unknown"))
+    pid = meta.get("pid")
+    if not pid:
+        raise ValueError("job is still starting; try again in a moment")
+    try:
+        os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass  # already gone — still record the operator's intent below
+    meta["state"] = "cancelled"
+    meta["ended"] = time.time()
+    meta["message"] = "cancelled by operator"
+    _write_meta(jdir, meta)
+    return {"id": _validate_job_id(job_id), "state": "cancelled"}
+
+
+def retry(job_id: str) -> str:
+    """Start a fresh job from a previous one's recorded kind/target/argv.
+    Returns the new job_id. Raises if the original command wasn't recorded."""
+    jdir = job_dir(job_id)
+    meta = _read_meta(jdir)
+    argv = _read_argv(jdir)
+    if not argv:
+        raise ValueError("cannot retry: no recorded command for this job")
+    return start(meta.get("kind") or "job", meta.get("target"), argv)
+
+
+def clear() -> int:
+    """Remove every finished (done/failed/cancelled) job dir; keep running ones.
+    Returns the count removed."""
+    import shutil
+    removed = 0
+    for meta in list_jobs(limit=10 ** 9):
+        if (meta.get("state") or "").lower() == "running":
+            continue
         try:
             jdir = job_dir(meta.get("id", ""))
         except ValueError:

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.22.0] — 2026-06-08
+
+### Added (Activity — job control)
+- **Cancel** a running task. The supervisor runs in its own session/process
+  group (`setsid`), so cancelling `killpg`s the supervisor *and* the work it
+  spawned, then records the task as **cancelled** (`CancelJob`). Confirmed first.
+- **Retry** a failed/cancelled task. The original command is recorded at start
+  (`argv.json`, kept out of the job list payload) so the rerun is verbatim
+  (`RetryJob`).
+- **Clear finished** removes all done/failed/cancelled task records in one click,
+  keeping running ones (`ClearJobs`).
+
 ## [0.21.0] — 2026-06-08
 
 ### Changed (Tasks + Logs merged into one **Activity** tab)
