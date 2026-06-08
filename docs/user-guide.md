@@ -91,6 +91,11 @@ each row has **Install**, **Reinstall**, and **Uninstall** actions.
   `/www/server/javahost/runtimes/jdk-<major>`. Watch it finish in
   [Activity](#9-activity-tasks--logs).
 - **Reinstall** → `StartReinstallJava` (async) reinstalls the same major.
+- **Update** → `StartUpdateJava` (async) — shown only when a newer Temurin build
+  is available upstream. JavaHost records each JDK's build at install time and
+  compares it to the latest Adoptium build; an **"update available"** badge then
+  appears. Apps reference `runtimes/jdk-<major>` by path, so the path is unchanged
+  by an update.
 - **Uninstall** → `StartUninstallJava` (async; sync `UninstallJava` too). It is
   **blocked while the JDK is in use** by deployed apps — JavaHost shows a **"Java N
   is in use"** dialog listing the dependents (from `GetJavaUsage`). Choosing
@@ -117,6 +122,10 @@ Supported majors are **9** (legacy, `javax.*`), **10.1**, and **11** (both
   **Uninstall** → `StartUninstallTomcat` (async) / `UninstallTomcat`.
 - Downloads are **SHA-512 + OpenPGP verified** before use. Watch installs finish
   in [Activity](#9-activity-tasks--logs).
+- The **Update** button (and an **"update available"** badge) appear only when a
+  newer patch exists upstream — the **Check for updates** button (top of the
+  Runtimes tab) re-queries on demand; results are otherwise cached ~24h so the tab
+  loads instantly (`GetRuntimeUpdates`).
 
 **Java floors are enforced** ([Tomcat 10.1](tomcat-10.md),
 [Tomcat 11](tomcat-11.md)):
