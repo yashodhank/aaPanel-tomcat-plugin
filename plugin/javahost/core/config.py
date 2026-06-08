@@ -77,8 +77,19 @@ def update(values: dict) -> dict:
     data.update(values or {})
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     tmp = CONFIG_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
+    # config.json may hold a secret (e.g. aapanel_api_key) — keep it owner-only
+    # (0600) rather than whatever the umask gives. Create the temp restricted,
+    # not chmod-after, so it is never briefly world-readable.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        finally:
+            raise
+    os.chmod(tmp, 0o600)  # O_CREAT mode is masked by umask; force it
     os.replace(tmp, CONFIG_PATH)
     _CACHE.pop("k", None)  # force re-read on next get()
     return data

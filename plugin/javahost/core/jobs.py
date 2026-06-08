@@ -326,9 +326,40 @@ def cancel(job_id: str) -> Dict:
     if not pid:
         raise ValueError("job is still starting; try again in a moment")
     try:
-        os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass  # already gone — still record the operator's intent below
+        pgid = os.getpgid(int(pid))
+    except (ProcessLookupError, OSError):
+        pgid = None  # supervisor already exited; just finalize meta below
+    if pgid is not None:
+        # graceful first, then ESCALATE to SIGKILL so work that ignores/blocks
+        # SIGTERM can't keep running while meta says "cancelled".
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        deadline = time.time() + 2.0
+        alive = True
+        while time.time() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.1)
+        if alive:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+    # Re-read: if the supervisor finalized on its own in the race window (the job
+    # finished naturally between our state check and the kill), respect that
+    # terminal state instead of clobbering it with "cancelled".
+    try:
+        meta = _read_meta(jdir)
+    except Exception:
+        pass
+    cur = (meta.get("state") or "").lower()
+    if cur in ("done", "failed"):
+        return {"id": _validate_job_id(job_id), "state": cur}
     meta["state"] = "cancelled"
     meta["ended"] = time.time()
     meta["message"] = "cancelled by operator"
