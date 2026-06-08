@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.27.0] — 2026-06-08
+
+Hardening pass addressing an adversarial multi-agent review of v0.21–v0.26
+(12 confirmed findings + a cross-PR integration review).
+
+### Security
+- **`config.json` is now written owner-only (0600).** `config.update()` created the
+  temp file via the umask, which could leave a file that may hold a secret
+  (`aapanel_api_key`) world-readable.
+
+### Fixed
+- **Cancel now escalates to SIGKILL.** A task whose work ignores/blocks SIGTERM
+  could keep running while meta said "cancelled"; `jobs.cancel()` now SIGTERMs the
+  process group, waits a short grace, then SIGKILLs, and re-reads meta so a job
+  that finished naturally in the race window keeps its real terminal state.
+- **Tomcat update check no longer shows a false "up to date" on network failure.**
+  `registry.resolve_latest_patch(strict=True)` re-raises on a failed fetch so
+  `updates.check()` records the error and reports `latest=null` instead of masking
+  it with the pinned fallback; the UI keeps the manual **Update** path when the
+  installed patch is `unknown` or the latest couldn't be resolved.
+- **Update badges refresh after an update job completes** (no more stale
+  "update available" until the tab is reopened).
+- **Uninstall removes the scheduled-backups cron too** (`/etc/cron.d/javahost-backups`),
+  not just the log-rotation cron — neither keeps firing against a removed plugin.
+- **Activity:** the `skipped` (unreadable task records) count is now surfaced as a
+  muted row; entering the tab no longer fires `GetJobs` twice; auto-tail tracks the
+  explicitly-chosen source and stops+notifies if *that* source is pruned (instead
+  of silently tailing a fallback); focus moves to a stable control after
+  Cancel/Retry/Clear rebuild the table (no drop to `<body>`).
+- **First-run wizard** no longer reads `STATE` before `GetStatus` resolves — it is
+  triggered from the status callback, so the hardening warning and recommended
+  runtime are always populated (and it still auto-opens at most once).
+
+### Notes (reviewed, intentionally deferred)
+- A plugin-managed JDK installed before v0.24 (no `.javahost-jdk-version` marker)
+  shows no update until it is reinstalled once — conservative by design.
+- Two managed `/etc/cron.d` writers (log-rotation + backups) under truly
+  concurrent saves can race the directory's immutable bit; not serialized yet
+  (rare; both writers are idempotent).
+
 ## [0.26.0] — 2026-06-08
 
 ### Added (first-run setup wizard)
