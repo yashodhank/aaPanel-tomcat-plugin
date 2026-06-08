@@ -17,7 +17,7 @@ Spring Boot / executable-JAR apps, publish them on a domain with **per-site
 Let's Encrypt HTTPS**, and connect them to **PostgreSQL / MySQL / MariaDB /
 MongoDB** — all with integrity-verified downloads, systemd services, and async
 background jobs. It ships a self-contained admin UI (Dashboard · Applications ·
-Runtimes · Databases · Backups · Tasks · Logs · Help · Settings) with a fullscreen mode.
+Runtimes · Databases · Backups · Activity · Help · Settings) with a fullscreen mode.
 
 > **Why this exists:** the panel's built-in Java manager stalled at Tomcat 7/8/9.
 > JavaHost adds modern Tomcat 10/11 + Java 17/21 the right way, as a clean,
@@ -47,7 +47,7 @@ download mirrors.
 
 ```mermaid
 flowchart LR
-    UI["index.html<br/>(Dashboard · Apps · Runtimes ·<br/>Databases · Tasks · Logs · Settings)"]
+    UI["index.html<br/>(Dashboard · Apps · Runtimes ·<br/>Databases · Activity · Settings)"]
     MAIN["javahost_main.py<br/>(thin endpoint glue → {status,msg})"]
     subgraph core["core/ — portable library (no panel coupling)"]
         RT["runtime/java<br/>detect · install · uninstall"]
@@ -83,7 +83,7 @@ aaPanel-native ACME, **certbot `--webroot` fallback**) → **Connect**
 (`SetDbEnv` → secret-safe `app.env`). Long-running actions (installs,
 Start/Stop/Restart) run as **detached background jobs** so a slow systemd
 transition can't time out the panel; the UI polls `GetJobs`/`GetJobLog` and
-surfaces them in **Tasks**. See [Architecture](docs/architecture.md) and the
+surfaces them in the **Activity** tab. See [Architecture](docs/architecture.md) and the
 [User Guide](docs/user-guide.md) for the full diagrams (deploy lifecycle, async
 job flow, SSL decision, and the status-semantics model).
 
@@ -101,7 +101,7 @@ job flow, SSL decision, and the status-semantics model).
 | Databases | **PostgreSQL (9.4–18), MySQL (5.5–9.x), MariaDB (10.2–11.x), MongoDB (3.6–8.0)** — a support-matrix reference, per-app DB-env form with a live **search/filter**, connection-URL builder, JVM→driver matrix, secret-safe `app.env` (no creds in WAR/URL/logs); the drawer shows the current env (`GetDbEnv`, **never** the password) |
 | Backup / restore | A dedicated **Backups** tab. Per-app **backup** (config + webapp + DB env + vhost + manifest; excludes logs and **never** LE private keys) and **restore** — in place (typed confirm) or as a **new app** (reallocated port, domain remap, SSL re-issued). **Multiple S3 storage destinations** (Wasabi / MinIO / B2 / R2 / AWS) — add/test/manage as many named profiles as you like via a dependency-free SigV4 client; pick one or more per backup/schedule; each backup tracks its **locations** (local + every destination). **Scheduled backups** with **per-destination retention** (managed `cron.d`), and **restore-from-upload** through the hardened tar extractor (symlink/traversal/device rejection) |
 | Dashboard | Live operational aggregates (`GetDashboard`, lazy-loaded): apps running / down / **runtime-missing**, aggregate **CPU % + RSS**, **certs expiring <30 days**, instances/backups **disk usage**, and recent tasks |
-| Observability | **Tasks** (background-job status: install/uninstall/lifecycle — running/done/failed + view-log) and **Logs** (unified app + task log viewer) |
+| Observability | A single **Activity** tab: background-task status (install/uninstall/lifecycle — running/done/failed/cancelled, with inline **View log**) plus a **unified log viewer** over app logs and task output |
 | Maintenance | **Settings → Danger zone:** granular wipe (apps / jdks / tomcats / sites / full) with dry-run preview + typed `WIPE` confirm; wipe **skips runtimes still in use**; `install.sh uninstall` honors a saved plan (default keep-data) |
 | Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall; runs safely under aaPanel System Hardening (lift/re-lock the immutable bit) |
 
@@ -109,7 +109,7 @@ job flow, SSL decision, and the status-semantics model).
 
 - [User Guide](docs/user-guide.md) — task-oriented walkthrough of the UI
   (install, runtimes, apps, WAR/JAR deploy, databases, proxy, per-site HTTPS,
-  Tasks/Logs, Settings/Danger zone, hardening).
+  Activity, Settings/Danger zone, hardening).
 - [Endpoint reference](docs/endpoints.md) — every plugin method (params,
   returns, sync/async) the UI calls.
 - [Backup, restore & remote storage](docs/backup-restore.md) — what a backup
@@ -175,7 +175,7 @@ make zip      # build javahost.zip
 
 Active (`v0.20.0`). The core library, installer, runtimes, Tomcat lifecycle,
 WAR/JAR deploy, multi-engine databases, reverse-proxy + per-site HTTPS, async
-jobs, the Tasks/Logs/Danger-zone UI, and the offline test suite are all in
+jobs, the Activity/Danger-zone UI, and the offline test suite are all in
 place. The latest cycle added **multiple S3 storage destinations** (a managed
 profile registry) with per-backup/per-schedule selection and per-destination
 retention, surfaced in a dedicated **Backups** tab (see
