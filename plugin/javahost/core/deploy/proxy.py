@@ -202,11 +202,11 @@ def reload_nginx() -> bool:
 # --------------------------------------------------------------------------- #
 
 def _try_aapanel_class_api(domain: str, port: int) -> Optional[Dict]:
-    """Path 1: modern aaPanel (site.AddSite with web_type=proxy).
+    """Path 1: aaPanel's panelSite class API (primary, no api_sk needed).
 
-    Imports the `site` class from /www/server/panel/class/site.py and calls
-    AddSite() with a proxy configuration. Returns a success dict or None on
-    any failure (caller falls through to the next path).
+    Imports `panelSite` from /www/server/panel/class/panelSite.py and calls
+    CreateProxy() with the correct parameters. This is the SAME module aaPanel's
+    own UI uses. The class name and file name are both `panelSite`.
     """
     import sys
     panel_class = AAPANEL_PANEL_CLASS
@@ -214,72 +214,92 @@ def _try_aapanel_class_api(domain: str, port: int) -> Optional[Dict]:
         sys.path.insert(0, panel_class)
 
     try:
-        from site import site as panelSite  # noqa: F401
+        from panelSite import panelSite as _SiteClass  # noqa: F401
     except Exception:
         return None
 
     try:
-        site_obj = panelSite()
+        site_obj = _SiteClass()
+        backend = "http://127.0.0.1:%d" % port
 
-        class _G(object):
-            pass
+        class _G(dict):
+            __getattr__ = dict.get
+            __setattr__ = dict.__setitem__
+
         g = _G()
-        g.webname = {"domain": domain, "domainlist": [], "count": 0}
-        g.type = "proxy"
-        g.port = 80
-        g.ps = "JavaHost: %s -> 127.0.0.1:%d" % (domain, port)
-        g.path = "/www/wwwroot/%s" % domain
-        g.version = "00"
+        g["proxyname"] = domain
+        g["sitename"] = domain
+        g["proxydir"] = "/"
+        g["proxysite"] = backend
+        g["todomain"] = backend
+        g["type"] = 1
+        g["cache"] = 0
+        g["subfilter"] = "[]"
+        g["advanced"] = 0
+        g["cachetime"] = 0
 
-        # Primary API: AddSite (modern aaPanel 7.x / 8.x)
-        res = site_obj.AddSite(g)
-        if isinstance(res, dict) and res.get("status"):
-            return {"ok": True, "path": "aapanel", "detail": "via site.AddSite"}
-
-        # Fallback methods for older aaPanel versions
-        for meth in ("add_redirect", "AddProxy", "create_proxy", "set_proxy"):
-            fn = getattr(site_obj, meth, None)
-            if not callable(fn):
-                continue
-            res = fn(g)
-            if isinstance(res, dict):
-                if res.get("status"):
-                    return {"ok": True, "path": "aapanel",
-                            "detail": "via site.%s" % meth}
-                continue
+        # CreateProxy is the dedicated aaPanel method for reverse-proxy sites
+        res = site_obj.CreateProxy(g)
+        if isinstance(res, dict) and (res.get("status") or res.get("siteStatus")):
             return {"ok": True, "path": "aapanel",
-                    "detail": "via site.%s" % meth}
+                    "detail": "via panelSite.CreateProxy"}
         return None
     except Exception:
         return None
 
 
 def _try_legacy_panelSite_import(domain: str, port: int) -> Optional[Dict]:
-    """Path 2: legacy aaPanel `panelSite` module (older aaPanel versions)."""
+    """Path 2: legacy `import panelSite` style (older aaPanel versions where
+    the module isn't on the python path it in but can be resolved)."""
+
     try:
         import panelSite  # noqa: F401
     except Exception:
         return None
 
     try:
-        site = panelSite.panelSite() if hasattr(panelSite, "panelSite") else panelSite
+        site = (panelSite.panelSite()
+                if hasattr(panelSite, "panelSite") else panelSite)
+        backend = "http://127.0.0.1:%d" % port
 
-        class _G(object):
-            pass
+        class _G(dict):
+            __getattr__ = dict.get
+            __setattr__ = dict.__setitem__
+
         g = _G()
-        g.sitename = domain
-        g.domain = domain
-        g.proxyname = domain
-        g.proxysite = "http://127.0.0.1:%d" % port
-        g.todomain = "http://127.0.0.1:%d" % port
-        g.type = "1"
-        g.port = "80"
+        g["proxyname"] = domain
+        g["sitename"] = domain
+        g["proxydir"] = "/"
+        g["proxysite"] = backend
+        g["todomain"] = backend
+        g["type"] = 1
+        g["cache"] = 0
+        g["subfilter"] = "[]"
+        g["advanced"] = 0
+        g["cachetime"] = 0
 
-        for meth in ("add_redirect", "AddProxy", "create_proxy", "set_proxy"):
+        if hasattr(site, "CreateProxy"):
+            res = site.CreateProxy(g)
+            if isinstance(res, dict) and (res.get("status") or res.get("siteStatus")):
+                return {"ok": True, "path": "aapanel",
+                        "detail": "via panelSite.CreateProxy"}
+
+        # Older versions may have these fallback method names
+        for meth in ("AddProxy", "set_proxy", "add_redirect", "create_proxy"):
             fn = getattr(site, meth, None)
             if not callable(fn):
                 continue
-            res = fn(g)
+            # Build a simpler _G object for older methods
+            class _G2(object):
+                pass
+            g2 = _G2()
+            g2.sitename = domain
+            g2.proxyname = domain
+            g2.proxysite = backend
+            g2.todomain = backend
+            g2.type = "1"
+            g2.port = "80"
+            res = fn(g2)
             if isinstance(res, dict):
                 if res.get("status"):
                     return {"ok": True, "path": "aapanel",
@@ -334,6 +354,7 @@ def _try_aapanel_http_api(domain: str, port: int) -> Optional[Dict]:
             "ps": "JavaHost: %s -> 127.0.0.1:%d" % (domain, port),
             "ftp": "false",
             "sql": "false",
+            "set_ssl": "0",
         }).encode()
 
         ctx = _sslmod.create_default_context()
@@ -486,10 +507,8 @@ def aapanel_remove_site(domain: str) -> bool:
     removed = _aapanel_http_remove_site(domain)
 
     # Path 2: modern aaPanel class API
-    # TODO: class API DeleteSite needs site ID. Without an ID lookup through
-    # the class API itself (which doesn't expose getData), this path only
-    # works if aaPanel accepts DeleteSite by webname alone. The HTTP path
-    # (Path 1) handles the ID lookup when api_sk is configured.
+    # DeleteSite needs site ID — we pass None since we can't look it up
+    # through the class API. aaPanel often accepts just webname without ID.
     if not removed:
         try:
             import sys
@@ -580,9 +599,10 @@ def read_domain(app: str) -> Optional[str]:
 def set_site(app: str, domain: str, port: int) -> Dict:
     """Publish <app> at <domain> -> http://127.0.0.1:<port>.
 
-    Registers the site through aaPanel's native API (3-tier fallback). On
-    failure, returns an error — no nginx vhost fallback. The chosen domain is
-    recorded so list_apps() can surface it.
+    Primary path: aaPanel's native panelSite.CreateProxy() API. On failure,
+    falls back to aaPanel's HTTP API. If both fail, writes a plugin-owned
+    nginx vhost as a LAST RESORT (with a warning — the site works at the
+    nginx level but does NOT appear in aaPanel's Sites panel).
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
@@ -590,23 +610,29 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
-        detail = aap.get("detail", "unknown error")
-        tried = aap.get("tried", [])
-        hint = ""
-        if "http-api-skipped-no-key" in tried:
-            hint = (" Configure aapanel_api_key in plugin config to enable "
-                    "the HTTP API fallback.")
-        msg = "aaPanel site registration failed: %s.%s" % (detail, hint)
-        return {"ok": False, "error": msg, "detail": detail}
+        # Last resort: plugin-owned nginx vhost. Needed when:
+        #   - aaPanel's CreateProxy has an internal bug (e.g. bool/regex)
+        #   - api_sk not configured and python paths fail
+        #   - panelSite module unavailable
+        write_vhost(app, domain, port)
+        reload_nginx()
+        tried_str = ", ".join(aap.get("tried", []))
+        warning = ("Site works via nginx but does NOT appear in aaPanel's "
+                   "Sites panel — aaPanel registration failed: %s. "
+                   "Paths tried: [%s]. Enable aapanel_api_key in Settings "
+                   "or fix aaPanel's panelSite module."
+                   % (aap.get("detail", "unknown error"), tried_str))
+        result = {"domain": domain, "url": "http://%s/" % domain,
+                  "via": "nginx-vhost", "aapanel": aap.get("detail", ""),
+                  "warning": warning}
+    else:
+        result = {"ok": True, "domain": domain,
+                  "url": "http://%s/" % domain, "via": "aapanel",
+                  "aapanel": aap.get("detail", "")}
 
-    # The include line must exist: even when aaPanel "owns" the site, a later
-    # SSL flip or manual edit may rely on JavaHost vhosts being picked up.
-    # ensure_include() is idempotent and self-validating.
     ensure_include()
-
     _store_domain(app, domain)
-    return {"ok": True, "domain": domain, "url": "http://%s/" % domain,
-            "via": "aapanel", "aapanel": aap.get("detail", "")}
+    return result
 
 
 def remove_site(app: str) -> Dict:

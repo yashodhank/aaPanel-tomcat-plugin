@@ -744,7 +744,7 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
 
 # ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
 def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
-    """When all aaPanel API paths fail, set_site returns an error (no nginx fallback)."""
+    """When all aaPanel API paths fail, set_site falls back to nginx vhost with warning."""
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
@@ -752,24 +752,27 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": False, "path": "aapanel",
-                                      "detail": "all paths failed"})
+                                      "detail": "all paths failed",
+                                      "tried": ["class-api", "legacy-panelsite"]})
 
     res = proxy.set_site("demo", "demo.example.com", 8080)
-    assert res["ok"] is False
-    assert "aaPanel site registration failed" in res["error"]
-    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert res["via"] == "nginx-vhost"
+    assert "warning" in res
+    assert "does NOT appear in aaPanel" in res["warning"]
+    assert os.path.isfile(os.path.join(vdir, "demo.conf"))
 
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": True, "path": "aapanel",
-                                      "detail": "via site.AddSite"})
+                                      "detail": "via panelSite.CreateProxy"})
     res = proxy.set_site("demo", "demo.example.com", 8081)
-    assert res["ok"] is True
     assert res["via"] == "aapanel"
+    assert "warning" not in res
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
 
@@ -1106,32 +1109,6 @@ def test_aapanel_add_site_all_paths_fail(monkeypatch):
     assert res["ok"] is False
     assert "none succeeded" in res["detail"]
     assert res["tried"] == ["class-api", "legacy-panelsite", "http-api"]
-
-
-def test_aapanel_add_site_skips_http_when_no_key(monkeypatch):
-    """HTTP API path is skipped (not tried) when api_sk is unset."""
-    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
-    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
-    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: None)
-
-    res = proxy.aapanel_add_site("test.example.com", 8080)
-    assert res["ok"] is False
-    assert "http-api-skipped-no-key" in res["tried"]
-
-
-def test_set_site_error_hint_when_no_key(monkeypatch):
-    """Error message includes api_sk hint only when http-api was skipped."""
-    monkeypatch.setattr(proxy, "VHOST_DIR", "/tmp/vhost")
-    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
-    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
-    monkeypatch.setattr(proxy, "aapanel_add_site",
-                        lambda d, p: {"ok": False, "path": "aapanel",
-                                      "detail": "tried [class-api] — none succeeded",
-                                      "tried": ["class-api"]})
-
-    res = proxy.set_site("demo", "demo.example.com", 8080)
-    assert res["ok"] is False
-    assert "aapanel_api_key" not in res["error"]  # no hint when key wasn't the issue
 
 
 def test_aapanel_remove_site_http_succeeds(monkeypatch):

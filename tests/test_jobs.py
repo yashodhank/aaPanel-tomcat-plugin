@@ -245,25 +245,31 @@ def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": False, "path": "aapanel",
-                                      "detail": "no panel"})
+                                      "detail": "no panel",
+                                      "tried": ["class-api", "legacy-panelsite"]})
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
 
     res = proxy.set_site("demo", "demo.5d.bisotech.in", 8080)
-    assert res["ok"] is False
-    assert "aaPanel site registration failed" in res["error"]
-    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert res["via"] == "nginx-vhost"
+    assert "warning" in res
+    conf = os.path.join(vdir, "demo.conf")
+    assert os.path.isfile(conf)
+    body = open(conf, encoding="utf-8").read()
+    assert "server_name demo.5d.bisotech.in;" in body
+    assert "proxy_pass http://127.0.0.1:8080;" in body
 
 
 def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": True, "path": "aapanel",
-                                      "detail": "via site.AddSite"})
+                                      "detail": "via panelSite.CreateProxy"})
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
     res = proxy.set_site("demo", "demo.5d.bisotech.in", 8081)
-    assert res["ok"] is True
     assert res["via"] == "aapanel"
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
