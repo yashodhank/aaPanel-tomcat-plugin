@@ -118,6 +118,21 @@ To provision a certificate, enable the **per-site HTTPS toggle** (row / drawer
 Overview, `SetSiteSSL`). Red errors (no redirect, HTTPS unreachable, cert
 expired) appear only once HTTPS is actually on.
 
+## Panel not loading (404) after `bt restart` or deploy
+
+**Root cause:** Every `bt restart` invalidates ALL panel session cookies. aaPanel's
+"security entrance" design returns 404 for unauthenticated requests — including
+the login page itself. Your browser's pre-existing session cookie no longer works.
+
+**Fix:**
+1. Open `https://5d.bisotech.in:37778/6e09181b/` in an **incognito/private**
+   window (no cookies). The login page should load.
+2. If it still shows 404, SSH to the VPS and run `bt 14` to verify the entrance
+   path hasn't changed, then try again with the confirmed URL.
+
+**Prevention:** Never use `bt restart` when deploying plugin files. The plugin's
+Python modules are re-loaded on the next request — just `scp` the changed files.
+
 ## "aaPanel site registration failed" on SetSite
 
 **Root cause:** JavaHost registers reverse-proxy sites through aaPanel's internal
