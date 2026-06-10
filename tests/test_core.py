@@ -744,7 +744,7 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
 
 # ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
 def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
-    """When all aaPanel API paths fail, set_site falls back to nginx vhost with warning."""
+    """When all aaPanel API paths fail, set_site returns error — no nginx fallback."""
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
@@ -756,10 +756,9 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
                                       "tried": ["class-api", "legacy-panelsite"]})
 
     res = proxy.set_site("demo", "demo.example.com", 8080)
-    assert res["via"] == "nginx-vhost"
-    assert "warning" in res
-    assert "does NOT appear in aaPanel" in res["warning"]
-    assert os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert res["ok"] is False
+    assert "aaPanel site registration failed" in res["error"]
+    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
 
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):

@@ -248,17 +248,12 @@ def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
                                       "detail": "no panel",
                                       "tried": ["class-api", "legacy-panelsite"]})
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
-    monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
 
     res = proxy.set_site("demo", "demo.5d.bisotech.in", 8080)
-    assert res["via"] == "nginx-vhost"
-    assert "warning" in res
-    conf = os.path.join(vdir, "demo.conf")
-    assert os.path.isfile(conf)
-    body = open(conf, encoding="utf-8").read()
-    assert "server_name demo.5d.bisotech.in;" in body
-    assert "proxy_pass http://127.0.0.1:8080;" in body
+    assert res["ok"] is False
+    assert "aaPanel site registration failed" in res["error"]
+    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
 
 
 def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):

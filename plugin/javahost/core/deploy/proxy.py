@@ -599,10 +599,9 @@ def read_domain(app: str) -> Optional[str]:
 def set_site(app: str, domain: str, port: int) -> Dict:
     """Publish <app> at <domain> -> http://127.0.0.1:<port>.
 
-    Primary path: aaPanel's native panelSite.CreateProxy() API. On failure,
-    falls back to aaPanel's HTTP API. If both fail, writes a plugin-owned
-    nginx vhost as a LAST RESORT (with a warning — the site works at the
-    nginx level but does NOT appear in aaPanel's Sites panel).
+    Primary path: aaPanel's native panelSite.CreateProxy() or HTTP API.
+    On ALL failure, returns an error — NO direct nginx modification.
+    Site registration goes ONLY through aaPanel's APIs.
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
@@ -610,29 +609,21 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
-        # Last resort: plugin-owned nginx vhost. Needed when:
-        #   - aaPanel's CreateProxy has an internal bug (e.g. bool/regex)
-        #   - api_sk not configured and python paths fail
-        #   - panelSite module unavailable
-        write_vhost(app, domain, port)
-        reload_nginx()
         tried_str = ", ".join(aap.get("tried", []))
-        warning = ("Site works via nginx but does NOT appear in aaPanel's "
-                   "Sites panel — aaPanel registration failed: %s. "
-                   "Paths tried: [%s]. Enable aapanel_api_key in Settings "
-                   "or fix aaPanel's panelSite module."
-                   % (aap.get("detail", "unknown error"), tried_str))
-        result = {"domain": domain, "url": "http://%s/" % domain,
-                  "via": "nginx-vhost", "aapanel": aap.get("detail", ""),
-                  "warning": warning}
-    else:
-        result = {"ok": True, "domain": domain,
-                  "url": "http://%s/" % domain, "via": "aapanel",
-                  "aapanel": aap.get("detail", "")}
+        detail = aap.get("detail", "unknown error")
+        hint = ""
+        if "http-api-skipped-no-key" in aap.get("tried", []):
+            hint = (" Configure aapanel_api_key in Settings to enable the "
+                    "HTTP API fallback.")
+        msg = ("aaPanel site registration failed [%s]: %s.%s "
+               "Site not created — fix the issue and try again."
+               % (tried_str, detail, hint))
+        return {"ok": False, "error": msg}
 
     ensure_include()
     _store_domain(app, domain)
-    return result
+    return {"ok": True, "domain": domain, "url": "http://%s/" % domain,
+            "via": "aapanel", "aapanel": aap.get("detail", "")}
 
 
 def remove_site(app: str) -> Dict:
