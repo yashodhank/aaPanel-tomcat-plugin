@@ -4,7 +4,7 @@
   "tip": "lib",
   "panel_type": "soft",
   "type": "environment",
-  "ps": "v0.28.1 — Tomcat 9/10.1/11 + Java 8/11/17/21 manager with reverse-proxy, SSL, DB helpers (Apache-2.0)",
+  "ps": "Manage Java (8/11/17/21) and Apache Tomcat 9/10.1/11 with verified downloads, systemd services, and reverse-proxy + PostgreSQL helpers. Independent OSS plugin (Apache-2.0).",
   "versions": "0.28.1",
   "shell": "install.sh",
   "checks": "/www/server/javahost",
