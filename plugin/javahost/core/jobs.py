@@ -219,7 +219,7 @@ def _spawn_detached(jdir: str, argv: Sequence[str]) -> None:
         os._exit(127)
 
 
-def list_jobs(limit: int = 50) -> List[Dict]:
+def list_jobs(limit: int = 200) -> List[Dict]:
     """Newest-first meta dicts. Tolerates malformed/partial job dirs."""
     out: List[Dict] = []
     if not os.path.isdir(JOBS_ROOT):
@@ -294,7 +294,7 @@ def read_log(job_id: str, lines: int = 200) -> Dict:
             "message": message, "log": log, "exists": exists}
 
 
-def prune(keep: int = 50) -> int:
+def prune(keep: int = 500) -> int:
     """Remove all but the newest `keep` job dirs. Returns count removed."""
     import shutil
     metas = list_jobs(limit=10 ** 9)

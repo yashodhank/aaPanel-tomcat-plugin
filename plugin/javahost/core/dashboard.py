@@ -138,7 +138,7 @@ def summary() -> Dict:
                 "backups_bytes": 0, "backups_mb": 0.0}
 
     try:
-        recent_tasks = jobs.list_jobs(limit=8)
+        recent_tasks = jobs.list_jobs(limit=20)
     except Exception:
         recent_tasks = []
 
