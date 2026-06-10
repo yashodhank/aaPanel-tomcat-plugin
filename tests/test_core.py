@@ -743,46 +743,32 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
 
 
 # ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
-def test_set_site_falls_back_when_aapanel_status_false(tmp_path, monkeypatch):
-    """aaPanel methods return {"status": False, ...} on failure without raising.
-    aapanel_add_site must report ok=False so set_site writes the nginx vhost."""
+def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
+    """When all aaPanel API paths fail, set_site returns an error (no nginx fallback)."""
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
-
-    class _FakeSite(object):
-        def add_redirect(self, g):
-            return {"status": False, "msg": "site exists"}  # explicit failure
-
-    class _FakeMod(object):
-        panelSite = _FakeSite
-
-    monkeypatch.setitem(__import__("sys").modules, "panelSite", _FakeMod())
-
-    aap = proxy.aapanel_add_site("demo.example.com", 8080)
-    assert aap["ok"] is False  # status=False is NOT treated as success
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": False, "path": "aapanel",
+                                      "detail": "all paths failed"})
 
     res = proxy.set_site("demo", "demo.example.com", 8080)
-    assert res["via"] == "nginx-vhost"
-    assert os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert res["ok"] is False
+    assert "aaPanel site registration failed" in res["error"]
+    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
 
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
-
-    class _FakeSite(object):
-        def add_redirect(self, g):
-            return {"status": True, "msg": "ok"}
-
-    class _FakeMod(object):
-        panelSite = _FakeSite
-
-    monkeypatch.setitem(__import__("sys").modules, "panelSite", _FakeMod())
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": True, "path": "aapanel",
+                                      "detail": "via site.AddSite"})
     res = proxy.set_site("demo", "demo.example.com", 8081)
+    assert res["ok"] is True
     assert res["via"] == "aapanel"
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
@@ -1091,3 +1077,160 @@ def test_wipe_rejects_bad_scope():
     from core import maintenance
     with pytest.raises(ValueError):
         maintenance.wipe("apps,bogus", confirm="WIPE")
+
+
+# ---- aaPanel HTTP API site registration -----------------------------------
+def test_aapanel_add_site_http_api_succeeds(monkeypatch):
+    """When class API and legacy fail, HTTP API succeeds."""
+    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_aapanel_http_api",
+                        lambda d, p: {"ok": True, "path": "aapanel-http",
+                                      "detail": "via HTTP AddSite"})
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: "fake-key")
+
+    res = proxy.aapanel_add_site("test.example.com", 8080)
+    assert res["ok"] is True
+    assert res["path"] == "aapanel-http"
+
+
+def test_aapanel_add_site_all_paths_fail(monkeypatch):
+    """All 3 tiers fail — returns ok=False with tried paths."""
+    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_aapanel_http_api", lambda d, p: None)
+    # Ensure api_sk is set so http-api path is attempted
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: "fake-key")
+
+    res = proxy.aapanel_add_site("test.example.com", 8080)
+    assert res["ok"] is False
+    assert "none succeeded" in res["detail"]
+    assert res["tried"] == ["class-api", "legacy-panelsite", "http-api"]
+
+
+def test_aapanel_add_site_skips_http_when_no_key(monkeypatch):
+    """HTTP API path is skipped (not tried) when api_sk is unset."""
+    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: None)
+
+    res = proxy.aapanel_add_site("test.example.com", 8080)
+    assert res["ok"] is False
+    assert "http-api-skipped-no-key" in res["tried"]
+
+
+def test_set_site_error_hint_when_no_key(monkeypatch):
+    """Error message includes api_sk hint only when http-api was skipped."""
+    monkeypatch.setattr(proxy, "VHOST_DIR", "/tmp/vhost")
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": False, "path": "aapanel",
+                                      "detail": "tried [class-api] — none succeeded",
+                                      "tried": ["class-api"]})
+
+    res = proxy.set_site("demo", "demo.example.com", 8080)
+    assert res["ok"] is False
+    assert "aapanel_api_key" not in res["error"]  # no hint when key wasn't the issue
+
+
+def test_aapanel_remove_site_http_succeeds(monkeypatch):
+    """HTTP API removes the site."""
+    monkeypatch.setattr(proxy, "_aapanel_http_remove_site", lambda d: True)
+    assert proxy._aapanel_http_remove_site("test.example.com") is True
+
+
+def test_aapanel_remove_site_falls_to_class_api(monkeypatch):
+    """HTTP fails, class API succeeds."""
+    import sys
+    monkeypatch.setattr(proxy, "_aapanel_http_remove_site", lambda d: False)
+    monkeypatch.setattr(sys, "path", sys.path + ["/fake/panel/class"])
+
+    class _FakeSiteObj:
+        def DeleteSite(self, g):
+            return {"status": True, "msg": "ok"}
+
+    class _FakeSiteMod:
+        @staticmethod
+        def site():
+            return _FakeSiteObj()
+
+    monkeypatch.setitem(sys.modules, "site", _FakeSiteMod())
+    monkeypatch.setattr(proxy, "AAPANEL_PANEL_CLASS", "/fake/panel/class")
+
+    removed = proxy.aapanel_remove_site("test.example.com")
+    assert removed is True
+
+
+# ---- remove_site aaPanel cleanup ---------------------------------------------
+def test_remove_site_reports_aapanel_cleaned(monkeypatch, tmp_path):
+    from core.tomcat import instance
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    marker_dir = str(tmp_path / "demo" / "bin")
+    os.makedirs(marker_dir, exist_ok=True)
+    proxy._store_domain("demo", "demo.example.com")
+
+    vdir = str(tmp_path / "vhost")
+    monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: True)
+
+    os.makedirs(vdir, exist_ok=True)
+    open(os.path.join(vdir, "demo.conf"), "w").write("server {}\n")
+
+    res = proxy.remove_site("demo")
+    assert res["removed"] is True
+    assert res["aapanel_cleaned"] is True
+    assert proxy.read_domain("demo") is None
+
+
+def test_remove_site_aapanel_not_found_is_ok(monkeypatch, tmp_path):
+    from core.tomcat import instance
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    marker_dir = str(tmp_path / "demo" / "bin")
+    os.makedirs(marker_dir, exist_ok=True)
+    proxy._store_domain("demo", "demo.example.com")
+
+    vdir = str(tmp_path / "vhost")
+    monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: False)
+
+    os.makedirs(vdir, exist_ok=True)
+    open(os.path.join(vdir, "demo.conf"), "w").write("server {}\n")
+
+    res = proxy.remove_site("demo")
+    assert res["removed"] is True
+    assert res["aapanel_cleaned"] is False
+    assert proxy.read_domain("demo") is None
+
+
+# ---- DeleteApp calls remove_site ---------------------------------------------
+def test_delete_app_removes_site(monkeypatch, tmp_path):
+    import sys
+    from core.tomcat import instance as inst, service
+    from core.util import fs as util_fs
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    app_dir = tmp_path / "myapp"
+    app_dir.mkdir(parents=True)
+    util_fs.mark_managed(str(app_dir))
+    monkeypatch.setattr(service, "remove_unit", lambda app: None)
+    # safe_rmtree rejects /tmp paths — replace with simple rmtree
+    monkeypatch.setattr(util_fs, "safe_rmtree",
+                        lambda path, **k: __import__("shutil").rmtree(path))
+
+    calls = []
+    class _FakeMod:
+        @staticmethod
+        def remove_site(app):
+            calls.append(app)
+            return {"app": app, "removed": True, "aapanel_cleaned": True}
+
+    monkeypatch.setitem(sys.modules, "core.deploy.proxy", _FakeMod)
+    # core.deploy package already has `proxy` as real module; replace it
+    if "core.deploy" in sys.modules:
+        monkeypatch.setattr(sys.modules["core.deploy"], "proxy", _FakeMod)
+
+    res = inst.delete("myapp")
+    assert res["removed"] is True
+    assert calls == ["myapp"]

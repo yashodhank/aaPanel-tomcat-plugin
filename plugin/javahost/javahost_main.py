@@ -427,8 +427,7 @@ class javahost_main(object):
         """Publish <app> at <domain> reverse-proxied to its loopback port. The
         domain comes from ?domain= or, if a site_suffix is configured, the
         convention "<app>.<suffix>"; with neither, the caller MUST pass ?domain=
-        (no FQDN is ever guessed). Tries aaPanel's site API, falls back to our
-        nginx vhost. Returns {domain, url}."""
+        (no FQDN is ever guessed). Registers through aaPanel's native API."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             domain = panel.attr(get, "domain") or proxy.default_domain(app)
@@ -439,6 +438,8 @@ class javahost_main(object):
             if not port:
                 return panel.err("cannot resolve port for app %r (is it created?)" % app)
             res = proxy.set_site(app, domain, int(port))
+            if not res.get("ok"):
+                return panel.err(res.get("error", "site registration failed"))
             panel.log("SetSite", "%s -> %s (%s)" % (app, res["domain"], res.get("via")))
             return panel.ok(res)
         except Exception as e:

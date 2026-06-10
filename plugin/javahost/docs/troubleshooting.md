@@ -118,6 +118,28 @@ To provision a certificate, enable the **per-site HTTPS toggle** (row / drawer
 Overview, `SetSiteSSL`). Red errors (no redirect, HTTPS unreachable, cert
 expired) appear only once HTTPS is actually on.
 
+## "aaPanel site registration failed" on SetSite
+
+**Root cause:** JavaHost registers reverse-proxy sites through aaPanel's internal
+site management API. If that API is unreachable, site creation fails with this
+error. Prior to v0.28.0, the plugin silently fell back to writing a standalone
+nginx vhost that worked at the nginx level but never appeared in aaPanel's Sites
+panel — sites were invisible and unmanageable from aaPanel UI.
+
+**Current behaviour (v0.28.0+):** Site registration goes through aaPanel's native
+API exclusively (3-tier fallback: class API → legacy panelSite → HTTP API). If
+all paths fail, the error is returned with diagnostics showing which paths were
+tried.
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Error mentions `http-api-skipped-no-key` | `aapanel_api_key` not configured | Set `aapanel_api_key` in plugin config (Settings → API Key) |
+| Error mentions `class-api, legacy-panelsite, http-api` (all tried, none worked) | aaPanel panel service is down or site module is broken | Restart aaPanel (`bt restart`), check `/www/server/panel/class/site.py` exists |
+| Error mentions `class-api, legacy-panelsite` only (no http-api in list) | `aapanel_api_key` unset AND class/legacy APIs failed | Set `aapanel_api_key` in plugin config, then retry |
+
+The `aapanel_api_key` is the aaPanel interface API key (`api_sk`). Find it in
+aaPanel → Settings → API Interface. Copy it into JavaHost → Settings → API Key.
+
 ## "Installed locally: no" for MongoDB (or any engine)
 
 The Databases support matrix' **Installed locally** column detects a DB

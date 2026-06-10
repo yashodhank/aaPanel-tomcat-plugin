@@ -380,21 +380,25 @@ user, driver, and whether a password is set — or "No database env configured".
 > site hostname.
 
 Open the **Help** tab. The **Reverse-proxy hint** card (`GetProxyHint`) shows an
-Nginx vhost **include snippet** that fronts a managed app via the panel's web
-server.
+Nginx vhost **include snippet** that the plugin manages automatically.
 
-![Reverse-proxy hint](images/help-proxy.png)
+JavaHost creates and manages reverse-proxy sites for you with
+**`SetSite{app, domain?}`** (remove with **`RemoveSite{app}`**). The site is
+registered through aaPanel's native site management API — it appears in aaPanel's
+**Sites** panel just like any manually-created site. The backend proxies to the
+app's loopback port (`127.0.0.1:<port>`).
 
-The generated proxy targets a **local** upstream (e.g. `127.0.0.1:<port>`);
-JavaHost owns only its own vhost and never edits other plugins' configs. Paste the
-include into the site's Nginx config to publish the app on a domain.
+With no `domain`, JavaHost uses the `<app>.<suffix>` convention, where the suffix
+is the plugin config key **`site_suffix`** (in `/www/server/javahost/config.json`).
+`site_suffix` is **empty by default** — so unless you set one, you supply an
+explicit domain and no FQDN is ever guessed.
 
-JavaHost can also create the managed site for you with **`SetSite{app, domain?}`**
-(remove with **`RemoveSite{app}`**). With no `domain`, it uses the
-`<app>.<suffix>` convention, where the suffix is the plugin config key
-**`site_suffix`** (in `/www/server/javahost/config.json`). `site_suffix` is
-**empty by default** — so unless you set one, you supply an explicit domain and no
-FQDN is ever guessed.
+> **Requires `aapanel_api_key`.** If aaPanel's internal Python API is unavailable
+> (rare), site registration falls back to aaPanel's HTTP API which needs the
+> interface API key. Set it in **Settings → API Key** (find `api_sk` in
+> aaPanel → Settings → API Interface). See
+> [troubleshooting](troubleshooting.md#aapanel-site-registration-failed-on-setsite)
+> for diagnostics.
 
 ### Per-site HTTPS (Let's Encrypt)
 
