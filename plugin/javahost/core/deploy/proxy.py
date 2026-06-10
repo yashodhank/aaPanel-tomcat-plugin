@@ -75,8 +75,8 @@ server {
     listen [::]:443 ssl;
     http2 on;
     server_name @@domain@@;
-    ssl_certificate /etc/letsencrypt/live/@@domain@@/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/@@domain@@/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/@@cert_domain@@/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/@@cert_domain@@/privkey.pem;
     location / {
         proxy_pass http://127.0.0.1:@@port@@;
         proxy_set_header Host $host;
@@ -94,24 +94,38 @@ def vhost_path(app: str) -> str:
     return os.path.join(VHOST_DIR, "%s.conf" % app)
 
 
-def write_vhost(app: str, domain: str, port: int, ssl: bool = False) -> str:
+def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
+                cert_domain: Optional[str] = None,
+                wildcard_name: Optional[str] = None) -> str:
     """Render the plugin-owned nginx vhost for <app>.
 
     ssl=False (default, keeps old 2/3-arg callers working): an HTTP server that
     proxies / to the backend AND serves the ACME challenge location.
     ssl=True: the HTTP server serves the ACME location and 301-redirects to
     https; a 443 server terminates TLS (LE live cert) and proxies to the backend.
+
+    cert_domain (optional): domain whose LE cert dir to use. When set, cert
+    paths are /etc/letsencrypt/live/<cert_domain>/ instead of <domain>/.
+    Used for wildcard certs where the cert lives at the base domain path.
+
+    wildcard_name (optional): e.g. ``*.example.com`` — added to server_name
+    alongside the primary domain.
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
     fs.ensure_dir(VHOST_DIR)
     acme = _ACME_LOCATION.replace("@@acme@@", ACME_WEBROOT)
+    cert_for = cert_domain or domain
+    server_names = domain
+    if wildcard_name:
+        server_names = "%s %s" % (domain, wildcard_name)
     template = _TEMPLATE_SSL if ssl else _TEMPLATE
     body = (template
             .replace("@@acme_location@@", acme)
             .replace("@@app@@", app)
-            .replace("@@domain@@", domain)
+            .replace("@@cert_domain@@", cert_for)  # cert at base domain path
+            .replace("@@domain@@", server_names)
             .replace("@@port@@", str(port)))
     path = vhost_path(app)
     fs.atomic_write(path, body, mode=0o644)
@@ -455,9 +469,9 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
     """Register a reverse-proxy site via aaPanel's native API, 3-tier fallback.
 
     Tries in order:
-      1. aaPanel site.AddSite() (modern — /www/server/panel/class/site.py)
-      2. Legacy panelSite module (older aaPanel versions)
-      3. aaPanel HTTP API (POST /site?action=AddSite, loopback; requires api_sk)
+      1. aaPanel HTTP API (POST /site?action=AddSite, loopback; requires api_sk)
+      2. aaPanel panelSite.CreateProxy() (native Python, may crash on some versions)
+      3. Legacy panelSite module (older aaPanel versions)
 
     Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str,
             "tried": [str]}.
@@ -466,19 +480,7 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
     port = validate.port(port)
     tried = []
 
-    # Path 1: modern aaPanel class API
-    res = _try_aapanel_class_api(domain, port)
-    tried.append("class-api")
-    if res is not None:
-        return res
-
-    # Path 2: legacy panelSite module
-    res = _try_legacy_panelSite_import(domain, port)
-    tried.append("legacy-panelsite")
-    if res is not None:
-        return res
-
-    # Path 3: HTTP API (requires api_sk; skipped when unset)
+    # Path 1: HTTP API (most reliable — same auth scheme proven on VPS)
     if config.aapanel_api_key():
         res = _try_aapanel_http_api(domain, port)
         tried.append("http-api")
@@ -486,6 +488,18 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
             return res
     else:
         tried.append("http-api-skipped-no-key")
+
+    # Path 2: modern aaPanel class API (panelSite.CreateProxy)
+    res = _try_aapanel_class_api(domain, port)
+    tried.append("class-api")
+    if res is not None:
+        return res
+
+    # Path 3: legacy panelSite module (older versions)
+    res = _try_legacy_panelSite_import(domain, port)
+    tried.append("legacy-panelsite")
+    if res is not None:
+        return res
 
     paths = ", ".join(tried)
     return {"ok": False, "path": "aapanel",

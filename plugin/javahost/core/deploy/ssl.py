@@ -26,14 +26,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl as _sslmod
+import time
 import urllib.parse
 import urllib.request
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from . import proxy
 from .. import config
-from ..util import fs, validate
+from ..util import fs, shell, validate
 
 # Per-instance SSL state marker (lives next to site.domain, written by proxy).
 SSL_MARKER_NAME = "site.ssl"
@@ -225,6 +227,33 @@ def _install_renewal_hook() -> None:
 
 
 # --- public API --------------------------------------------------------------
+def _find_wildcard_cert(domain: str) -> Tuple[Optional[str], Optional[str]]:
+    """Check if a wildcard cert covers *domain*. Returns (base_domain, wildcard_name)
+    or (None, None) if none found. Scans /etc/letsencrypt/live/ for base domains
+    whose SAN includes ``*.base`` matching this domain."""
+    parts = domain.split(".")
+    if len(parts) < 2:
+        return None, None
+    for i in range(0, len(parts) - 1):
+        base = ".".join(parts[i:])
+        cert_dir = os.path.join("/etc/letsencrypt/live", base)
+        pem = os.path.join(cert_dir, "fullchain.pem")
+        if not os.path.isfile(pem):
+            continue
+        try:
+            rc, out, _ = shell.run(
+                ["openssl", "x509", "-text", "-noout", "-in", pem],
+                check=False, timeout=10)
+            if rc != 0 or not out:
+                continue
+            wildcard_pattern = r"DNS:\*\." + re.escape(base)
+            if re.search(wildcard_pattern, out):
+                return base, "*." + base
+        except Exception:
+            continue
+    return None, None
+
+
 def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dict:
     """Provision SSL for <app> at <domain> -> 127.0.0.1:<port>.
 
@@ -244,7 +273,21 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
     proxy.ensure_include()
     proxy.reload_nginx()
 
-    # 2) issue — native first, certbot fallback. The certbot fallback ALWAYS runs
+    # 2) check for existing wildcard cert covering this domain (Phase 1)
+    cert_domain, wildcard_name = _find_wildcard_cert(domain)
+    if cert_domain and _cert_exists(cert_domain):
+        not_after = _cert_not_after(cert_domain)
+        proxy.write_vhost(app, domain, port, ssl=True,
+                          cert_domain=cert_domain,
+                          wildcard_name=wildcard_name)
+        proxy.reload_nginx()
+        _install_renewal_hook()
+        _mark_ssl(app, True, not_after=not_after)
+        return {"ssl": True, "url": "https://%s/" % domain,
+                "via": "wildcard", "cert_domain": cert_domain,
+                "wildcard": wildcard_name}
+
+    # 3) issue — native first, certbot fallback. The certbot fallback ALWAYS runs
     #    when the native path didn't actually place a cert (a native call can
     #    "succeed" yet leave no live cert on broken ACME stacks). Only a real cert
     #    on disk counts as success.

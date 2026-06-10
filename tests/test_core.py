@@ -1083,9 +1083,7 @@ def test_wipe_rejects_bad_scope():
 
 # ---- aaPanel HTTP API site registration -----------------------------------
 def test_aapanel_add_site_http_api_succeeds(monkeypatch):
-    """When class API and legacy fail, HTTP API succeeds."""
-    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
-    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
+    """HTTP API is Path 1 — succeeds."""
     monkeypatch.setattr(proxy, "_try_aapanel_http_api",
                         lambda d, p: {"ok": True, "path": "aapanel-http",
                                       "detail": "via HTTP AddSite"})
@@ -1107,7 +1105,7 @@ def test_aapanel_add_site_all_paths_fail(monkeypatch):
     res = proxy.aapanel_add_site("test.example.com", 8080)
     assert res["ok"] is False
     assert "none succeeded" in res["detail"]
-    assert res["tried"] == ["class-api", "legacy-panelsite", "http-api"]
+    assert res["tried"] == ["http-api", "class-api", "legacy-panelsite"]
 
 
 def test_aapanel_remove_site_http_succeeds(monkeypatch):
@@ -1210,3 +1208,46 @@ def test_delete_app_removes_site(monkeypatch, tmp_path):
     res = inst.delete("myapp")
     assert res["removed"] is True
     assert calls == ["myapp"]
+
+
+# ---- wildcard SSL detection --------------------------------------------------
+def test_find_wildcard_cert_detects_wildcard(monkeypatch):
+    """_find_wildcard_cert returns base + wildcard when SAN matches."""
+    from core.deploy import ssl as ssl_mod
+    from core.util import shell
+
+    monkeypatch.setattr("os.path.isfile", lambda p: "fullchain.pem" in str(p))
+    monkeypatch.setattr(shell, "run",
+                        lambda cmd, **kw: (0, "DNS:*.example.com DNS:example.com", ""))
+
+    base, wildcard = ssl_mod._find_wildcard_cert("app.example.com")
+    assert base == "example.com"
+    assert wildcard == "*.example.com"
+
+
+def test_find_wildcard_cert_returns_none_when_no_match(monkeypatch):
+    """_find_wildcard_cert returns (None, None) when no wildcard SAN."""
+    from core.deploy.ssl import _find_wildcard_cert
+    from core.util import shell
+    monkeypatch.setattr("core.deploy.ssl.os.path.isfile", lambda p: True)
+    monkeypatch.setattr(shell, "run",
+                        lambda cmd, **kw: (0, "DNS:app.example.com DNS:other.com", ""))
+
+    base, wildcard = _find_wildcard_cert("app.example.com")
+    assert base is None
+    assert wildcard is None
+
+
+def test_write_vhost_wildcard_server_name(monkeypatch, tmp_path):
+    """write_vhost with cert_domain and wildcard_name uses correct paths."""
+    vdir = str(tmp_path / "vhost")
+    monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
+    path = proxy.write_vhost("wildapp", "app.example.com", 8085, ssl=True,
+                             cert_domain="example.com",
+                             wildcard_name="*.example.com")
+    assert os.path.isfile(path)
+    body = open(path).read()
+    assert "server_name app.example.com *.example.com;" in body
+    assert "ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem" in body
+    assert "ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem" in body
+    assert "proxy_pass http://127.0.0.1:8085" in body
