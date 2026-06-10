@@ -436,31 +436,41 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
     Tries in order:
       1. aaPanel site.AddSite() (modern — /www/server/panel/class/site.py)
       2. Legacy panelSite module (older aaPanel versions)
-      3. aaPanel HTTP API (POST /site?action=AddSite, loopback)
+      3. aaPanel HTTP API (POST /site?action=AddSite, loopback; requires api_sk)
 
-    Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str}.
-    Any failure is swallowed so callers can return an error to the user.
+    Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str,
+            "tried": [str]}.
     """
     domain = validate.domain(domain)
     port = validate.port(port)
+    tried = []
 
     # Path 1: modern aaPanel class API
     res = _try_aapanel_class_api(domain, port)
+    tried.append("class-api")
     if res is not None:
         return res
 
     # Path 2: legacy panelSite module
     res = _try_legacy_panelSite_import(domain, port)
+    tried.append("legacy-panelsite")
     if res is not None:
         return res
 
-    # Path 3: HTTP API
-    res = _try_aapanel_http_api(domain, port)
-    if res is not None:
-        return res
+    # Path 3: HTTP API (requires api_sk; skipped when unset)
+    if config.aapanel_api_key():
+        res = _try_aapanel_http_api(domain, port)
+        tried.append("http-api")
+        if res is not None:
+            return res
+    else:
+        tried.append("http-api-skipped-no-key")
 
+    paths = ", ".join(tried)
     return {"ok": False, "path": "aapanel",
-            "detail": "aaPanel site registration failed: all 3 API paths exhausted"}
+            "detail": "aaPanel site registration failed: tried [%s] — "
+                      "none succeeded" % paths,
+            "tried": tried}
 
 
 def aapanel_remove_site(domain: str) -> bool:
@@ -476,6 +486,10 @@ def aapanel_remove_site(domain: str) -> bool:
     removed = _aapanel_http_remove_site(domain)
 
     # Path 2: modern aaPanel class API
+    # TODO: class API DeleteSite needs site ID. Without an ID lookup through
+    # the class API itself (which doesn't expose getData), this path only
+    # works if aaPanel accepts DeleteSite by webname alone. The HTTP path
+    # (Path 1) handles the ID lookup when api_sk is configured.
     if not removed:
         try:
             import sys
@@ -576,10 +590,14 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
-        msg = "aaPanel site registration failed: %s. " \
-              "Ensure the plugin has a valid aapanel_api_key in config " \
-              "and aaPanel's panel is running." % aap.get("detail", "unknown error")
-        return {"ok": False, "error": msg, "detail": aap.get("detail", "")}
+        detail = aap.get("detail", "unknown error")
+        tried = aap.get("tried", [])
+        hint = ""
+        if "http-api-skipped-no-key" in tried:
+            hint = (" Configure aapanel_api_key in plugin config to enable "
+                    "the HTTP API fallback.")
+        msg = "aaPanel site registration failed: %s.%s" % (detail, hint)
+        return {"ok": False, "error": msg, "detail": detail}
 
     # The include line must exist: even when aaPanel "owns" the site, a later
     # SSL flip or manual edit may rely on JavaHost vhosts being picked up.

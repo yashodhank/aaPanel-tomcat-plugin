@@ -1087,6 +1087,7 @@ def test_aapanel_add_site_http_api_succeeds(monkeypatch):
     monkeypatch.setattr(proxy, "_try_aapanel_http_api",
                         lambda d, p: {"ok": True, "path": "aapanel-http",
                                       "detail": "via HTTP AddSite"})
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: "fake-key")
 
     res = proxy.aapanel_add_site("test.example.com", 8080)
     assert res["ok"] is True
@@ -1094,14 +1095,43 @@ def test_aapanel_add_site_http_api_succeeds(monkeypatch):
 
 
 def test_aapanel_add_site_all_paths_fail(monkeypatch):
-    """All 3 tiers fail — returns ok=False."""
+    """All 3 tiers fail — returns ok=False with tried paths."""
     monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
     monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
     monkeypatch.setattr(proxy, "_try_aapanel_http_api", lambda d, p: None)
+    # Ensure api_sk is set so http-api path is attempted
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: "fake-key")
 
     res = proxy.aapanel_add_site("test.example.com", 8080)
     assert res["ok"] is False
-    assert "all 3 API paths exhausted" in res["detail"]
+    assert "none succeeded" in res["detail"]
+    assert res["tried"] == ["class-api", "legacy-panelsite", "http-api"]
+
+
+def test_aapanel_add_site_skips_http_when_no_key(monkeypatch):
+    """HTTP API path is skipped (not tried) when api_sk is unset."""
+    monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
+    monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
+    monkeypatch.setattr(proxy.config, "aapanel_api_key", lambda: None)
+
+    res = proxy.aapanel_add_site("test.example.com", 8080)
+    assert res["ok"] is False
+    assert "http-api-skipped-no-key" in res["tried"]
+
+
+def test_set_site_error_hint_when_no_key(monkeypatch):
+    """Error message includes api_sk hint only when http-api was skipped."""
+    monkeypatch.setattr(proxy, "VHOST_DIR", "/tmp/vhost")
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
+    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": False, "path": "aapanel",
+                                      "detail": "tried [class-api] — none succeeded",
+                                      "tried": ["class-api"]})
+
+    res = proxy.set_site("demo", "demo.example.com", 8080)
+    assert res["ok"] is False
+    assert "aapanel_api_key" not in res["error"]  # no hint when key wasn't the issue
 
 
 def test_aapanel_remove_site_http_succeeds(monkeypatch):
