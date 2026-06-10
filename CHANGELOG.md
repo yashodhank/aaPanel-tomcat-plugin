@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.28.1] — 2026-06-10
+
+### Fixed
+- **panelSite import path corrected.** Path 1 tried `from site import site` (module
+  doesn't exist). Fixed to `from panelSite import panelSite` with `CreateProxy()`.
+- **CreateProxy parameter mismatch.** Now uses correct aaPanel API params:
+  `proxyname`, `sitename`, `proxysite`, `todomain`, `type`, `cache`, `subfilter`,
+  `advanced`, `cachetime`, `nocheck`.
+
+### Changed
+- **Nginx fallback removed from `set_site()`.** Site registration goes ONLY through
+  aaPanel APIs. On failure, returns clear error with paths tried and hint to
+  configure `api_sk` if HTTP API path was skipped.
+- **Task history retention increased.** `prune()` keeps 500 jobs (was 50),
+  `list_jobs()` returns 200 (was 50), dashboard shows 20 (was 8). Users see full
+  task history: done, failed, running, cancelled.
+
+### Added
+- **`AGENTS.md`** in project root to auto-load PR-workflow, security, code review,
+  and release rules on every session.
+- **Wildcard SSL auto-detection design doc.** Three changes proposed: cert discovery
+  scan, short-circuit issuance when wildcard exists, template support.
+
+### Documented
+- **aaPanel CreateProxy bug.** `CheckLocation()` runs outside `nocheck` guard at
+  line 4064, causing `TypeError: bool/regex` crash on every call. HTTP API is the
+  working path on the test VPS. Bug report at `docs/bugs/`.
+
+### E2E Verified
+- CreateApp → SetSite (HTTP API) → site in aaPanel DB → RemoveSite → DeleteApp
+  full flow confirmed on test VPS (Tomcat 10.1, demotest.5d.bisotech.in).
+
 ## [0.28.0] — 2026-06-10
 
 ### Fixed
