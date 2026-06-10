@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.28.0] — 2026-06-10
+
+### Fixed
+- **Site registration now uses aaPanel native API exclusively.** Removed the
+  nginx-vhost fallback and SQLite direct-write paths that bypassed aaPanel's
+  internal site management, creating orphan sites invisible in the aaPanel UI.
+  Sites now register through aaPanel's 3-tier API: class API → legacy panelSite
+  → HTTP API. On failure, a clear error is returned instead of silently creating
+  orphan nginx vhosts. (#9)
+
+### Changed
+- `SetSite` returns `{"ok": False, "error": "..."}` when registration fails
+- `remove_site()` cleans up aaPanel records via HTTP API before removing nginx vhost
+- `DeleteApp` now calls `proxy.remove_site()` to clean up associated aaPanel sites
+- Error diagnostics track which API paths were attempted vs skipped (`tried` field)
+
+### Added
+- `_try_aapanel_http_api()`: aaPanel HTTP API fallback for site creation
+- `_aapanel_http_remove_site()`: HTTP API site removal with ID lookup
+- Troubleshooting docs for site registration failures with per-path diagnostics
+
+### Removed
+- `_aapanel_sqlite_add_site`, `_aapanel_sqlite_remove_site` (direct SQLite write)
+- Nginx vhost fallback from `set_site()` (bypassed aaPanel's site management)
+
 ## [0.27.0] — 2026-06-08
 
 Hardening pass addressing an adversarial multi-agent review of v0.21–v0.26
