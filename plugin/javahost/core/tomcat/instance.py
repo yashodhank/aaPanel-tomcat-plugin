@@ -665,6 +665,12 @@ def metrics_all(names) -> Dict[str, Dict]:
 
 def delete(app: str, *, purge: bool = True) -> Dict:
     app = validate.identifier(app, "app")
+    # Clean up the reverse-proxy site in aaPanel before removing the instance
+    try:
+        from ..deploy import proxy
+        proxy.remove_site(app)
+    except Exception:
+        pass
     service.remove_unit(app)
     base = base_path(app)
     removed = False
