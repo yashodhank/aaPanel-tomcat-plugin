@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import ssl as _sslmod
 import time
 import urllib.error
@@ -24,6 +25,8 @@ import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 from .. import config
+from ..util import fs
+from ..util.shell import run
 
 try:
     import public  # provided by the panel runtime
@@ -219,13 +222,146 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
                 return {"ok": True, "path": "aapanel-http",
                         "detail": "via HTTP AddSite+%s -> %s" % (action, backend)}
 
+    # CreateProxy is flaky on some aaPanel builds (injects `location` into the
+    # wrong conf context). Fall back to writing the panel's own proxy include
+    # layout so the site stays aaPanel-visible and nginx -t clean.
+    fb_ok, fb_err = write_aapanel_proxy_files(domain, int(port))
+    if fb_ok:
+        return {"ok": True, "path": "aapanel-http-fallback",
+                "detail": "via AddSite + panel proxy files -> %s (CreateProxy was: %s)"
+                % (backend, last_detail or "failed")}
+
     return {
         "ok": False,
         "path": "aapanel-http",
         "error": ("aaPanel site created but CreateProxy failed for %s -> %s: %s"
-                  % (domain, backend, last_detail or "no detail")),
-        "detail": last_detail or "CreateProxy failed",
+                  % (domain, backend, last_detail or fb_err or "no detail")),
+        "detail": last_detail or fb_err or "CreateProxy failed",
     }
+
+
+_AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
+_AAPANEL_PROXY_DIR = "/www/server/panel/vhost/nginx/proxy/%s"
+# CreateProxy sometimes injects this block into the wrong nginx context.
+_PROXY_INLINE_RE = re.compile(
+    r"[ \t]*#PROXY-START/.*?#PROXY-END/\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _proxy_conf_body(backend: str) -> str:
+    """aaPanel-shaped proxy snippet (panel UI parses #PROXY-START/#PROXY-END)."""
+    return (
+        "#PROXY-START/\n"
+        "location /\n"
+        "{\n"
+        "    proxy_pass %s;\n"
+        "    proxy_set_header Host $host;\n"
+        "    proxy_set_header X-Real-IP $remote_addr;\n"
+        "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+        "    proxy_set_header REMOTE-HOST $remote_addr;\n"
+        "    proxy_set_header Upgrade $http_upgrade;\n"
+        "    proxy_set_header Connection $connection_upgrade;\n"
+        "    proxy_http_version 1.1;\n"
+        "    # proxy_hide_header Upgrade;\n"
+        "\n"
+        "    add_header X-Cache $upstream_cache_status;\n"
+        "\n"
+        "    #Set Nginx Cache\n"
+        "    \n"
+        "    set $static_file_jh 0;\n"
+        "    if ( $uri ~* \"\\.(gif|png|jpg|css|js|woff|woff2)$\" )\n"
+        "    {\n"
+        "    	set $static_file_jh 1;\n"
+        "    	expires 1m;\n"
+        "    }\n"
+        "    if ( $static_file_jh = 0 )\n"
+        "    {\n"
+        "    add_header Cache-Control no-cache;\n"
+        "    }\n"
+        "}\n"
+        "#PROXY-END/\n"
+    ) % backend
+
+
+def _ensure_site_proxy_include(site_body: str, include_line: str, domain: str) -> str:
+    """Ensure `include .../proxy/<domain>/*.conf;` sits in the site server block."""
+    # Strip inline proxy blocks CreateProxy may have injected into the wrong context.
+    site_body = _PROXY_INLINE_RE.sub("", site_body)
+    if include_line in site_body or ("/proxy/%s/" % domain) in site_body:
+        return site_body
+    # Prefer aaPanel's usual spot (after rewrite include).
+    marker = "#REWRITE-END"
+    idx = site_body.find(marker)
+    if idx >= 0:
+        insert_at = idx + len(marker)
+        return (site_body[:insert_at]
+                + "\n\n    %s" % include_line
+                + site_body[insert_at:])
+    m = re.search(r"\bserver\s*\{", site_body)
+    if not m:
+        raise ValueError("no server{} block in site conf")
+    brace = site_body.index("{", m.start())
+    return (site_body[: brace + 1]
+            + "\n    %s\n" % include_line
+            + site_body[brace + 1:])
+
+
+def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
+    """Write aaPanel-layout reverse-proxy conf + ensure site include line.
+
+    Layout matches what CreateProxy produces so the panel UI lists the proxy:
+      /www/server/panel/vhost/nginx/proxy/<domain>/<md5>_<domain>.conf
+      include .../proxy/<domain>/*.conf;  inside the site server{} block
+    Returns (ok, error_or_empty).
+    """
+    backend = "http://127.0.0.1:%d" % int(port)
+    site_conf = _AAPANEL_SITE_CONF % domain
+    proxy_dir = _AAPANEL_PROXY_DIR % domain
+    include_line = "include %s/*.conf;" % proxy_dir
+    if not os.path.isfile(site_conf):
+        return False, "aaPanel site conf missing: %s" % site_conf
+    try:
+        fs.ensure_dir(proxy_dir, mode=0o755)
+    except OSError as e:
+        return False, "cannot create proxy dir: %s" % e
+
+    digest = hashlib.md5(domain.encode()).hexdigest()  # nosec B324 — filename id only
+    conf_path = os.path.join(proxy_dir, "%s_%s.conf" % (digest, domain))
+    try:
+        fs.atomic_write(conf_path, _proxy_conf_body(backend), mode=0o644)
+    except OSError as e:
+        return False, "cannot write proxy conf: %s" % e
+
+    try:
+        with open(site_conf, encoding="utf-8", errors="replace") as f:
+            site_body = f.read()
+    except OSError as e:
+        return False, "cannot read site conf: %s" % e
+
+    try:
+        new_body = _ensure_site_proxy_include(site_body, include_line, domain)
+    except ValueError as e:
+        return False, str(e)
+    if new_body != site_body:
+        try:
+            fs.atomic_write(site_conf, new_body, mode=0o644)
+        except OSError as e:
+            return False, "cannot update site conf include: %s" % e
+
+    # Validate + reload nginx (same as CreateProxy would).
+    nginx = "/www/server/nginx/sbin/nginx"
+    if not os.path.isfile(nginx):
+        nginx = "nginx"
+    try:
+        rc, out, err = run([nginx, "-t"], check=False, timeout=15)
+        if rc != 0:
+            detail = ((err or "") + (out or "")).strip()[-400:]
+            return False, "nginx -t failed after proxy write: %s" % detail
+        run([nginx, "-s", "reload"], check=False, timeout=15)
+    except Exception as e:
+        return False, "nginx reload failed: %s" % e
+    return True, ""
 
 
 def http_remove_site(domain: str) -> bool:
