@@ -682,19 +682,28 @@ def metrics_all(names) -> Dict[str, Dict]:
 
 def delete(app: str, *, purge: bool = True) -> Dict:
     app = validate.identifier(app, "app")
+    site_cleanup = None
     # Clean up the reverse-proxy site in aaPanel before removing the instance
     try:
         from ..deploy import proxy
-        proxy.remove_site(app)
-    except Exception:
-        pass
+        site_cleanup = proxy.remove_site(app)
+    except Exception as e:
+        site_cleanup = {"removed": False, "error": str(e)}
     service.remove_unit(app)
     base = base_path(app)
     removed = False
     if purge and os.path.isdir(base):
         fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
         removed = True
-    return {"app": app, "removed": removed}
+    out = {"app": app, "removed": removed}
+    if site_cleanup is not None:
+        out["site"] = site_cleanup
+        if isinstance(site_cleanup, dict) and site_cleanup.get("removed") is False:
+            out["site_warning"] = (
+                site_cleanup.get("error")
+                or "reverse-proxy site may still exist in aaPanel — remove it manually"
+            )
+    return out
 
 
 def repair(app: str) -> Dict:

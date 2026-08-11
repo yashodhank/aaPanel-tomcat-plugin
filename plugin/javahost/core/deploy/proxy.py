@@ -593,6 +593,18 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     domain = validate.domain(domain)
     port = validate.port(port)
 
+    # Changing domain: remove the previous aaPanel site first so we don't orphan it.
+    prev = read_domain(app)
+    if prev and prev != domain:
+        try:
+            aapanel_remove_site(prev)
+        except Exception:
+            pass
+        try:
+            remove_vhost(app)
+        except Exception:
+            pass
+
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
         tried_str = ", ".join(aap.get("tried", [])) or aap.get("path", "aapanel")
@@ -623,17 +635,48 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
 
 def remove_site(app: str) -> Dict:
-    """Remove the app's vhost, aaPanel site record, and reload nginx; clear the
-    stored domain marker. Tries aaPanel API first, then nginx orphan cleanup."""
+    """Remove the app's vhost + aaPanel site record.
+
+    Clears the domain marker only when aaPanel cleanup succeeded (or there was
+    no domain). On aaPanel failure, keeps the marker so the operator can retry
+    RemoveSite without losing the domain name.
+    """
     app = validate.identifier(app, "app")
     domain = read_domain(app)
 
-    # Try to remove from aaPanel (API + HTTP)
     aapanel_removed = False
+    aapanel_error = None
     if domain:
-        aapanel_removed = aapanel_remove_site(domain)
+        try:
+            aapanel_removed = bool(aapanel_remove_site(domain))
+        except Exception as e:
+            aapanel_error = str(e)
+        if not aapanel_removed and aapanel_error is None:
+            aapanel_error = "aaPanel site delete did not confirm removal"
 
-    remove_vhost(app)
-    reload_nginx()
+    # Always drop a plugin-owned vhost if present (idempotent).
+    try:
+        remove_vhost(app)
+        reload_nginx()
+    except Exception:
+        pass
+
+    if domain and not aapanel_removed:
+        # Keep domain/owner markers for retry; surface partial failure.
+        return {
+            "app": app,
+            "removed": False,
+            "aapanel_cleaned": False,
+            "domain": domain,
+            "error": aapanel_error or "aaPanel cleanup failed — domain marker kept for retry",
+        }
+
     _clear_domain(app)
-    return {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed}
+    # Also clear SSL marker so we don't report ssl=true with no domain.
+    try:
+        from . import ssl as sslmod
+        sslmod._mark_ssl(app, False)
+    except Exception:
+        pass
+    return {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed,
+            "domain": domain}
