@@ -15,6 +15,7 @@ All real logic lives in `core/`; this file is thin glue so it stays auditable.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 # Make `core` importable regardless of how the panel loads the plugin.
@@ -23,7 +24,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from core.compat import aapanel as panel       # noqa: E402
-from core.util import validate                  # noqa: E402
+from core.util import validate, fs              # noqa: E402
 from core.runtime import java                   # noqa: E402
 from core.tomcat import registry, installer, service, instance  # noqa: E402
 from core.deploy import war, proxy, ssl, sitestatus  # noqa: E402
@@ -892,51 +893,66 @@ class javahost_main(object):
             major = validate.tomcat_version(panel.attr(get, "version"))
             if not war_path or not os.path.isfile(war_path):
                 return panel.err("WAR not found: %r" % war_path)
+            target = instance.require_tomcat_war_target(app)
             ns = registry.get_line(major).namespace
             warn = war.namespace_warning(war_path, ns)
-            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
-            war.safe_extract(war_path, target)
-            return panel.ok({"app": app, "deployed": True, "warning": warn})
+            war.replace_root(war_path, target)
+            # autoDeploy=false — restart so the new ROOT is loaded.
+            service.action(app, "restart")
+            return panel.ok({"app": app, "deployed": True, "restarted": True,
+                             "status": service.status(app), "warning": warn})
         except Exception as e:
             return panel.err(str(e))
 
     def UploadWar(self, get):
         """Deploy a WAR the panel has staged to a temp path (`tmp`). The UI uploads
         the file via the panel's file API; this wires that staged path into the
-        zip-slip-safe deploy flow."""
+        zip-slip-safe atomic deploy + restart flow."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             tmp = panel.attr(get, "tmp") or panel.attr(get, "war")
             major = validate.tomcat_version(panel.attr(get, "version"))
             if not tmp or not os.path.isfile(tmp):
                 return panel.err("uploaded WAR not found at staged path: %r" % tmp)
+            target = instance.require_tomcat_war_target(app)
             warn = war.namespace_warning(tmp, registry.get_line(major).namespace)
-            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
-            war.safe_extract(tmp, target)
+            war.replace_root(tmp, target)
+            service.action(app, "restart")
             panel.log("UploadWar", "%s <- %s" % (app, os.path.basename(str(tmp))))
-            return panel.ok({"app": app, "deployed": True, "warning": warn})
+            return panel.ok({"app": app, "deployed": True, "restarted": True,
+                             "status": service.status(app), "warning": warn})
         except Exception as e:
             return panel.err(str(e))
 
     def MigrateWar(self, get):
         """Convert a javax.* WAR to jakarta.* (Apache migration tool), then deploy
-        the migrated artifact to the app's webapps/ROOT for Tomcat 10/11."""
+        the migrated artifact to the app's webapps/ROOT for Tomcat 10/11 and restart."""
         try:
-            from core.util import fs
             app = validate.identifier(panel.attr(get, "app"), "app")
             major = validate.tomcat_version(panel.attr(get, "version"))
+            if int(str(major).split(".")[0]) < 10:
+                return panel.err("MigrateWar requires Tomcat 10+ (got %s); "
+                                 "javax→jakarta output will not run on Tomcat 9" % major)
             src = panel.attr(get, "war") or panel.attr(get, "tmp")
             if not src or not os.path.isfile(src):
                 return panel.err("source WAR not found: %r" % src)
+            target = instance.require_tomcat_war_target(app)
             java_home = installer.ensure_java(major)
             tmp = fs.mkdtemp("javahost-migrate-")
-            out = os.path.join(tmp, "migrated.war")
-            war.migrate(src, out, java_home)
-            target = os.path.join(instance.base_path(app), "webapps", "ROOT")
-            war.safe_extract(out, target)
-            fs.safe_rmtree(tmp, require_marker=False) if tmp.startswith("/tmp") else None
+            try:
+                out = os.path.join(tmp, "migrated.war")
+                war.migrate(src, out, java_home)
+                war.replace_root(out, target)
+            finally:
+                # mkdtemp lives under /tmp — outside MANAGED_ROOTS; use shutil.
+                try:
+                    shutil.rmtree(tmp)
+                except OSError:
+                    pass
+            service.action(app, "restart")
             panel.log("MigrateWar", "%s migrated+deployed" % app)
-            return panel.ok({"app": app, "migrated": True, "deployed": True})
+            return panel.ok({"app": app, "migrated": True, "deployed": True,
+                             "restarted": True, "status": service.status(app)})
         except Exception as e:
             return panel.err(str(e))
 
