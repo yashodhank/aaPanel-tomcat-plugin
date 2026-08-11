@@ -86,6 +86,8 @@ class javahost_main(object):
                 # Public-domain suffix (config "site_suffix", "" when unset) so the
                 # UI can offer "<app>.<suffix>" defaults; empty => UI must prompt.
                 "site_suffix": config.site_suffix(),
+                "aapanel_api_key_set": bool(config.aapanel_api_key()),
+                "aapanel_port": config.aapanel_port(),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -369,6 +371,48 @@ class javahost_main(object):
             config.set("site_suffix", val)
             panel.log("SetSiteSuffix", val or "(cleared)")
             return panel.ok({"site_suffix": val})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetPanelApi(self, get=None):
+        """Settings: whether an aaPanel interface API key is configured, and the
+        effective panel port. Never returns the secret itself."""
+        try:
+            return panel.ok({
+                "aapanel_api_key_set": bool(config.aapanel_api_key()),
+                "aapanel_port": config.aapanel_port(),
+            })
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetPanelApi(self, get):
+        """Settings: persist aaPanel interface API key (api_sk) and/or panel port.
+
+        Pass `api_key` to set (non-empty) or clear (empty string). Pass `port` to
+        override auto-detect from port.pl. Both fields are optional per call."""
+        try:
+            vals = {}
+            if panel.attr(get, "api_key", None) is not None:
+                key = str(panel.attr(get, "api_key") or "").strip()
+                vals["aapanel_api_key"] = key
+            if panel.attr(get, "port", None) is not None:
+                raw = str(panel.attr(get, "port") or "").strip()
+                if raw == "":
+                    vals["aapanel_port"] = ""
+                else:
+                    p = int(raw)
+                    if p < 1 or p > 65535:
+                        return panel.err("invalid panel port: %r" % raw)
+                    vals["aapanel_port"] = p
+            if not vals:
+                return panel.err("pass api_key and/or port")
+            config.update(vals)
+            panel.log("SetPanelApi", "key_set=%s port=%s" % (
+                bool(config.aapanel_api_key()), config.aapanel_port()))
+            return panel.ok({
+                "aapanel_api_key_set": bool(config.aapanel_api_key()),
+                "aapanel_port": config.aapanel_port(),
+            })
         except Exception as e:
             return panel.err(str(e))
 
