@@ -144,12 +144,25 @@ def aapanel_api_key():
 
 
 def aapanel_port(default: int = 37778):
-    """Local aaPanel panel port for loopback API calls (default 37778). Read from
-    plugin config if present."""
+    """Local aaPanel panel port for loopback API calls.
+
+    Prefer an explicit config value; otherwise read aaPanel's port.pl; else
+    ``default`` (37778)."""
     try:
-        return int(get("aapanel_port", default) or default)
+        raw = get("aapanel_port", None)
+        if raw is not None and str(raw).strip() != "":
+            return int(raw)
     except (TypeError, ValueError):
-        return default
+        pass
+    try:
+        with open("/www/server/panel/data/port.pl", encoding="utf-8",
+                  errors="replace") as f:
+            pl = f.read().strip()
+        if pl.isdigit():
+            return int(pl)
+    except OSError:
+        pass
+    return int(default)
 
 
 def site_suffix() -> str:

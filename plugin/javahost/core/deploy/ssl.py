@@ -24,17 +24,13 @@ structured result, never an exception, and unit tests can mock the boundaries
 """
 from __future__ import annotations
 
-import json
 import os
 import re
-import ssl as _sslmod
 import time
-import urllib.parse
-import urllib.request
 from typing import Dict, Optional, Tuple
 
 from . import proxy
-from .. import config
+from ..compat import aapanel as panel_api
 from ..util import fs, shell, validate
 
 # Per-instance SSL state marker (lives next to site.domain, written by proxy).
@@ -140,51 +136,10 @@ def _aapanel_apply(domain: str) -> Optional[bool]:
     """Issue via aaPanel's native ACME HTTP API on the loopback panel.
 
     Returns True on a parsed success, False on a parsed/transport failure, and
-    None when no api_sk is configured (caller then moves on to certbot). Auth
-    follows the documented scheme:
-        request_time  = int(time())
-        request_token = md5(str(request_time) + md5(api_sk))
-    POSTed as form fields alongside the action params to
-    https://127.0.0.1:<port>/acme?action=apply_cert_api (verify disabled —
-    loopback, self-signed panel cert).
+    None when no api_sk is configured (caller then moves on to certbot).
+    Delegates to compat.aapanel (sole panel HTTP coupling).
     """
-    api_sk = config.aapanel_api_key()
-    if not api_sk:
-        return None
-    try:
-        import hashlib
-        import time
-
-        port = config.aapanel_port()
-        request_time = int(time.time())
-        # MD5 is mandated by aaPanel's API token scheme (request_token =
-        # md5(request_time + md5(api_sk))) — not a security primitive of ours.
-        sk_md5 = hashlib.md5(api_sk.encode()).hexdigest()  # nosec B324
-        token = hashlib.md5(
-            (str(request_time) + sk_md5).encode()
-        ).hexdigest()  # nosec B324
-        params = {
-            "request_time": str(request_time),
-            "request_token": token,
-            "domains": json.dumps([domain]),
-            "siteName": domain,
-            "auth_type": "http",
-            "auth_to": domain,
-        }
-        body = urllib.parse.urlencode(params).encode()
-        url = "https://127.0.0.1:%d/acme?action=apply_cert_api" % port
-        ctx = _sslmod.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _sslmod.CERT_NONE
-        req = urllib.request.Request(url, data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=120, context=ctx) as resp:  # noqa: S310 (loopback)
-            raw = resp.read().decode("utf-8", "replace")
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return bool(data.get("status") or data.get("success") or data.get("cert"))
-        return False
-    except Exception:
-        return False
+    return panel_api.http_apply_cert(domain)
 
 
 def _certbot_issue(domain: str, email: Optional[str] = None):
