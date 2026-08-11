@@ -32,6 +32,23 @@ def exists(app: str) -> bool:
     return os.path.isdir(base_path(app))
 
 
+def require_tomcat_war_target(app: str) -> str:
+    """Validate <app> is a managed Tomcat instance suitable for WAR deploy.
+
+    Returns the absolute path of webapps/ROOT. Raises RuntimeError for missing,
+    unmanaged, or JAR apps (WAR extract into a JAR instance is a no-op at runtime
+    and leaves orphan trees that DeleteApp cannot clean)."""
+    app = validate.identifier(app, "app")
+    base = base_path(app)
+    if not os.path.isdir(base):
+        raise RuntimeError("no such app: %s (create it first)" % app)
+    if not fs.is_managed(base):
+        raise RuntimeError("app %r is not a JavaHost-managed instance" % app)
+    if _instance_type(base) == "jar":
+        raise RuntimeError("cannot deploy a WAR into JAR app %r" % app)
+    return os.path.join(base, "webapps", "ROOT")
+
+
 # --- port allocation / conflict detection (closes matrix B5) ---
 PORT_LO, PORT_HI = 8080, 8999
 

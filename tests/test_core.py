@@ -152,6 +152,87 @@ def test_war_safe_extract_ok(tmp_path):
     assert (out / "WEB-INF" / "web.xml").exists()
 
 
+def test_war_replace_root_clears_stale_files(tmp_path):
+    """Redeploy must not leave deleted classes from the previous release."""
+    dest = tmp_path / "webapps" / "ROOT"
+    dest.mkdir(parents=True)
+    (dest / "OLD.txt").write_text("stale")
+    (dest / "keep-dir").mkdir()
+    (dest / "keep-dir" / "gone.class").write_text("x")
+
+    z = _make_zip([("WEB-INF/web.xml", "<web/>"), ("index.jsp", "new")])
+    war_path = tmp_path / "c.war"
+    war_path.write_bytes(z.read())
+
+    war.replace_root(str(war_path), str(dest))
+    assert (dest / "WEB-INF" / "web.xml").read_text() == "<web/>"
+    assert (dest / "index.jsp").read_text() == "new"
+    assert not (dest / "OLD.txt").exists()
+    assert not (dest / "keep-dir").exists()
+    # no leftover staging/backup siblings
+    siblings = [p.name for p in (tmp_path / "webapps").iterdir()]
+    assert siblings == ["ROOT"]
+
+
+def test_require_tomcat_war_target_rejects_jar(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    from core.util import fs as fsmod
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "myjar"
+    base.mkdir()
+    fsmod.mark_managed(str(base))
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    with pytest.raises(RuntimeError, match="JAR"):
+        inst.require_tomcat_war_target("myjar")
+
+
+def test_require_tomcat_war_target_rejects_missing(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    with pytest.raises(RuntimeError, match="no such app"):
+        inst.require_tomcat_war_target("ghost")
+
+
+def test_uploadwar_restarts_after_atomic_deploy(tmp_path, monkeypatch):
+    """UploadWar must replace ROOT and restart (autoDeploy=false)."""
+    import javahost_main
+    from core.util import fs as fsmod
+
+    base = tmp_path / "demo"
+    (base / "webapps" / "ROOT").mkdir(parents=True)
+    (base / "webapps" / "ROOT" / "OLD.txt").write_text("stale")
+    fsmod.mark_managed(str(base))
+
+    z = _make_zip([("index.jsp", "fresh")])
+    war_path = tmp_path / "up.war"
+    war_path.write_bytes(z.read())
+
+    actions = []
+    monkeypatch.setattr(javahost_main.instance, "require_tomcat_war_target",
+                        lambda app: str(base / "webapps" / "ROOT"))
+    monkeypatch.setattr(javahost_main.registry, "get_line",
+                        lambda major: type("L", (), {"namespace": "jakarta"})())
+    monkeypatch.setattr(javahost_main.war, "namespace_warning",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(javahost_main.service, "action",
+                        lambda app, what: actions.append((app, what)))
+    monkeypatch.setattr(javahost_main.service, "status",
+                        lambda app: "active")
+
+    class G(object):
+        app = "demo"
+        version = "10"
+        tmp = str(war_path)
+        war = None
+
+    res = javahost_main.javahost_main().UploadWar(G())
+    assert res.get("status") is True
+    assert res["msg"]["restarted"] is True
+    assert actions == [("demo", "restart")]
+    assert (base / "webapps" / "ROOT" / "index.jsp").read_text() == "fresh"
+    assert not (base / "webapps" / "ROOT" / "OLD.txt").exists()
+
+
 # ---- PostgreSQL (all versions) ----
 @pytest.mark.parametrize("raw,canon", [
     ("17", "17"), ("17.2", "17"), ("pg16", "16"), ("postgresql-15", "15"),

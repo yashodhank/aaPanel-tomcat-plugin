@@ -3339,7 +3339,8 @@
           res.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
           return;
         }
-        var msg = (migrate ? 'Migrated &amp; deployed' : 'Deployed') + ' to ' + esc(p.app || app) + '.';
+        var msg = (migrate ? 'Migrated &amp; deployed' : 'Deployed') + ' to ' + esc(p.app || app) +
+          (p.restarted ? ' (Tomcat restarted).' : '.');
         if(p.warning) msg += ' <b>Warning:</b> ' + esc(p.warning);
         res.innerHTML = '<div class="jh-alert"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg><div>'+msg+'</div></div>';
         toast((migrate?'WAR migrated & deployed to ':'WAR deployed to ') + (p.app||app), 'ok');
