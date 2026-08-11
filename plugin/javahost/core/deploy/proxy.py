@@ -607,8 +607,8 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
-        tried_str = ", ".join(aap.get("tried", []))
-        detail = aap.get("detail", "unknown error")
+        tried_str = ", ".join(aap.get("tried", [])) or aap.get("path", "aapanel")
+        detail = aap.get("error") or aap.get("detail", "unknown error")
         hint = ""
         if "http-api-skipped-no-key" in aap.get("tried", []):
             hint = (" Configure aapanel_api_key in Settings to enable the "
