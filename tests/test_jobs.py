@@ -262,9 +262,10 @@ def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
                         lambda d, p: {"ok": True, "path": "aapanel",
                                       "detail": "via panelSite.CreateProxy"})
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
+    monkeypatch.setattr(proxy, "_store_owner", lambda app, owner: None)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
-    res = proxy.set_site("demo", "demo.5d.bisotech.in", 8081)
+    res = proxy.set_site("demo", "demo.example.com", 8081)
     assert res["via"] == "aapanel"
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
