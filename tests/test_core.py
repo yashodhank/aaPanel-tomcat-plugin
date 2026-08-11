@@ -738,11 +738,13 @@ def test_namespace_warning(tmp_path):
 # ---- per-site SSL: vhost rendering, marker round-trip, enable orchestration ----
 def test_write_vhost_ssl_renders_443_and_redirect(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path))
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: True)
     path = proxy.write_vhost("site", "app.example.com", 8085, ssl=True)
     conf = open(path).read()
     # a 443 TLS server with the LE live cert
     assert "listen 443 ssl;" in conf
     assert "listen [::]:443 ssl;" in conf
+    assert "http2 on;" in conf
     assert "ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;" in conf
     assert "ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;" in conf
     # port-80 server redirects to https
@@ -753,6 +755,7 @@ def test_write_vhost_ssl_renders_443_and_redirect(monkeypatch, tmp_path):
     # https proxy forwards the right scheme + targets the backend
     assert "proxy_pass http://127.0.0.1:8085;" in conf
     assert "proxy_set_header X-Forwarded-Proto https;" in conf
+    assert "proxy_set_header Upgrade $http_upgrade;" in conf
 
 
 def test_write_vhost_http_default_has_acme_no_443(monkeypatch, tmp_path):
@@ -778,6 +781,7 @@ def test_ssl_read_marker_roundtrip(monkeypatch, tmp_path):
 
 def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
     from core.tomcat import instance as inst
+    from core.util import shell as shellmod
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
@@ -786,6 +790,8 @@ def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
     # never touch nginx / the panel / certbot / /etc
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: True)
+    monkeypatch.setattr(shellmod, "which", lambda n: "/usr/bin/certbot" if n == "certbot" else None)
     monkeypatch.setattr(ssl, "_install_renewal_hook", lambda: None)
     monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)   # native unavailable
     monkeypatch.setattr(ssl, "_certbot_issue",
@@ -794,21 +800,24 @@ def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
     monkeypatch.setattr(ssl, "_cert_not_after", lambda domain: None)   # skip openssl
 
     res = ssl.enable("site", "app.example.com", 8085)
-    assert res == {"ssl": True, "url": "https://app.example.com/", "via": "certbot"}
+    assert res["ssl"] is True and res["via"] == "certbot"
     assert ssl.read_ssl("site") is True
     # vhost was rewritten to the SSL variant
     conf = open(proxy.vhost_path("site")).read()
-    assert "listen 443 ssl;" in conf
+    assert "listen 443 ssl;" in conf or "listen 443 ssl http2;" in conf
 
 
 def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
     from core.tomcat import instance as inst
+    from core.util import shell as shellmod
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
     (tmp_path / "site" / "bin").mkdir(parents=True)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: True)
+    monkeypatch.setattr(shellmod, "which", lambda n: "/usr/bin/certbot" if n == "certbot" else None)
     monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: False)
     monkeypatch.setattr(ssl, "_certbot_issue",
                         lambda domain, email=None: (False, "rate limited"))
@@ -820,7 +829,7 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
     assert ssl.read_ssl("site") is False
     # HTTP vhost left in place (no 443 server)
     conf = open(proxy.vhost_path("site")).read()
-    assert "listen 443 ssl;" not in conf
+    assert "listen 443 ssl;" not in conf and "listen 443 ssl http2;" not in conf
 
 
 # ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
@@ -843,15 +852,18 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
 
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "demo" / "bin").mkdir(parents=True)
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
-    monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": True, "path": "aapanel",
                                       "detail": "via panelSite.CreateProxy"})
     res = proxy.set_site("demo", "demo.example.com", 8081)
     assert res["via"] == "aapanel"
+    assert res.get("owner") == "aapanel"
     assert "warning" not in res
     assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
 
@@ -861,15 +873,20 @@ def test_ssl_disable_reverts_to_http(tmp_path, monkeypatch):
     from core.tomcat import instance as inst
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: True)
     (tmp_path / "site" / "bin").mkdir(parents=True)
+    # Force javahost-owned path (plugin vhost rewrite).
+    proxy._store_owner("site", "javahost")
     ssl._mark_ssl("site", True)
     assert ssl.read_ssl("site") is True
     res = ssl.disable("site", "app.example.com", 8085)
-    assert res == {"ssl": False, "url": "http://app.example.com/"}
+    assert res["ssl"] is False
+    assert res["url"] == "http://app.example.com/"
     assert ssl.read_ssl("site") is False
     conf = open(proxy.vhost_path("site")).read()
-    assert "listen 443 ssl;" not in conf
+    assert "listen 443 ssl;" not in conf and "listen 443 ssl http2;" not in conf
     assert "proxy_pass http://127.0.0.1:8085;" in conf
 
 
@@ -882,6 +899,7 @@ def test_ssl_enable_marker_carries_not_after(tmp_path, monkeypatch):
     (tmp_path / "site" / "bin").mkdir(parents=True)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: True)
     monkeypatch.setattr(ssl, "_install_renewal_hook", lambda: None)
     monkeypatch.setattr(ssl, "_aapanel_apply", lambda domain: True)   # native succeeds
     monkeypatch.setattr(ssl, "_cert_exists", lambda domain: True)
@@ -1398,16 +1416,31 @@ def test_find_wildcard_cert_returns_none_when_no_match(monkeypatch):
     assert wildcard is None
 
 
-def test_write_vhost_wildcard_server_name(monkeypatch, tmp_path):
-    """write_vhost with cert_domain and wildcard_name uses correct paths."""
+def test_write_vhost_wildcard_reuses_cert_without_hijack(monkeypatch, tmp_path):
+    """Wildcard cert paths are reused; server_name stays the single host."""
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
+    monkeypatch.setattr(proxy, "_nginx_supports_http2_on", lambda: False)
     path = proxy.write_vhost("wildapp", "app.example.com", 8085, ssl=True,
                              cert_domain="example.com",
                              wildcard_name="*.example.com")
     assert os.path.isfile(path)
     body = open(path).read()
-    assert "server_name app.example.com *.example.com;" in body
+    assert "server_name app.example.com;" in body
+    assert "*.example.com" not in body
     assert "ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem" in body
     assert "ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem" in body
     assert "proxy_pass http://127.0.0.1:8085" in body
+    assert "listen 443 ssl http2;" in body
+
+
+def test_find_wildcard_cert_rejects_multi_label(monkeypatch):
+    """*.example.com must not cover a.b.example.com."""
+    from core.deploy import ssl as ssl_mod
+    from core.util import shell
+    monkeypatch.setattr("os.path.isfile", lambda p: True)
+    monkeypatch.setattr(shell, "run",
+                        lambda cmd, **kw: (0, "DNS:*.example.com", ""))
+    base, wildcard = ssl_mod._find_wildcard_cert("a.b.example.com")
+    # Parent base is b.example.com; file check may "succeed" but SAN won't match *.b.example.com
+    assert base is None and wildcard is None
