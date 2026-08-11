@@ -895,7 +895,17 @@
   }
   // {status,msg} envelope: data lives in msg, else r itself.
   function payload(r){ return (r && r.msg != null) ? r.msg : (r || {}); }
-  function failed(r){ return !!(r && r.status === false); }
+  // Transport/envelope failure OR nested business failure (ok:false / ssl:false+error).
+  // Backend should return panel.err for those, but older builds may wrap them in ok.
+  function failed(r){
+    if(!r || r.status === false) return true;
+    var p = payload(r);
+    if(p && typeof p === 'object'){
+      if(p.ok === false) return true;
+      if(p.ssl === false && typeof p.error === 'string' && p.error) return true;
+    }
+    return false;
+  }
   // Human-first error text: prefer string, then .msg/.error, else JSON. Truncated.
   function errText(p){
     var s;
@@ -2383,8 +2393,14 @@
         toast(errText(p), 'err', 'SSL change failed');
         return;
       }
-      // trust the server's reported state where present, else fall back to want
+      // Enabling: require ssl===true. Disabling: ssl===false is success.
       var ssl = (p && typeof p.ssl === 'boolean') ? p.ssl : want;
+      if(want && !ssl){
+        if(live){ live.classList.remove('busy'); live.disabled = false;
+          live.setAttribute('aria-checked', 'false'); }
+        toast(errText(p) || 'certificate issuance failed', 'err', 'SSL change failed');
+        return;
+      }
       if(APPS_BY_NAME[app]){
         APPS_BY_NAME[app].ssl = ssl;
         if(p && p.domain) APPS_BY_NAME[app].domain = String(p.domain).replace(/^https?:\/\//,'').replace(/\/+$/,'');
