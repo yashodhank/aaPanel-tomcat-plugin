@@ -49,7 +49,11 @@ def test_http_add_site_fails_without_proxy_attach(monkeypatch, tmp_path):
         return {"status": False, "msg": "nope"}, None
 
     monkeypatch.setattr(panel_api, "http_request", fake_http)
-    assert panel_api.http_add_site_with_proxy("app.example.com", 8085) is None
+    monkeypatch.setattr(panel_api.os, "makedirs", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api.time, "sleep", lambda *a, **k: None)
+    res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
+    assert isinstance(res, dict) and res.get("ok") is False
+    assert "CreateProxy failed" in res.get("error", "")
 
 
 def test_detect_panel_port_reads_port_pl(tmp_path, monkeypatch):

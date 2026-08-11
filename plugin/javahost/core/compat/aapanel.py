@@ -137,14 +137,20 @@ def http_request(path: str, *, params: Optional[Dict] = None,
 def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     """Create an aaPanel site and attach a reverse-proxy to 127.0.0.1:<port>.
 
-    AddSite alone with type=proxy does NOT configure the upstream on typical
-    aaPanel builds — CreateProxy must follow. Returns a success dict or None.
+    AddSite alone does NOT configure the upstream on typical aaPanel builds —
+    CreateProxy must follow. Returns a success dict, or a dict with
+    ``ok=False``/``error`` when the site was created but proxy attach failed
+    (so callers do not silently fall through and leave orphans undiagnosed),
+    or None when the API key is missing / AddSite itself failed.
     """
     backend = "http://127.0.0.1:%d" % int(port)
     # CreateProxy writes under vhost/nginx/proxy/<site>/ — if the parent dir is
     # missing (fresh panels), the call fails silently / with a vague error.
     try:
         os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+        os.makedirs(
+            "/www/server/panel/vhost/nginx/proxy/%s" % domain,
+            mode=0o755, exist_ok=True)
     except OSError:
         pass
 
@@ -159,14 +165,12 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         "ftp": "false",
         "sql": "false",
         "set_ssl": "0",
-        # Extra fields some builds honor on AddSite (harmless if ignored).
         "proxy_pass": backend,
         "proxysite": backend,
     }
     data, err_msg = http_request(
         "/site", params={"action": "AddSite"}, body=add_body,
         method="POST", timeout=30)
-    # Treat "site already exists" as OK so we can still attach/repair the proxy.
     site_ok = False
     if isinstance(data, dict):
         if data.get("status") or data.get("siteStatus"):
@@ -191,22 +195,37 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         "cachetime": "1",
         "nocheck": "1",
     }
-    pdata, perr = http_request(
-        "/site", params={"action": "CreateProxy"}, body=proxy_body,
-        method="POST", timeout=30)
-    if isinstance(pdata, dict) and (pdata.get("status") or pdata.get("siteStatus")):
-        return {"ok": True, "path": "aapanel-http",
-                "detail": "via HTTP AddSite+CreateProxy -> %s" % backend}
-    # Some panels expose ModifyProxy / SetProxy instead.
-    for action in ("ModifyProxy", "SetProxy", "create_proxy"):
-        pdata2, _ = http_request(
-            "/site", params={"action": action}, body=proxy_body,
+    # AddSite → CreateProxy race: panel may not have flushed the site conf yet.
+    last_detail = ""
+    for attempt in range(1, 4):
+        if attempt > 1:
+            time.sleep(0.8 * attempt)
+        pdata, perr = http_request(
+            "/site", params={"action": "CreateProxy"}, body=proxy_body,
             method="POST", timeout=30)
-        if isinstance(pdata2, dict) and (pdata2.get("status") or pdata2.get("siteStatus")):
+        if isinstance(pdata, dict) and (pdata.get("status") or pdata.get("siteStatus")):
             return {"ok": True, "path": "aapanel-http",
-                    "detail": "via HTTP AddSite+%s -> %s" % (action, backend)}
-    # Site exists but proxy attach failed — not a success (would be a dead site).
-    return None
+                    "detail": "via HTTP AddSite+CreateProxy -> %s" % backend}
+        last_detail = ""
+        if isinstance(pdata, dict):
+            last_detail = str(pdata.get("msg") or pdata.get("error") or pdata)
+        elif perr:
+            last_detail = perr
+        for action in ("ModifyProxy", "SetProxy"):
+            pdata2, _ = http_request(
+                "/site", params={"action": action}, body=proxy_body,
+                method="POST", timeout=30)
+            if isinstance(pdata2, dict) and (pdata2.get("status") or pdata2.get("siteStatus")):
+                return {"ok": True, "path": "aapanel-http",
+                        "detail": "via HTTP AddSite+%s -> %s" % (action, backend)}
+
+    return {
+        "ok": False,
+        "path": "aapanel-http",
+        "error": ("aaPanel site created but CreateProxy failed for %s -> %s: %s"
+                  % (domain, backend, last_detail or "no detail")),
+        "detail": last_detail or "CreateProxy failed",
+    }
 
 
 def http_remove_site(domain: str) -> bool:

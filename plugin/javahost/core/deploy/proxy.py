@@ -384,7 +384,8 @@ def _try_aapanel_http_api(domain: str, port: int) -> Optional[Dict]:
     if not panel_api.api_key_configured():
         return None
     try:
-        return panel_api.http_add_site_with_proxy(domain, port)
+        res = panel_api.http_add_site_with_proxy(domain, port)
+        return res
     except Exception:
         return None
 
@@ -417,6 +418,8 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         res = _try_aapanel_http_api(domain, port)
         tried.append("http-api")
         if res is not None:
+            # Success OR a diagnosed AddSite-ok/CreateProxy-fail — stop falling
+            # through (further paths cannot fix a half-created site cleanly).
             return res
     else:
         tried.append("http-api-skipped-no-key")
