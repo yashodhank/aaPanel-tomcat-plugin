@@ -141,6 +141,13 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     aaPanel builds — CreateProxy must follow. Returns a success dict or None.
     """
     backend = "http://127.0.0.1:%d" % int(port)
+    # CreateProxy writes under vhost/nginx/proxy/<site>/ — if the parent dir is
+    # missing (fresh panels), the call fails silently / with a vague error.
+    try:
+        os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+    except OSError:
+        pass
+
     add_body = {
         "webname": json.dumps({"domain": domain, "domainlist": [], "count": 0}),
         "path": "/www/wwwroot/%s" % domain,
