@@ -276,17 +276,24 @@ def _try_aapanel_class_api(domain: str, port: int) -> Optional[Dict]:
             __setattr__ = dict.__setitem__
 
         g = _G()
-        g["proxyname"] = domain
+        g["proxyname"] = "javahost-" + domain.replace(".", "-")[:40]
         g["sitename"] = domain
         g["proxydir"] = "/"
         g["proxysite"] = backend
-        g["todomain"] = backend
-        g["type"] = 1
-        g["cache"] = 0
+        g["todomain"] = "$host"
+        # panelSite.CreateProxy expects string fields (int values crash/fail checks).
+        g["type"] = "1"
+        g["cache"] = "0"
         g["subfilter"] = "[]"
-        g["advanced"] = 0
-        g["cachetime"] = 0
+        g["advanced"] = "0"
+        g["cachetime"] = "1"
         g["nocheck"] = "1"
+
+        # Ensure proxy conf dir exists (CreateProxy writes here; missing => silent fail).
+        try:
+            os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+        except OSError:
+            pass
 
         # CreateProxy is the dedicated aaPanel method for reverse-proxy sites
         res = site_obj.CreateProxy(g)
@@ -317,17 +324,22 @@ def _try_legacy_panelSite_import(domain: str, port: int) -> Optional[Dict]:
             __setattr__ = dict.__setitem__
 
         g = _G()
-        g["proxyname"] = domain
+        g["proxyname"] = "javahost-" + domain.replace(".", "-")[:40]
         g["sitename"] = domain
         g["proxydir"] = "/"
         g["proxysite"] = backend
-        g["todomain"] = backend
-        g["type"] = 1
-        g["cache"] = 0
+        g["todomain"] = "$host"
+        g["type"] = "1"
+        g["cache"] = "0"
         g["subfilter"] = "[]"
-        g["advanced"] = 0
-        g["cachetime"] = 0
+        g["advanced"] = "0"
+        g["cachetime"] = "1"
         g["nocheck"] = "1"
+
+        try:
+            os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+        except OSError:
+            pass
 
         if hasattr(site, "CreateProxy"):
             res = site.CreateProxy(g)

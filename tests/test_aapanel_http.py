@@ -23,6 +23,7 @@ def test_http_add_site_with_proxy_calls_createproxy(monkeypatch, tmp_path):
         return {"status": False}, None
 
     monkeypatch.setattr(panel_api, "http_request", fake_http)
+    monkeypatch.setattr(panel_api.os, "makedirs", lambda *a, **k: None)
     res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
     assert res and res["ok"] is True
     assert "CreateProxy" in res["detail"]
@@ -31,6 +32,8 @@ def test_http_add_site_with_proxy_calls_createproxy(monkeypatch, tmp_path):
     assert len(proxy_calls) == 1
     assert proxy_calls[0]["body"]["proxysite"] == "http://127.0.0.1:8085"
     assert proxy_calls[0]["body"]["sitename"] == "app.example.com"
+    assert proxy_calls[0]["body"]["type"] == "1"
+    assert proxy_calls[0]["body"]["todomain"] == "$host"
 
 
 def test_http_add_site_fails_without_proxy_attach(monkeypatch, tmp_path):
