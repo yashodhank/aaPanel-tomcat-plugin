@@ -6,6 +6,7 @@ import json
 import os
 
 CONFIG_PATH = "/www/server/javahost/config.json"
+_INFO_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "info.json")
 
 _DEFAULTS = {
     # When true (default), the plugin may momentarily lift the immutable bit on its
@@ -160,3 +161,13 @@ def site_suffix() -> str:
     (no FQDN is ever guessed). Never hardcoded into the shipped plugin."""
     val = get("site_suffix", "")
     return str(val).strip().strip(".") if val else ""
+
+
+def plugin_version() -> str:
+    """SemVer from the plugin manifest (info.json ``versions`` field)."""
+    try:
+        with open(_INFO_JSON, encoding="utf-8") as f:
+            ver = json.load(f).get("versions")
+        return str(ver).strip() if ver else "unknown"
+    except Exception:
+        return "unknown"
