@@ -1,5 +1,7 @@
 # coding: utf-8
 """aaPanel HTTP compat helpers — AddSite must attach a real reverse-proxy upstream."""
+import json
+
 from core.compat import aapanel as panel_api
 from core import config
 
@@ -96,10 +98,14 @@ def test_write_aapanel_proxy_files_layout(monkeypatch, tmp_path):
         "#PROXY-END/\n"
         "    #error_page 404 /404.html;\n}\n" % domain
     )
+    proxyfile = tmp_path / "data" / "proxyfile.json"
+    proxyfile.parent.mkdir(parents=True)
+    proxyfile.write_text("[]")
     monkeypatch.setattr(
         panel_api, "_AAPANEL_SITE_CONF", str(vhost / "%s.conf"))
     monkeypatch.setattr(
         panel_api, "_AAPANEL_PROXY_DIR", str(vhost / "proxy" / "%s"))
+    monkeypatch.setattr(panel_api, "_AAPANEL_PROXYFILE", str(proxyfile))
     monkeypatch.setattr(
         panel_api, "run",
         lambda argv, check=False, timeout=15: (0, "syntax is ok", ""))
@@ -119,6 +125,34 @@ def test_write_aapanel_proxy_files_layout(monkeypatch, tmp_path):
     assert "proxy_pass http://127.0.0.1:18080;" in proxy_txt
     assert "#PROXY-START/" in proxy_txt
     assert "Upgrade $http_upgrade" in proxy_txt
+    rows = json.loads(proxyfile.read_text())
+    assert len(rows) == 1
+    assert rows[0]["sitename"] == domain
+    assert rows[0]["proxysite"] == "http://127.0.0.1:18080"
+    assert rows[0]["proxyname"].startswith("javahost-")
+
+
+def test_register_proxyfile_upserts(monkeypatch, tmp_path):
+    path = tmp_path / "proxyfile.json"
+    path.write_text(json.dumps([{
+        "proxyname": "javahost-old",
+        "sitename": "app.example.com",
+        "proxydir": "/",
+        "proxysite": "http://127.0.0.1:1",
+    }, {
+        "proxyname": "other",
+        "sitename": "other.example.com",
+        "proxydir": "/",
+        "proxysite": "http://127.0.0.1:9",
+    }]))
+    monkeypatch.setattr(panel_api, "_AAPANEL_PROXYFILE", str(path))
+    ok, err = panel_api._register_proxyfile("app.example.com", 8085)
+    assert ok is True, err
+    rows = json.loads(path.read_text())
+    assert len(rows) == 2
+    by_site = {r["sitename"]: r for r in rows}
+    assert by_site["app.example.com"]["proxysite"] == "http://127.0.0.1:8085"
+    assert by_site["other.example.com"]["proxysite"] == "http://127.0.0.1:9"
 
 
 def test_detect_panel_port_reads_port_pl(tmp_path, monkeypatch):

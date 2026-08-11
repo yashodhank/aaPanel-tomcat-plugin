@@ -185,6 +185,10 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     if not site_ok:
         return None
 
+    # Prior failed CreateProxy attempts may have left an inline `location`
+    # block in the site conf; scrub before retrying so nginx -t can pass.
+    scrub_site_inline_proxy(domain)
+
     proxy_body = {
         "proxyname": "javahost-" + domain.replace(".", "-")[:40],
         "sitename": domain,
@@ -203,6 +207,7 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     for attempt in range(1, 4):
         if attempt > 1:
             time.sleep(0.8 * attempt)
+            scrub_site_inline_proxy(domain)
         pdata, perr = http_request(
             "/site", params={"action": "CreateProxy"}, body=proxy_body,
             method="POST", timeout=30)
@@ -242,11 +247,90 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
 
 _AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
 _AAPANEL_PROXY_DIR = "/www/server/panel/vhost/nginx/proxy/%s"
+# Panel Website → Reverse Proxy UI reads this JSON list (not nginx alone).
+_AAPANEL_PROXYFILE = "/www/server/panel/data/proxyfile.json"
 # CreateProxy sometimes injects this block into the wrong nginx context.
 _PROXY_INLINE_RE = re.compile(
     r"[ \t]*#PROXY-START/.*?#PROXY-END/\s*",
     re.DOTALL | re.IGNORECASE,
 )
+
+
+def scrub_site_inline_proxy(domain: str) -> bool:
+    """Remove inline #PROXY-START..#PROXY-END blocks from the site vhost conf.
+
+    Returns True when the file was rewritten. Best-effort; never raises.
+    """
+    site_conf = _AAPANEL_SITE_CONF % domain
+    if not os.path.isfile(site_conf):
+        return False
+    try:
+        with open(site_conf, encoding="utf-8", errors="replace") as f:
+            body = f.read()
+    except OSError:
+        return False
+    new_body = _PROXY_INLINE_RE.sub("", body)
+    if new_body == body:
+        return False
+    try:
+        fs.atomic_write(site_conf, new_body, mode=0o644)
+    except OSError:
+        return False
+    return True
+
+
+def _register_proxyfile(domain: str, port: int) -> Tuple[bool, str]:
+    """Upsert a proxy row so Website → Reverse Proxy lists the upstream."""
+    backend = "http://127.0.0.1:%d" % int(port)
+    proxyname = "javahost-" + domain.replace(".", "-")[:40]
+    entry = {
+        "proxyname": proxyname,
+        "sitename": domain,
+        "proxydir": "/",
+        "proxysite": backend,
+        "todomain": "$host",
+        "type": 1,
+        "cache": 0,
+        "subfilter": [
+            {"sub1": "", "sub2": ""},
+            {"sub1": "", "sub2": ""},
+            {"sub1": "", "sub2": ""},
+        ],
+        "advanced": 0,
+        "cachetime": 1,
+        "keepurl": 1,
+        "rewritedn": [],
+    }
+    path = _AAPANEL_PROXYFILE
+    rows: list = []
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read().strip() or "[]"
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                rows = parsed
+        except (OSError, ValueError, TypeError) as e:
+            return False, "cannot read proxyfile.json: %s" % e
+    kept = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        # Replace same site+dir or same JavaHost proxyname.
+        if row.get("sitename") == domain and str(row.get("proxydir") or "/") == "/":
+            continue
+        if row.get("proxyname") == proxyname:
+            continue
+        kept.append(row)
+    kept.append(entry)
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            fs.ensure_dir(parent, mode=0o755)
+        fs.atomic_write(path, json.dumps(kept, ensure_ascii=False), mode=0o644)
+    except OSError as e:
+        return False, "cannot write proxyfile.json: %s" % e
+    return True, ""
 
 
 def _proxy_conf_body(backend: str) -> str:
@@ -313,6 +397,7 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
     Layout matches what CreateProxy produces so the panel UI lists the proxy:
       /www/server/panel/vhost/nginx/proxy/<domain>/<md5>_<domain>.conf
       include .../proxy/<domain>/*.conf;  inside the site server{} block
+      /www/server/panel/data/proxyfile.json entry (Website UI source of truth)
     Returns (ok, error_or_empty).
     """
     backend = "http://127.0.0.1:%d" % int(port)
@@ -348,6 +433,10 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
             fs.atomic_write(site_conf, new_body, mode=0o644)
         except OSError as e:
             return False, "cannot update site conf include: %s" % e
+
+    pf_ok, pf_err = _register_proxyfile(domain, int(port))
+    if not pf_ok:
+        return False, pf_err
 
     # Validate + reload nginx (same as CreateProxy would).
     nginx = "/www/server/nginx/sbin/nginx"
