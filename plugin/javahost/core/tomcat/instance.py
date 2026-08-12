@@ -438,6 +438,9 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
             raise ValueError("invalid spring profiles: %r" % profiles)
         if prof:
             env_lines.append("SPRING_PROFILES_ACTIVE=%s" % prof)
+    # Persist JVM opts so RepairApp can rebuild a missing unit without
+    # silently dropping -Xmx/-Xms (unit file alone is not durable).
+    env_lines.append('JAVA_OPTS="%s"' % " ".join(opts))
     _fs.atomic_write(os.path.join(base, "bin", "app.env"),
                      "\n".join(env_lines) + "\n", mode=0o640)
     shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
@@ -725,14 +728,20 @@ def delete(app: str, *, purge: bool = True) -> Dict:
 
 
 def _read_jar_java_opts(app: str, base: str) -> str:
-    """Best-effort recover JAVA_OPTS from an existing JAR unit (systemd/init.d)."""
+    """Recover JAVA_OPTS for a JAR app — unit, then app.env, then setenv.
+
+    Order matters: a live unit is authoritative when present; durable config
+    (app.env / setenv) covers the documented missing-unit repair case.
+    Returns "" only when no source has opts — callers must not silently
+    reinstall with an empty string.
+    """
     unit = os.path.join(service.SYSTEMD_DIR, "javahost-%s.service" % app)
     if os.path.isfile(unit):
         try:
             with open(unit, encoding="utf-8", errors="replace") as f:
                 text = f.read()
             m = re.search(r"ExecStart=\S+/java\s+(.*?)\s+-jar\s+", text)
-            if m:
+            if m and m.group(1).strip():
                 return m.group(1).strip()
         except OSError:
             pass
@@ -742,11 +751,52 @@ def _read_jar_java_opts(app: str, base: str) -> str:
             with open(initd, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     m = re.match(r'\s*JAVA_OPTS="(.*)"\s*$', line)
-                    if m:
+                    if m and m.group(1).strip():
                         return m.group(1).strip()
         except OSError:
             pass
+    env = _read_app_env(base)
+    opts = (env.get("JAVA_OPTS") or "").strip()
+    if opts:
+        return opts
+    setenv = _read_setenv(base)
+    opts = (setenv.get("JAVA_OPTS") or "").strip()
+    if opts:
+        return opts
     return ""
+
+
+def _persist_jar_java_opts(base: str, java_opts: str) -> None:
+    """Ensure bin/app.env carries JAVA_OPTS so a later missing-unit repair works."""
+    java_opts = (java_opts or "").strip()
+    if not java_opts:
+        return
+    path = os.path.join(base, "bin", "app.env")
+    env = _read_app_env(base)
+    if (env.get("JAVA_OPTS") or "").strip() == java_opts:
+        return
+    env["JAVA_OPTS"] = java_opts
+    # Preserve known key order; append any extras.
+    preferred = ("SERVER_PORT", "SERVER_ADDRESS", "SERVER_HOST", "JAVA_HOME",
+                 "SPRING_PROFILES_ACTIVE", "JAVA_OPTS")
+    lines = []
+    seen = set()
+    for key in preferred:
+        if key in env:
+            val = env[key]
+            if key == "JAVA_OPTS" or (" " in val and not (val.startswith('"') and val.endswith('"'))):
+                lines.append('%s="%s"' % (key, val))
+            else:
+                lines.append("%s=%s" % (key, val))
+            seen.add(key)
+    for key, val in env.items():
+        if key in seen:
+            continue
+        if " " in val and not (val.startswith('"') and val.endswith('"')):
+            lines.append('%s="%s"' % (key, val))
+        else:
+            lines.append("%s=%s" % (key, val))
+    fs.atomic_write(path, "\n".join(lines) + "\n", mode=0o640)
 
 
 def repair(app: str) -> Dict:
@@ -754,7 +804,8 @@ def repair(app: str) -> Dict:
 
     Tomcat apps: re-read setenv, re-assert AJP-off + conf perms, reinstall unit.
     JAR apps: re-read app.env (JAVA_HOME/SERVER_PORT) + recover java_opts from
-    the existing unit when present, then reinstall the jar unit.
+    the existing unit / app.env / setenv, then reinstall the jar unit.
+    Refuses to reinstall a JAR unit with empty java_opts (would drop -Xmx).
     """
     app = validate.identifier(app, "app")
     base = base_path(app)
@@ -770,6 +821,12 @@ def repair(app: str) -> Dict:
         if not port:
             raise RuntimeError("cannot repair JAR %s: no SERVER_PORT / port marker" % app)
         java_opts = _read_jar_java_opts(app, base)
+        if not java_opts:
+            raise RuntimeError(
+                "cannot repair JAR %s: no JAVA_OPTS in unit, app.env, or setenv — "
+                "refusing to reinstall without memory options (-Xmx/-Xms)" % app
+            )
+        _persist_jar_java_opts(base, java_opts)
         service.install_jar_unit(app, java_home, base, int(port),
                                  java_opts=java_opts, user="www")
         if service.status(app) == "active":
