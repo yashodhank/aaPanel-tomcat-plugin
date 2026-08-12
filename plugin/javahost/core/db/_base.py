@@ -22,6 +22,7 @@ from ..util import fs, validate
 _VER_TOKEN = re.compile(r"(\d+(?:\.\d+)?)")
 _PARAM_KEY = re.compile(r"^[A-Za-z0-9_]+$")
 _PARAM_VAL = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_ENV_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 
 def safe_host(host: str) -> str:
@@ -37,10 +38,44 @@ def safe_params(params: Optional[Dict[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
+def read_app_env(catalina_base: str) -> Dict[str, str]:
+    """Parse CATALINA_BASE/bin/app.env (KEY=val / KEY=\"val\"). Never logs values."""
+    path = os.path.join(catalina_base, "bin", "app.env")
+    env: Dict[str, str] = {}
+    if not os.path.isfile(path):
+        return env
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            m = _ENV_LINE.match(line)
+            if not m:
+                continue
+            key, raw = m.group(1), m.group(2).strip()
+            if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+                raw = raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+            elif len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+                raw = raw[1:-1]
+            env[key] = raw
+    return env
+
+
 def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
-    """Write CATALINA_BASE/bin/app.env (0640), values shell-escaped. Secret-safe."""
+    """Merge mapping into CATALINA_BASE/bin/app.env (0640).
+
+    Preserves non-DB_* keys already on disk (JAR loopback bind, SERVER_PORT,
+    JAVA_HOME, Spring profiles). Existing DB_* keys are dropped and replaced by
+    ``mapping`` so engine switches do not leave stale credentials. Values are
+    shell-escaped. Secret-safe — never log the mapping (may contain DB_PASSWORD).
+    """
+    existing = read_app_env(catalina_base)
+    merged: Dict[str, str] = {
+        k: v for k, v in existing.items() if not str(k).startswith("DB_")
+    }
+    merged.update(mapping)
     lines = []
-    for k, v in mapping.items():
+    for k, v in merged.items():
         safe = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "")
         lines.append('%s="%s"' % (k, safe))
     path = os.path.join(catalina_base, "bin", "app.env")

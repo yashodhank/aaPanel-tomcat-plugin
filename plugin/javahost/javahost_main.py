@@ -1011,6 +1011,8 @@ class javahost_main(object):
             return panel.err(str(e))
 
     def SetDbEnv(self, get):
+        """Write DB_* into bin/app.env (0640). Merges — preserves non-DB_* JAR
+        keys (SERVER_ADDRESS/PORT, JAVA_HOME, profiles). Never echoes secrets."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             base = instance.base_path(app)
@@ -1032,6 +1034,7 @@ class javahost_main(object):
                 version=panel.attr(get, "db_version"),  # optional; any supported version
                 ssl=ssl,
             )
+            # write_app_env merges: non-DB_* preserved; DB_* replaced from mapping
             dbengines.write_app_env(base, mapping)
             return panel.ok({"app": app, "engine": engine.name,
                              "env": "written (secrets not echoed)",

@@ -26,6 +26,10 @@ def get(name: str) -> _base.Engine:
     return ENGINES[key]
 
 
+def read_app_env(catalina_base: str) -> Dict[str, str]:
+    return _base.read_app_env(catalina_base)
+
+
 def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
     return _base.write_app_env(catalina_base, mapping)
 
