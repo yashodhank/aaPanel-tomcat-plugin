@@ -155,6 +155,16 @@ def test_register_proxyfile_upserts(monkeypatch, tmp_path):
     assert by_site["other.example.com"]["proxysite"] == "http://127.0.0.1:9"
 
 
+def test_register_proxyfile_rejects_non_list(monkeypatch, tmp_path):
+    path = tmp_path / "proxyfile.json"
+    path.write_text("{}")
+    monkeypatch.setattr(panel_api, "_AAPANEL_PROXYFILE", str(path))
+    ok, err = panel_api._register_proxyfile("app.example.com", 8085)
+    assert ok is False
+    assert "shape" in err
+    assert path.read_text() == "{}"  # unchanged
+
+
 def test_detect_panel_port_reads_port_pl(tmp_path, monkeypatch):
     pl = tmp_path / "port.pl"
     pl.write_text("8888")
