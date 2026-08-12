@@ -692,7 +692,12 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     service.remove_unit(app)
     base = base_path(app)
     removed = False
-    if purge and os.path.isdir(base):
+    # If aaPanel delete failed, keep the instance tree (incl. site.domain marker)
+    # so RemoveSite/DeleteApp can be retried without losing the domain name.
+    site_blocked = (isinstance(site_cleanup, dict)
+                    and site_cleanup.get("removed") is False
+                    and site_cleanup.get("domain"))
+    if purge and os.path.isdir(base) and not site_blocked:
         fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
         removed = True
     out = {"app": app, "removed": removed}
@@ -703,6 +708,10 @@ def delete(app: str, *, purge: bool = True) -> Dict:
                 site_cleanup.get("error")
                 or "reverse-proxy site may still exist in aaPanel — remove it manually"
             )
+            if site_blocked and purge:
+                out["site_warning"] += (
+                    "; instance kept so domain marker remains for retry"
+                )
     return out
 
 

@@ -593,18 +593,9 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     domain = validate.domain(domain)
     port = validate.port(port)
 
-    # Changing domain: remove the previous aaPanel site first so we don't orphan it.
+    # Changing domain: attach the NEW site first; only then drop the previous
+    # aaPanel site. Delete-before-create orphans the live site when add fails.
     prev = read_domain(app)
-    if prev and prev != domain:
-        try:
-            aapanel_remove_site(prev)
-        except Exception:
-            pass
-        try:
-            remove_vhost(app)
-        except Exception:
-            pass
-
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
         tried_str = ", ".join(aap.get("tried", [])) or aap.get("path", "aapanel")
@@ -617,6 +608,16 @@ def set_site(app: str, domain: str, port: int) -> Dict:
                "Site not created — fix the issue and try again."
                % (tried_str, detail, hint))
         return {"ok": False, "error": msg}
+
+    if prev and prev != domain:
+        try:
+            aapanel_remove_site(prev)
+        except Exception:
+            pass
+        try:
+            remove_vhost(app)
+        except Exception:
+            pass
 
     # Do not inject a competing JavaHost vhost — aaPanel owns the site conf.
     _store_domain(app, domain)
