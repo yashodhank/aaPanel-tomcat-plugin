@@ -34,6 +34,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - `SetSite` marks aaPanel ownership and strips leftover plugin vhosts when
   registration succeeds via the panel (#17).
 
+### Documented
+- **Docs link audit** — restored `docs/` stubs for operator manuals after the
+  v0.28.x de-dupe left README/INSTALL 404s; fixed Help-tab screenshot paths to
+  `docs/images/`; added [`docs/README.md`](docs/README.md) index.
+
 ## [0.28.1] — 2026-06-10
 
 ### Fixed

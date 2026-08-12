@@ -1,7 +1,7 @@
 # Screenshots — manifest
 
 This directory holds the screenshots referenced by the docs (chiefly
-[`../user-guide.md`](../user-guide.md)). The Markdown links each file by the
+[`../user-guide.md`](../../plugin/javahost/docs/user-guide.md)). The Markdown links each file by the
 **exact** name below; keep filenames as listed so the links resolve.
 
 > **Status:** captured against the live **v0.16.2 UI in Fullscreen mode**

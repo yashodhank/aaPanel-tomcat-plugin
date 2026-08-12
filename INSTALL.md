@@ -9,7 +9,7 @@ release ZIP through the panel UI, or deploying from source to your own panel.
 - A running aaPanel / BaoTa-style panel with the Python 3 plugin runtime
   (the panel ships its own interpreter at `/www/server/panel/pyenv/bin/python`).
 - Linux host with **systemd** (an init.d fallback is used automatically on hosts
-  without systemd — see [troubleshooting](docs/troubleshooting.md)).
+  without systemd — see [troubleshooting](plugin/javahost/docs/troubleshooting.md)).
 - Host tools used at runtime:
   - `curl` — artifact downloads (a `urllib` fallback is used if curl is absent).
   - `gpg` — OpenPGP signature verification of Tomcat/JDK downloads. Without it,
@@ -101,5 +101,5 @@ is enforced before anything is written: Tomcat 10.1 needs Java 11+, Tomcat 11
 needs Java 17+. If no suitable JDK is present, a Temurin JDK is installed
 (verified) automatically.
 
-See also: [Troubleshooting](docs/troubleshooting.md) and
-[Connecting Java apps to databases](docs/databases-java-apps.md).
+See also: [Troubleshooting](plugin/javahost/docs/troubleshooting.md) and
+[Connecting Java apps to databases](plugin/javahost/docs/databases-java-apps.md).

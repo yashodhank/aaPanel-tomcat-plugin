@@ -2,8 +2,8 @@
 
 A task-oriented checklist for validating a JavaHost install end-to-end on a real
 aaPanel/BaoTa host. It maps each step to the plugin's UI sections and the
-server-side endpoints they call (see [User Guide](user-guide.md) for screenshots
-and [Connecting Java apps to databases](databases-java-apps.md) for the DB
+server-side endpoints they call (see [User Guide](../plugin/javahost/docs/user-guide.md) for screenshots
+and [Connecting Java apps to databases](../plugin/javahost/docs/databases-java-apps.md) for the DB
 reference). Allow ~30 minutes for a full pass.
 
 Two success markers prove a deploy is healthy end-to-end:

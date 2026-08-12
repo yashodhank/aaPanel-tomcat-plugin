@@ -66,7 +66,7 @@ Temurin 17 (for floors `<= 17`) or 21 (for floors `> 17`).
 
 The Runtimes tab manages each Java major with **Install / Reinstall / Uninstall**
 buttons. The heavy download+extract runs as a **background job** (see
-[Tasks & Logs](user-guide.md#9-tasks--logs)) so a slow Adoptium download can't
+[Tasks & Logs](../plugin/javahost/docs/user-guide.md#9-tasks--logs)) so a slow Adoptium download can't
 time out the panel request:
 
 - **Install** → `StartInstallJava` (or the sync `InstallJava`) → installs Temurin

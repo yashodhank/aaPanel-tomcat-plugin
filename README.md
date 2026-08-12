@@ -84,7 +84,7 @@ aaPanel-native ACME, **certbot `--webroot` fallback**) → **Connect**
 Start/Stop/Restart) run as **detached background jobs** so a slow systemd
 transition can't time out the panel; the UI polls `GetJobs`/`GetJobLog` and
 surfaces them in the **Activity** tab. See [Architecture](docs/architecture.md) and the
-[User Guide](docs/user-guide.md) for the full diagrams (deploy lifecycle, async
+[User Guide](plugin/javahost/docs/user-guide.md) for the full diagrams (deploy lifecycle, async
 job flow, SSL decision, and the status-semantics model).
 
 ## Features
@@ -107,32 +107,36 @@ job flow, SSL decision, and the status-semantics model).
 
 ## Documentation
 
-- [WAR packaging & Spring Boot deploy](docs/war-packaging-and-deploy.md) —
-  how to build Tomcat/executable WARs for JavaHost, port and readiness rules,
-  operator checklists, and honest verification (developer + deploy guide).
-- [User Guide](docs/user-guide.md) — task-oriented walkthrough of the UI
+Full index: [docs/README.md](docs/README.md). Operator manuals ship in
+`plugin/javahost/docs/` (panel **Help** tab) — `docs/*.md` stubs keep older
+links working.
+
+- [User Guide](plugin/javahost/docs/user-guide.md) — task-oriented walkthrough of the UI
   (install, runtimes, apps, WAR/JAR deploy, databases, proxy, per-site HTTPS,
   Activity, Settings/Danger zone, hardening).
+- [WAR packaging & Spring Boot deploy](plugin/javahost/docs/war-packaging-and-deploy.md) —
+  how to build Tomcat/executable WARs for JavaHost, port and readiness rules,
+  operator checklists, and honest verification (developer + deploy guide).
 - [Endpoint reference](docs/endpoints.md) — every plugin method (params,
   returns, sync/async) the UI calls.
-- [Backup, restore & remote storage](docs/backup-restore.md) — what a backup
+- [Backup, restore & remote storage](plugin/javahost/docs/backup-restore.md) — what a backup
   captures, overwrite vs restore-as-new, S3/Wasabi remote storage, scheduled
   backups + retention, and restore-from-upload safety.
 - [Architecture](docs/architecture.md) — entrypoint, `core/` module map, the
   single panel-compat boundary, data directories.
 - [Java runtime](docs/java-runtime.md) — JDK detection, install/reinstall/
   uninstall, dependency rules, the self-contained `runtimes/` model.
-- [Connecting Java apps to databases](docs/databases-java-apps.md) — engines,
+- [Connecting Java apps to databases](plugin/javahost/docs/databases-java-apps.md) — engines,
   drivers, the secret-safe `app.env`, `SetDbEnv`/`GetDbEnv`.
-- [System Hardening](docs/system-hardening.md) — runs safely under aaPanel
+- [System Hardening](plugin/javahost/docs/system-hardening.md) — runs safely under aaPanel
   System Hardening; auto lift/re-lock with the `manage_hardening` toggle; the
   three-layer model and `AllowServices`.
-- [Single-host vs. multi-server](docs/single-vs-multi-mode.md) — JavaHost is
+- [Single-host vs. multi-server](plugin/javahost/docs/single-vs-multi-mode.md) — JavaHost is
   host-local; install it on each host that should run Java apps.
 - [Testing runbook](docs/testing.md) and the full on-box
   [Test campaign](docs/testbed.md) — sample artifacts, WAR/JAR/migrate/DB +
   reverse-proxy/HTTPS walkthrough, plus the opt-in CI deploy matrix.
-- [Troubleshooting](docs/troubleshooting.md) — download/verify, service,
+- [Troubleshooting](plugin/javahost/docs/troubleshooting.md) — download/verify, service,
   hardening, loopback, and deploy errors.
 
 ## Compatibility
@@ -182,7 +186,7 @@ jobs, the Activity/Danger-zone UI, and the offline test suite are all in
 place. The latest cycle added **multiple S3 storage destinations** (a managed
 profile registry) with per-backup/per-schedule selection and per-destination
 retention, surfaced in a dedicated **Backups** tab (see
-[Backup, restore & storage destinations](docs/backup-restore.md)). Deploy paths
+[Backup, restore & storage destinations](plugin/javahost/docs/backup-restore.md)). Deploy paths
 are validated on Ubuntu 24.04 (and via the opt-in CI deploy matrix / the on-box
 [Test campaign](docs/testbed.md)). Releases are tag-driven: pushing a `vX.Y.Z`
 tag runs `release.yml`, which builds and publishes `javahost.zip`. See
