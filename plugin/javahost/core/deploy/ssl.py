@@ -278,10 +278,14 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
     When the site is aaPanel-owned (SetSite path), SSL is enabled through aaPanel
     APIs so we do not write a competing JavaHost nginx vhost. Plugin vhosts are
     used only for javahost-owned / certbot fallback sites, fail-closed on reload.
+    Fail-closed when the active webserver is not nginx.
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
+    nginx_err = panel_api.require_nginx()
+    if nginx_err:
+        return {"ssl": False, "error": nginx_err}
     owner = proxy.read_owner(app)
 
     # --- aaPanel-owned site: let the panel manage the vhost ------------------
@@ -391,6 +395,9 @@ def disable(app: str, domain: str, port: int) -> Dict:
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
+    nginx_err = panel_api.require_nginx()
+    if nginx_err:
+        return {"ssl": True, "error": nginx_err, "url": "https://%s/" % domain}
     owner = proxy.read_owner(app)
     if owner == "aapanel":
         if not panel_api.http_disable_site_ssl(domain):

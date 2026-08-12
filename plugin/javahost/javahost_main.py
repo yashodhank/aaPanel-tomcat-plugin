@@ -541,6 +541,9 @@ class javahost_main(object):
             # That must be a panel error — never panel.ok (UI treats status:true as success).
             if want and not res.get("ssl"):
                 return panel.err(res.get("error") or "certificate issuance failed")
+            # Disabling SSL: {ssl:True, error:...} means HTTPS is still on — panel.err.
+            if (not want) and (res.get("ssl") or res.get("error")):
+                return panel.err(res.get("error") or "HTTPS disable failed")
             panel.log("SetSiteSSL", "%s ssl=%s via=%s" % (app, res.get("ssl"), res.get("via")))
             return panel.ok(res)
         except Exception as e:
