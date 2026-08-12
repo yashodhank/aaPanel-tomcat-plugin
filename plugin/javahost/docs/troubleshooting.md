@@ -219,16 +219,38 @@ Common operator symptoms:
 ## Repairing a broken app (RepairApp)
 
 Use **RepairApp** after an OS upgrade or when a unit is stale/half-broken
-(`instance.repair`). It:
+(`instance.repair`). Behaviour depends on app type:
+
+**Tomcat / WAR apps**
 
 1. Reads `JAVA_HOME` / `CATALINA_HOME` back from the app's `bin/setenv.sh`
    (errors if either is missing).
-2. Removes a stale `temp/tomcat.pid`.
-3. Re-renders and reinstalls the service unit.
-4. Restarts it if active, otherwise enables + starts it.
+2. Re-asserts no active AJP connector and re-applies conf perms (`0640` / `0600`).
+3. Removes a stale `temp/tomcat.pid`.
+4. Re-renders and reinstalls the service unit.
+5. Restarts it if active, otherwise enables + starts it.
 
-If `setenv.sh` is missing the required values, repair fails with a clear message
-— recreate the app in that case.
+**JAR / Spring Boot apps**
+
+1. Reads `JAVA_HOME` and `SERVER_PORT` from `bin/app.env`.
+2. Recovers `JAVA_OPTS` from the existing unit when present.
+3. Reinstalls the JAR systemd/init.d unit and restarts (or enables + starts).
+
+`GetLogs` for JAR apps tails `logs/app.out` (stdout/stderr redirect), not
+`catalina.out`.
+
+If Tomcat `setenv.sh` / JAR `app.env` is missing the required values, repair fails
+with a clear message — recreate the app in that case.
+
+## Reverse proxy requires nginx
+
+JavaHost publishes sites through aaPanel's **nginx** reverse-proxy path only
+(HTTP AddSite/CreateProxy + panel proxy includes). **Apache** and **OpenLiteSpeed**
+are not implemented — there are no writers for those stacks. Prefer nginx on the
+panel, or wait for a future Apache/OLS epic. A fail-closed refusal on non-nginx
+webservers is owned by the webserver/SSL honesty workstream; until that gate is
+on `main`, do not treat a successful `SetSite` envelope on Apache/OLS as proof
+that traffic reaches Tomcat.
 
 ## "Refusing to remove …" on uninstall/delete
 

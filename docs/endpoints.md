@@ -41,6 +41,9 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 | `UninstallTomcat` | `version` | Sync uninstall. |
 | `StartInstallTomcat` | `version` | **Async** install (job `install-tomcat`) → `{job_id}`. |
 | `StartUninstallTomcat` | `version` | **Async** uninstall (job `uninstall-tomcat`) → `{job_id}`. |
+| `StartUpdateTomcat` | `version` | **Async** update to latest patch (job `update-tomcat`) → `{job_id}`. |
+| `GetRuntimeUpdates` | `force?` | `{java:[…], tomcat:[…]}` — cached (24h) upstream version check; `force=1` bypasses cache. |
+| `StartUpdateJava` | `version` | **Async** reinstall Temurin major to latest build (job `update-java`) → `{job_id}`. |
 
 ## Background jobs (Tasks)
 
@@ -48,6 +51,9 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 |--------|--------|-----------------|
 | `GetJobs` | — | `{jobs: [...]}` — all jobs with state (`running`/`done`/`failed`), target, elapsed. Prunes old jobs best-effort. |
 | `GetJobLog` | `job_id`, `lines?` (default 200) | One job's live log tail. |
+| `CancelJob` | `job_id` | Kill a running job's process group → `{cancelled, …}`. |
+| `RetryJob` | `job_id` | Re-run a finished job from its recorded kind/target/command → `{job_id}`. |
+| `ClearJobs` | — | Remove finished (done/failed/cancelled) task records → `{removed}`. |
 
 ## Apps
 
@@ -60,9 +66,22 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 | `RepairApp` | `app` | Re-render + reinstall the service/config. |
 | `DeleteApp` | `app` | Remove the instance, its files, and the service (marker-gated). |
 | `GetAppDetail` | `app` | Per-app detail (`instance.detail`). |
-| `GetLogs` | `app`, `lines?` (200, clamped) | Memory-safe per-app log tail. |
+| `GetLogs` | `app`, `lines?` (200, clamped) | Memory-safe per-app log tail (`catalina.out` / catalina logs for Tomcat; `logs/app.out` for JAR). |
 | `GetHealth` | `app` | Single-app loopback health probe. |
 | `GetMetrics` | `app` | `{pid, cpu_pct, rss_mb, threads, uptime_s}` from `/proc`. **`cpu_pct`** (new in v0.16.2) is sampled over a short interval — not the thread count. |
+
+## First-run wizard & Settings helpers
+
+| Method | Params | Returns / notes |
+|--------|--------|-----------------|
+| `GetFirstRunState` | — | `{is_fresh, needs_suffix, wizard_done}` — drives the onboarding wizard. |
+| `MarkWizardDone` | — | Persist `wizard_done` so the wizard does not auto-open again. |
+| `SetSiteSuffix` | `suffix` | Set or clear the default `<app>.<suffix>` domain suffix (empty clears). |
+| `GetPanelApi` | — | `{aapanel_api_key_set, aapanel_port}` — never returns the secret key. |
+| `SetPanelApi` | `api_key?`, `port?` | Persist aaPanel interface API key and/or panel port. |
+| `GetLogConfig` | — | Rotation/purge settings + live/rotated log disk usage. |
+| `SetLogConfig` | `enabled?`, `when?`, `keep?`, `max_mb?`, `purge_days?` | Update logrotate settings and regenerate managed cron. |
+| `PurgeLogsNow` | `all?` | Rotate now, then purge rotated artifacts (or all when `all=1`). |
 
 ## Deploy
 
