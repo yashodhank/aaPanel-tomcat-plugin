@@ -2419,7 +2419,7 @@
       sub: app,
       body: '<div class="jh-form"><div class="jh-field wide"><label for="jh-change-domain">Domain</label>'+
         '<input id="jh-change-domain" type="text" value="'+esc(cur)+'" placeholder="app.example.com" autocomplete="off"></div>'+
-        '<div class="jh-hint">The previous aaPanel site is removed first when the domain changes.</div></div>',
+        '<div class="jh-hint">The new domain is registered first; the previous aaPanel site is removed only after that succeeds.</div></div>',
       footer: [
         mkBtn('Cancel', 'ghost', closeModal),
         mkBtn('Save', 'accent', function(b){
