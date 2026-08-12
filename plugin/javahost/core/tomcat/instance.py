@@ -804,11 +804,12 @@ def _read_port(base: str) -> Optional[int]:
             m = re.search(r'Connector\s+port="(\d+)"', f.read())
             if m:
                 return int(m.group(1))
-    # JAR app: port lives in bin/app.env as SERVER_PORT
+    # JAR app: port lives in bin/app.env as SERVER_PORT (quoted or bare —
+    # write_app_env / SetDbEnv merge always quotes values).
     env = os.path.join(base, "bin", "app.env")
     if os.path.isfile(env):
         with open(env, errors="replace") as f:
-            m = re.search(r'^SERVER_PORT=(\d+)', f.read(), re.M)
+            m = re.search(r'^SERVER_PORT=["\']?(\d+)["\']?', f.read(), re.M)
             if m:
                 return int(m.group(1))
     return None

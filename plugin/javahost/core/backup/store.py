@@ -373,8 +373,11 @@ def _rewrite_port(base: str, itype: str, new_port: int) -> None:
         envp = os.path.join(base, "bin", "app.env")
         if os.path.isfile(envp):
             body = open(envp, errors="replace").read()
-            if re.search(r"^SERVER_PORT=\d+", body, re.M):
-                body = re.sub(r"^SERVER_PORT=\d+", "SERVER_PORT=%d" % new_port, body, flags=re.M)
+            # Accept quoted or bare SERVER_PORT (SetDbEnv merge quotes values).
+            if re.search(r'^SERVER_PORT=["\']?\d+["\']?', body, re.M):
+                body = re.sub(
+                    r'^SERVER_PORT=["\']?\d+["\']?',
+                    "SERVER_PORT=%d" % new_port, body, flags=re.M)
             else:
                 body = "SERVER_PORT=%d\n" % new_port + body
             fs.atomic_write(envp, body, mode=0o640)

@@ -533,6 +533,15 @@ def test_read_port_jar_app(monkeypatch, tmp_path):
     assert instance._read_port(str(tmp_path / "japp")) == 8090
 
 
+def test_read_port_jar_quoted_server_port(monkeypatch, tmp_path):
+    """SetDbEnv merge quotes SERVER_PORT — health/list must still see the port."""
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "japp" / "bin"
+    base.mkdir(parents=True)
+    (base / "app.env").write_text('SERVER_PORT="8090"\nJAVA_HOME=/opt/jdk\n')
+    assert instance._read_port(str(tmp_path / "japp")) == 8090
+
+
 def test_health_no_port(monkeypatch, tmp_path):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
     (tmp_path / "dead").mkdir()
@@ -760,6 +769,32 @@ def test_write_app_env_preserves_jar_loopback_keys(tmp_path):
     assert env["DB_URL"].startswith("jdbc:postgresql://")
     # password must not appear in the JDBC URL
     assert "s3cr3t-pass" not in env["DB_URL"]
+    # Quoted SERVER_PORT after merge must still be visible to health/list.
+    assert instance._read_port(str(base)) == 8090
+
+
+def test_read_app_env_rejects_symlink(tmp_path):
+    """Compromised www must not redirect SetDbEnv's privileged read via symlink."""
+    from core.db import _base as dbbase
+
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    target = tmp_path / "foreign.env"
+    target.write_text('LEAKED="secret"\nSERVER_PORT=1\n')
+    envp = base / "bin" / "app.env"
+    envp.symlink_to(target)
+    assert dbbase.read_app_env(str(base)) == {}
+    # Merge must not follow the symlink either (starts from empty → DB_* only).
+    mapping = pg.render_env(
+        host="127.0.0.1", port=5432, db="appdb", user="app",
+        password="x", version="16", ssl=False, java_major=17,
+    )
+    dbengines.write_app_env(str(base), mapping)
+    # atomic_write replaces the symlink with a regular file
+    assert envp.is_file() and not envp.is_symlink()
+    env = dbbase.read_app_env(str(base))
+    assert "LEAKED" not in env
+    assert env["DB_USER"] == "app"
 
 
 def test_write_app_env_replaces_stale_db_keys_on_engine_switch(tmp_path):

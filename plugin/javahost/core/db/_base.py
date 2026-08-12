@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from typing import Dict, List, Optional, Tuple
 
 from ..util import fs, validate
@@ -39,10 +40,20 @@ def safe_params(params: Optional[Dict[str, str]]) -> List[Tuple[str, str]]:
 
 
 def read_app_env(catalina_base: str) -> Dict[str, str]:
-    """Parse CATALINA_BASE/bin/app.env (KEY=val / KEY=\"val\"). Never logs values."""
+    """Parse CATALINA_BASE/bin/app.env (KEY=val / KEY=\"val\"). Never logs values.
+
+    Refuses symlinks / non-regular files so a compromised ``www``-owned instance
+    cannot redirect this privileged read at an arbitrary host path (SetDbEnv
+    runs as the panel/root and would otherwise copy foreign KEY=value material
+    into a new app.env).
+    """
     path = os.path.join(catalina_base, "bin", "app.env")
     env: Dict[str, str] = {}
-    if not os.path.isfile(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return env
+    if not stat.S_ISREG(st.st_mode):
         return env
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
