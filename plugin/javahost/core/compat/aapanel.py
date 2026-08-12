@@ -430,11 +430,62 @@ _AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
 _AAPANEL_PROXY_DIR = "/www/server/panel/vhost/nginx/proxy/%s"
 # Panel Website → Reverse Proxy UI reads this JSON list (not nginx alone).
 _AAPANEL_PROXYFILE = "/www/server/panel/data/proxyfile.json"
+# aaPanel's global nginx.conf — WS upgrade map lives in http{} here.
+_AAPANEL_NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
+_AAPANEL_NGINX_BIN = "/www/server/nginx/sbin/nginx"
 # CreateProxy sometimes injects this block into the wrong nginx context.
 _PROXY_INLINE_RE = re.compile(
     r"[ \t]*#PROXY-START/.*?#PROXY-END/\s*",
     re.DOTALL | re.IGNORECASE,
 )
+
+# map $http_upgrade $connection_upgrade is required for WS; install once into http{}.
+_WS_MAP = """map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+"""
+_WS_MAP_NEEDLE = "map $http_upgrade $connection_upgrade"
+
+
+def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
+    """Idempotently install the WebSocket upgrade map into nginx's http{} block.
+
+    Proxy snippets (plugin vhosts and aaPanel fallback) set
+    ``Connection $connection_upgrade``; without this map nginx rejects or
+    mis-handles Upgrade. Returns True when the map is present (already or newly
+    added), False if the conf is missing or ``nginx -t`` rejects the change.
+
+    Panel coupling stays here — callers outside compat must use this helper
+    rather than writing nginx.conf themselves.
+    """
+    if not os.path.isfile(nginx_conf):
+        return False
+    with open(nginx_conf, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    if _WS_MAP_NEEDLE in content:
+        return True
+    m = re.search(r"\bhttp\s*\{", content)
+    if not m:
+        return False
+    brace = content.index("{", m.start())
+    map_block = "\n".join(
+        ("    " + ln) if ln.strip() else ln
+        for ln in _WS_MAP.strip().splitlines()
+    )
+    injected = (content[: brace + 1]
+                + "\n" + map_block + "\n"
+                + content[brace + 1:])
+    fs.atomic_write(nginx_conf, injected, mode=0o644)
+    nginx = _AAPANEL_NGINX_BIN if os.path.isfile(_AAPANEL_NGINX_BIN) else "nginx"
+    try:
+        rc, _, _ = run([nginx, "-t"], check=False, timeout=15)
+    except Exception:
+        rc = 1
+    if rc != 0:
+        fs.atomic_write(nginx_conf, content, mode=0o644)
+        return False
+    return True
 
 
 def scrub_site_inline_proxy(domain: str) -> Tuple[bool, str]:
@@ -600,10 +651,8 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
         return False, nginx_err
 
     # Snippets reference $connection_upgrade — install the map once if missing.
-    # Note: PR2 (webserver fail-closed) may also touch this function; keep additive.
     try:
-        from ..deploy import proxy as proxymod
-        proxymod.ensure_ws_map()
+        ensure_ws_map()
     except Exception:
         pass
 

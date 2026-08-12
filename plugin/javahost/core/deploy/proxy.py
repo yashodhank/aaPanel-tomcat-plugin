@@ -95,47 +95,6 @@ server {
 }
 """
 
-# map $http_upgrade $connection_upgrade is required for WS; install once into http{}.
-_WS_MAP = """map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-"""
-_WS_MAP_NEEDLE = "map $http_upgrade $connection_upgrade"
-
-
-def ensure_ws_map(nginx_conf: str = NGINX_CONF) -> bool:
-    """Idempotently install the WebSocket upgrade map into nginx's http{} block.
-
-    Proxy snippets (plugin vhosts and aaPanel fallback) set
-    ``Connection $connection_upgrade``; without this map nginx rejects or
-    mis-handles Upgrade. Returns True when the map is present (already or newly
-    added), False if the conf is missing or ``nginx -t`` rejects the change.
-    """
-    if not os.path.isfile(nginx_conf):
-        return False
-    with open(nginx_conf, encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    if _WS_MAP_NEEDLE in content:
-        return True
-    m = re.search(r"\bhttp\s*\{", content)
-    if not m:
-        return False
-    brace = content.index("{", m.start())
-    map_block = "\n".join(
-        ("    " + ln) if ln.strip() else ln
-        for ln in _WS_MAP.strip().splitlines()
-    )
-    injected = (content[: brace + 1]
-                + "\n" + map_block + "\n"
-                + content[brace + 1:])
-    fs.atomic_write(nginx_conf, injected, mode=0o644)
-    if not nginx_test():
-        fs.atomic_write(nginx_conf, content, mode=0o644)
-        return False
-    return True
-
-
 def _nginx_supports_http2_on() -> bool:
     """True when `nginx -V` reports a version that accepts standalone `http2 on;`."""
     nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
@@ -632,8 +591,9 @@ def set_site(app: str, domain: str, port: int) -> Dict:
         return {"ok": False, "error": nginx_err}
 
     # Ensure $connection_upgrade exists before aaPanel/proxy snippets reference it.
+    # Writes to panel nginx.conf only via compat/aapanel (panel-coupling boundary).
     try:
-        ensure_ws_map()
+        panel_api.ensure_ws_map()
     except Exception:
         pass
 
