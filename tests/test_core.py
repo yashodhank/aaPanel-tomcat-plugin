@@ -1743,6 +1743,128 @@ def test_uninstall_java_endpoint_blocks_with_in_use_list(monkeypatch):
     assert res["msg"]["in_use_by"] == ["webapp"]
 
 
+# ---- Tomcat uninstall: dependents block + force (mirrors Java) --------------
+def _mk_instance_with_tomcat(tmp_path, name, catalina_home):
+    base = tmp_path / name / "bin"
+    base.mkdir(parents=True)
+    (base / "setenv.sh").write_text(
+        'export JAVA_HOME="/opt/jdk-17"\n'
+        'export CATALINA_HOME="%s"\n' % catalina_home)
+    # non-jar marker: conf/server.xml present
+    (tmp_path / name / "conf").mkdir(parents=True, exist_ok=True)
+    (tmp_path / name / "conf" / "server.xml").write_text("<Server/>\n")
+    return base
+
+
+def test_tomcat_usage_and_uninstall_blocks_on_dependents(monkeypatch, tmp_path):
+    from core.tomcat import installer, instance as inst
+    home = str(tmp_path / "tomcat" / "10")
+    (tmp_path / "tomcat" / "10").mkdir(parents=True)
+    monkeypatch.setattr(installer, "HOME_ROOT", str(tmp_path / "tomcat"))
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path / "instances"))
+    (tmp_path / "instances").mkdir()
+    _mk_instance_with_tomcat(tmp_path / "instances", "webapp", home)
+
+    assert installer.usage("10") == ["webapp"]
+    with pytest.raises(RuntimeError) as e:
+        installer.uninstall("10")
+    assert "in use" in str(e.value) and "webapp" in str(e.value)
+
+    removed = {}
+    monkeypatch.setattr(installer.fs, "safe_rmtree",
+                        lambda p, **k: removed.update(path=p))
+    # force path also stops dependents
+    stops = []
+    monkeypatch.setattr("core.tomcat.service.action",
+                        lambda app, what: stops.append((app, what)))
+    res = installer.uninstall("10", force=True)
+    assert res["removed"] is True and res["forced"] is True
+    assert stops == [("webapp", "stop")]
+    assert removed["path"] == home
+
+
+def test_uninstall_tomcat_endpoint_blocks_with_in_use_list(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.installer, "usage", lambda m: ["shop"])
+    monkeypatch.setattr(javahost_main.installer, "uninstall",
+                        lambda *a, **k: pytest.fail("uninstall ran despite dependents"))
+
+    class G(object):
+        version = "10"
+        force = "0"
+
+    res = javahost_main.javahost_main().UninstallTomcat(G())
+    assert res["status"] is False
+    assert res["msg"]["in_use_by"] == ["shop"]
+
+
+def test_get_tomcat_usage_endpoint(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.installer, "usage", lambda m: ["a"])
+
+    class G(object):
+        version = "11"
+
+    res = javahost_main.javahost_main().GetTomcatUsage(G())
+    assert res["status"] is True
+    assert res["msg"] == {"version": "11", "in_use_by": ["a"]}
+
+
+def test_tomcat_initd_loads_app_env_line_by_line():
+    """Security: Tomcat init.d must never shell-source app.env."""
+    from core.tomcat import templating
+    body = templating.render_file("initd.sh.tmpl", {
+        "app": "demo", "java_home": "/j", "catalina_home": "/t",
+        "catalina_base": "/b", "user": "www",
+    })
+    assert "load_app_env" in body
+    assert 'done < "$CATALINA_BASE/bin/app.env"' in body
+    assert ". $CATALINA_BASE/bin/app.env" not in body
+    assert ". \"$CATALINA_BASE/bin/app.env\"" not in body
+    assert "source " not in body
+
+
+def test_jdk_install_uses_staging_path(monkeypatch, tmp_path):
+    """install_temurin must stage then rename — never extract into the live tree."""
+    from core.runtime import java as j
+    dest_root = tmp_path / "runtimes"
+    monkeypatch.setattr(j, "JDK_ROOT", str(dest_root))
+    monkeypatch.setattr(j, "_latest_asset", lambda *a, **k: {
+        "version": {"semver": "17.0.99+0"},
+        "binary": {"package": {"link": "https://example/jdk.tgz",
+                               "checksum": "ab" * 32}},
+    })
+    monkeypatch.setattr(j, "_fetch_with_sha256",
+                        lambda url, tmp, sha, sha_url: str(tmp_path / "jdk.tgz"))
+    (tmp_path / "jdk.tgz").write_bytes(b"x")
+    calls = []
+
+    def fake_run(argv, check=True):
+        calls.append(list(argv))
+        # Simulate tar extract by writing a java binary into -C target
+        if argv[:2] == ["tar", "-xzf"]:
+            dest = argv[argv.index("-C") + 1]
+            bindir = os.path.join(dest, "bin")
+            os.makedirs(bindir, exist_ok=True)
+            open(os.path.join(bindir, "java"), "w").write("#!/bin/sh\n")
+            os.chmod(os.path.join(bindir, "java"), 0o755)
+        return (0, "", "")
+
+    monkeypatch.setattr(j.shell, "run", fake_run)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+    monkeypatch.setattr(j.fs, "require_free", lambda *a, **k: None)
+    monkeypatch.setattr(j.fs, "mkdtemp", lambda *a, **k: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    home = j.install_temurin(17)
+    assert home.endswith("jdk-17")
+    assert os.path.isdir(home)
+    assert not os.path.isdir(home + ".staging")
+    tar_calls = [c for c in calls if c[:2] == ["tar", "-xzf"]]
+    assert tar_calls, "expected a tar extract"
+    assert tar_calls[0][-1].endswith(".staging"), "must extract into staging"
+
+
 # ---- maintenance.wipe_preview / wipe ----------------------------------------
 def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     from core import maintenance
@@ -1773,6 +1895,23 @@ def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     assert res["tomcats"]["items"] == ["11"]
     assert res["sites"]["items"] == ["site.conf"]
     assert res["data_root"]["path"].endswith("/javahost")
+
+
+def test_wipe_writes_uninstall_plan(monkeypatch, tmp_path):
+    from core import maintenance
+    data = tmp_path / "javahost"
+    data.mkdir()
+    monkeypatch.setattr(maintenance, "DATA_ROOT", str(data))
+    monkeypatch.setattr(maintenance, "UNINSTALL_PLAN", str(data / ".uninstall_plan"))
+    monkeypatch.setattr(maintenance, "_wipe_apps",
+                        lambda: {"removed": [], "errors": {}})
+    res = maintenance.wipe(["apps"], confirm="WIPE")
+    assert res["performed"] is True
+    plan = data / ".uninstall_plan"
+    assert plan.is_file()
+    assert plan.read_text().strip() == "apps"
+    assert oct(plan.stat().st_mode & 0o777) == "0o600"
+    assert res["uninstall_plan"] == str(plan)
 
 
 def test_wipe_noop_when_confirm_wrong(monkeypatch):

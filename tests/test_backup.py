@@ -182,6 +182,54 @@ def test_restore_rejects_malicious_archive(env, tmp_path):
     assert not instance.exists("clone")          # nothing left half-created
 
 
+def test_restore_forces_secret_modes(env):
+    """After extract, archive must be 0600 and bin/app.env 0640."""
+    iroot, broot = env
+    base = _mk_app(iroot, "sec", port=8090)
+    envp = os.path.join(base, "bin", "app.env")
+    os.chmod(envp, 0o666)  # deliberately loose before backup
+    arc = store.backup_app("sec")["archive"]
+    # loosen archive mode to simulate a bad upload umask
+    os.chmod(arc, 0o644)
+    store.restore(arc, as_name="sec2")
+    assert oct(os.stat(arc).st_mode & 0o777) == "0o600"
+    restored = os.path.join(instance.base_path("sec2"), "bin", "app.env")
+    assert oct(os.stat(restored).st_mode & 0o777) == "0o640"
+
+
+def test_restore_jar_passes_java_opts_from_manifest(env, monkeypatch):
+    """JAR restore must not reinstall the unit with empty java_opts."""
+    iroot, broot = env
+    app = "jarapp"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
+                "SERVER_ADDRESS=127.0.0.1\nSERVER_HOST=127.0.0.1\n")
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)  # minimal zip EOCD
+    # stub _app_info so manifest builds as jar with memory
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda a: {"type": "jar", "tomcat": None, "java": 17,
+                                   "port": 8099, "domain": None, "ssl": False})
+    monkeypatch.setattr(store, "_read_unit_java_opts",
+                        lambda a: "-server -Xmx256m -XX:+UseG1GC")
+    seen = {}
+
+    def capture_jar_unit(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_jar_unit", capture_jar_unit)
+    arc = store.backup_app(app)["archive"]
+    man = store._read_manifest_file(arc)
+    assert man.get("java_opts")
+    assert man.get("memory_mb") == 256
+    store.restore(arc, as_name="jarclone")
+    assert "-Xmx256m" in seen.get("java_opts", "")
+
+
 def test_delete_backup_refuses_escape(env):
     with pytest.raises(ValueError):
         store.delete_backup("../../etc/passwd")
