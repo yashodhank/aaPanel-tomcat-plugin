@@ -6,8 +6,8 @@ your behalf. JavaHost is **host-local**: everything it manages runs on the same
 server the plugin is installed on (see
 [Single-host vs. multi-server](single-vs-multi-mode.md)).
 
-> Screenshots referenced below live in [`images/`](images/); see that directory's
-> [shot-list](images/README.md) for exactly what each one captures. Most are best
+> Screenshots referenced below live in [`../../../docs/images/`](../../../docs/images/); see that directory's
+> [shot-list](../../../docs/images/README.md) for exactly what each one captures. Most are best
 > taken in the plugin's **Fullscreen** mode (below).
 
 ### Top tabs and Fullscreen
@@ -19,7 +19,7 @@ WAI-ARIA Tabs pattern (arrow/Home/End navigation). The header also has a
 the whole viewport (own CSS only, no panel patching); **Esc** exits. Use it
 whenever you work with the Applications drawer, Tasks, or Logs.
 
-![Fullscreen mode](images/fullscreen.png)
+![Fullscreen mode](../../../docs/images/fullscreen.png)
 
 ---
 
@@ -32,7 +32,7 @@ JavaHost ships as a single importable ZIP.
    (download it from the project Releases page).
 3. After import, open **JavaHost** from the app list.
 
-![Importing the plugin](images/install-import.png)
+![Importing the plugin](../../../docs/images/install-import.png)
 
 The panel loads `index.html` and immediately calls `GetStatus` to populate the
 **Dashboard**. The UI talks to the backend over the panel convention
@@ -41,7 +41,7 @@ The panel loads `index.html` and immediately calls `GetStatus` to populate the
 
 ### The Dashboard
 
-![Dashboard](images/dashboard.png)
+![Dashboard](../../../docs/images/dashboard.png)
 
 The Dashboard (the default tab) shows four stat tiles and three cards, all from a
 single `GetStatus` call:
@@ -59,7 +59,10 @@ state, total apps). Use the **Refresh** button in the top bar to re-poll
 
 #### Hardening banner
 
-![Hardening banner](images/hardening-banner.png)
+> Screenshot `hardening-banner.png` is listed in
+> [`docs/images/README.md`](../../../docs/images/README.md) but only appears when
+> aaPanel System Hardening has locked service dirs — capture on a hardened host
+> when available.
 
 If `GetStatus` reports `service_dirs_locked: true`, a red banner appears warning
 that **System hardening is active** and JavaHost cannot register services. It
@@ -74,7 +77,7 @@ because JavaHost manages hardening transparently.
 Open the **Runtimes** tab. It has two cards, both driven by the latest
 `GetStatus` data.
 
-![Runtimes — Java](images/runtimes-java.png)
+![Runtimes — Java](../../../docs/images/runtimes-java.png)
 
 ### Install / reinstall / uninstall Java
 
@@ -93,17 +96,17 @@ each row has **Install**, **Reinstall**, and **Uninstall** actions.
   **Force** overrides the block and **stops** those dependent apps so they go
   cleanly DOWN.
 
-  ![Java in use dependents dialog](images/java-in-use.png)
+  ![Java in use dependents dialog](../../../docs/images/java-in-use.png)
 
 JavaHost is **self-contained**: it manages only its own JDKs under `runtimes/`
 (plus distro JDKs in `/usr/lib/jvm`) and no longer reuses aaPanel's
 `/usr/local/btjdk`. Each runtime keeps its own `JAVA_HOME`; it never mutates
 system `alternatives`, so apps can run on different JDKs side by side (see
-[Java runtime](java-runtime.md)).
+[Java runtime](../../../docs/java-runtime.md)).
 
 ### Install / update / uninstall Tomcat
 
-![Runtimes — Tomcat](images/runtimes-tomcat.png)
+![Runtimes — Tomcat](../../../docs/images/runtimes-tomcat.png)
 
 Supported majors are **9** (legacy, `javax.*`), **10.1**, and **11** (both
 `jakarta.*`). Each row shows the patch, namespace, and **minimum Java**.
@@ -114,8 +117,8 @@ Supported majors are **9** (legacy, `javax.*`), **10.1**, and **11** (both
 - Downloads are **SHA-512 + OpenPGP verified** before use. Watch installs finish
   in [Tasks](#9-tasks--logs).
 
-**Java floors are enforced** ([Tomcat 10.1](tomcat-10.md),
-[Tomcat 11](tomcat-11.md)):
+**Java floors are enforced** ([Tomcat 10.1](../../../docs/tomcat-10.md),
+[Tomcat 11](../../../docs/tomcat-11.md)):
 
 | Tomcat line | Minimum Java | Namespace |
 |-------------|--------------|-----------|
@@ -133,7 +136,7 @@ auto-installs a Temurin build that meets the floor (17 for floors ≤ 17, else 2
 Open the **Applications** tab. It is a **rich list** with a slide-over **detail
 drawer**. The empty state offers shortcuts to create an app or deploy a JAR.
 
-![Applications](images/applications.png)
+![Applications](../../../docs/images/applications.png)
 
 Each row shows: the app **type** (WAR / Spring Boot JAR / Tomcat), a **runtime
 chip** (e.g. Tomcat 11 · Java 17), a **status badge**, a **health pill** + port,
@@ -142,7 +145,7 @@ prominently:
 
 - A red **"runtime missing"** badge when the app's pinned JDK has been removed —
   the app may still be running on its live JVM but **won't survive a restart**
-  (driven by `runtime_ok`; see [Java runtime](java-runtime.md#runtime_ok-and-the-runtime-missing-badge)).
+  (driven by `runtime_ok`; see [Java runtime](../../../docs/java-runtime.md#runtime_ok-and-the-runtime-missing-badge)).
 - An **Open ↗** link to the app's reverse-proxy domain (with copy-URL / copy-port
   buttons) and a **per-site HTTPS toggle** — both covered in
   [section 6](#6-reverse-proxy--per-site-https).
@@ -178,7 +181,7 @@ sequenceDiagram
 
 Click **Create app**.
 
-![Create app](images/create-app.png)
+![Create app](../../../docs/images/create-app.png)
 
 Fill in:
 
@@ -198,14 +201,14 @@ design — see [section 6](#6-reverse-proxy--per-site-https).
 
 Clicking a row opens a focus-trapped, Esc-closable **drawer** with tabs:
 
-![App detail drawer — Overview](images/drawer-overview.png)
+![App detail drawer — Overview](../../../docs/images/drawer-overview.png)
 
 - **Overview** — type/runtime/status/health, the Open link + HTTPS toggle, and a
   **Site & SSL** block (`GetSiteStatus`): the configured domain, certificate
   presence/validity/expiry (warns when <14 days, errors when expired), the
   HTTP→HTTPS redirect, and live HTTPS reachability.
 
-  ![App detail drawer — Site & SSL](images/drawer-site-ssl.png)
+  ![App detail drawer — Site & SSL](../../../docs/images/drawer-site-ssl.png)
 
 - **Logs** / **Metrics** / **Config** / **Database** — the per-app log tail
   (`GetLogs`), JVM/process metrics (`GetMetrics`), the rendered config, and the
@@ -248,7 +251,7 @@ flowchart LR
 
 Click **Deploy WAR** (toolbar) or use a row's action menu.
 
-![Deploy WAR](images/deploy-war.png)
+![Deploy WAR](../../../docs/images/deploy-war.png)
 
 1. Pick the target app and choose a `.war` file.
 2. The file is uploaded via the panel file API and **staged** server-side under
@@ -292,7 +295,7 @@ pill):
 - **Metrics** tab — `GetMetrics` reads PID, **CPU %** (sampled), RSS memory,
   thread count, and uptime from `/proc`; auto-refreshes while open.
 
-  ![Drawer — Metrics tab](images/metrics.png)
+  ![Drawer — Metrics tab](../../../docs/images/metrics.png)
 
 ---
 
@@ -301,7 +304,7 @@ pill):
 JavaHost can run a fat-jar directly, with no Tomcat. From **Applications** click
 **Deploy JAR**.
 
-![Deploy JAR](images/deploy-jar.png)
+![Deploy JAR](../../../docs/images/deploy-jar.png)
 
 Provide:
 
@@ -322,14 +325,14 @@ safely (full reference: [Connecting Java apps to databases](databases-java-apps.
 
 Open the **Databases** tab.
 
-![Databases — engines matrix](images/databases-engines.png)
+![Databases — engines matrix](../../../docs/images/databases-engines.png)
 
 The top card is a read-only **support matrix** (`GetDbSupport`): engine, default
 port, version range, recommended driver, and whether the engine is detected
 locally. The per-app DB-env section below it has a live **search/filter** (with a
 count) over the per-app env chips.
 
-![Databases — per-app env filter](images/databases-filter.png)
+![Databases — per-app env filter](../../../docs/images/databases-filter.png)
 
 | Engine | Versions | Default port | Driver coordinates |
 |--------|----------|--------------|--------------------|
@@ -343,7 +346,7 @@ count) over the per-app env chips.
 Pick an app from the **Per-app database environment** picker (or use a row's
 **Database env** action). This opens the DB modal.
 
-![Database environment](images/db-env.png)
+![Database environment](../../../docs/images/db-env.png)
 
 Choose the **engine** (the version list and default **port** auto-fill, and the
 recommended **driver** is shown), then enter **host**, **database**, **user**,
@@ -371,7 +374,7 @@ The detail drawer's **Database** tab shows the app's configured connection
 user, driver, and whether a password is set — or "No database env configured".
 `GetDbEnv` is secret-safe and never returns the password.
 
-![Database current-env panel](images/db-current-env.png)
+![Database current-env panel](../../../docs/images/db-current-env.png)
 
 ---
 
@@ -409,7 +412,7 @@ explicit domain and no FQDN is ever guessed.
 Once a reverse-proxy site exists, turn on TLS for it with the **HTTPS toggle** on
 the app row / drawer Overview, which calls **`SetSiteSSL{app, enable, email?}`**:
 
-![Per-site HTTPS toggle](images/https-toggle.png)
+![Per-site HTTPS toggle](../../../docs/images/https-toggle.png)
 
 - **`enable` truthy** — issues a Let's Encrypt certificate and rewrites the vhost
   to terminate TLS on `:443`; the `:80` server keeps serving the ACME challenge
@@ -506,7 +509,7 @@ The **Tasks** tab lists every job with its **status** (`running` / `done` /
 `GetJobs` (list, auto-polled) and `GetJobLog` (one job's output). Only treat an
 install as failed when its task shows **failed**.
 
-![Tasks](images/tasks.png)
+![Tasks](../../../docs/images/tasks.png)
 
 ### Logs
 
@@ -514,7 +517,7 @@ The **Logs** tab is a unified viewer over both **app logs** (per-app Catalina /
 JAR output) and **task logs** (the per-job output). Look for the app's startup
 marker in app logs and download/verify lines in task logs.
 
-![Logs](images/logs.png)
+![Logs](../../../docs/images/logs.png)
 
 ---
 
@@ -524,7 +527,7 @@ The **Settings** tab exposes plugin config (including the `site_suffix` used for
 reverse-proxy domains) and a **Danger zone** for tearing the plugin down
 granularly.
 
-![Settings — Danger zone](images/settings-danger.png)
+![Settings — Danger zone](../../../docs/images/settings-danger.png)
 
 The Danger zone offers per-category removal — **deployed apps**, **plugin JDKs**,
 **Tomcats**, **reverse-proxy sites**, and a **full wipe**:

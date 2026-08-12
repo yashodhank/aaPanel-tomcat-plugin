@@ -52,10 +52,10 @@ Hardening**. For an unattended campaign — especially the systemd path that
 back on.
 
 JavaHost *can* run under hardening (it briefly lifts/re-locks the immutable bit;
-see [System Hardening](system-hardening.md)), and `matrix_full.py` will **fall
+see [System Hardening](../plugin/javahost/docs/system-hardening.md)), and `matrix_full.py` will **fall
 back to a service-less path on hardened hosts**. But for the canonical campaign:
 
-- Toggle per [System Hardening](system-hardening.md): aaPanel → **Security /
+- Toggle per [System Hardening](../plugin/javahost/docs/system-hardening.md): aaPanel → **Security /
   System Hardening (系统加固)** → turn **off**, run the campaign, turn back **on**.
   Fully reversible.
 - Equivalently set `manage_hardening: true` (the default) in
@@ -121,7 +121,7 @@ The sweep is the cartesian product **Tomcat × eligible-Java × DB{none,pg,mysql
 mariadb,mongo}** using the WAR fixtures, plus an analogous **JAR × Java × DB**
 leg using the executable-JAR fixtures. The Java floors come from the same source
 as [Tomcat 10.1](tomcat-10.md) / [Tomcat 11](tomcat-11.md); the DB matrix matches
-[Connecting Java apps to databases](databases-java-apps.md).
+[Connecting Java apps to databases](../plugin/javahost/docs/databases-java-apps.md).
 
 ---
 
@@ -184,7 +184,7 @@ Pick your DB source:
   containers per engine and tears them down in a `finally`.
 
 JavaHost itself never administers DB servers; it only writes the secret-safe
-`app.env` each app reads (see [databases-java-apps.md](databases-java-apps.md)).
+`app.env` each app reads (see [databases-java-apps.md](../plugin/javahost/docs/databases-java-apps.md)).
 
 ### Step 4 — Run the full matrix
 
@@ -250,7 +250,7 @@ If a cell fails, open its app log (marker missing? namespace warning? driver
   for `aapanel` DBs, drop the test databases/users from the panel if desired.
 - Remove fixtures: `rm -rf tests/fixtures/out`.
 - **Re-enable System Hardening** (and any exec filter you disabled) — see
-  [System Hardening](system-hardening.md).
+  [System Hardening](../plugin/javahost/docs/system-hardening.md).
 
 ---
 
@@ -278,7 +278,7 @@ for a default/apex app). Endpoints:
 This is what makes an app reachable at all from outside the box — see the
 [loopback invariant](#the-1-gotcha--apps-bind-to-loopback-you-reach-them-via-a-domain).
 For the manual include-snippet alternative, see the **Reverse-proxy hint** card
-in the [User Guide](user-guide.md#6-reverse-proxy).
+in the [User Guide](../plugin/javahost/docs/user-guide.md#6-reverse-proxy).
 
 ### Per-site HTTPS (Let's Encrypt)
 

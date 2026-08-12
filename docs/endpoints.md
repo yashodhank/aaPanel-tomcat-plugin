@@ -83,7 +83,7 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 | `GetProxyHint` | — | Nginx include snippet + the DB engines summary (back-compat). |
 
 App connectors bind **127.0.0.1** by design — reachable only via the proxy domain.
-See [Reverse proxy & per-site HTTPS](user-guide.md#6-reverse-proxy--per-site-https).
+See [Reverse proxy & per-site HTTPS](../plugin/javahost/docs/user-guide.md#6-reverse-proxy--per-site-https).
 
 ## Databases
 
@@ -97,7 +97,7 @@ See [Reverse proxy & per-site HTTPS](user-guide.md#6-reverse-proxy--per-site-htt
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `AllowServices` | — | Register JavaHost in aaPanel System Hardening's process allowlist (append-only, reversible; registers, never bypasses). See [System Hardening](system-hardening.md). |
+| `AllowServices` | — | Register JavaHost in aaPanel System Hardening's process allowlist (append-only, reversible; registers, never bypasses). See [System Hardening](../plugin/javahost/docs/system-hardening.md). |
 | `WipePreview` | — | **Dry run** of the Danger-zone wipe: counts + lists per category, removes nothing. `jdks` lists plugin runtimes only. |
 | `Wipe` | `confirm` (must equal `WIPE`), `scope` (csv from `apps,jdks,tomcats,sites,full`) | Granular plugin wipe. Stops apps first; **skips in-use** runtimes; never touches the panel cert, other plugins' configs, or any database. |
 
@@ -116,7 +116,7 @@ See [Reverse proxy & per-site HTTPS](user-guide.md#6-reverse-proxy--per-site-htt
 ## Backup & restore
 
 Long operations run as async jobs (`{job_id}`); poll `GetJobLog`. See
-[Backup, restore & storage destinations](backup-restore.md).
+[Backup, restore & storage destinations](../plugin/javahost/docs/backup-restore.md).
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|

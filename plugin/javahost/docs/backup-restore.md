@@ -6,7 +6,7 @@ schedule with retention, and restore from an uploaded file. Everything lives und
 the dedicated **Backups** tab and runs through the panel-agnostic `core/backup/`
 library, the async job system, and one hardened tar extractor.
 
-![The Backups tab — storage destinations, backups with per-location badges, and schedules](images/backups-tab.png)
+![The Backups tab — storage destinations, backups with per-location badges, and schedules](../../../docs/images/backups-tab.png)
 
 ## What a backup captures
 
@@ -45,7 +45,7 @@ them via a custom endpoint.
   hand switches off the auto-fill; the form validates that the region is present for
   region-based providers and that the endpoint is a real URL.
 
-  ![Add storage destination — provider- and region-aware endpoint](images/add-destination.png)
+  ![Add storage destination — provider- and region-aware endpoint](../../../docs/images/add-destination.png)
 - Credentials are stored server-side in `0600` `remotes.json`; the **secret key is
   never returned** to the UI (only a `secret_set` flag), like `GetDbEnv`.
 - **Test** does a `HEAD` on the bucket. **Edit**/**Delete** manage a profile; deleting
@@ -62,7 +62,7 @@ them via a custom endpoint.
 - **UI:** Backups → **Back up now** → pick an app and tick the destinations (none =
   local only). Or per-app from the app **drawer** → **Back up**.
 
-  ![Back up now — choose an app and tick one or more destinations](images/backup-destinations-picker.png)
+  ![Back up now — choose an app and tick one or more destinations](../../../docs/images/backup-destinations-picker.png)
 - **Endpoint:** `StartBackup{app, remotes}` (async) — `remotes` is a csv of profile
   ids or `"all"`. Each backup records where it landed; a backup's **Locations**
   column shows `local` + every destination that holds it. A **partial** failure
