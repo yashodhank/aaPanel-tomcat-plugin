@@ -173,8 +173,10 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
     """Download + verify + staged-extract Temurin JDK <major>. Returns JAVA_HOME.
 
     Extract lands in ``jdk-<major>.staging`` and is atomically renamed into
-    place (same pattern as Tomcat installer). Replacing an in-use tree stops
-    dependents first so they do not race a half-written JAVA_HOME.
+    place (same pattern as Tomcat installer). Dependents are stopped only after
+    staging succeeds and immediately before the swap — a failed download or
+    verify must not take apps down. Replacing an in-use tree stops only apps
+    whose JAVA_HOME resolves to this plugin path.
     """
     if major not in (17, 21, 11, 8):
         raise ValueError("unsupported JDK major to install: %s" % major)
@@ -191,19 +193,8 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
 
     dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
     staging = dest + ".staging"
-    # If we are about to replace a live tree that apps still pin, stop them
-    # before the swap so restarts do not hit a transient missing JAVA_HOME.
-    if os.path.isdir(dest):
-        in_use = usage(major)
-        if in_use:
-            from ..tomcat import service as _svc
-            for app in in_use:
-                try:
-                    _svc.action(app, "stop")
-                except Exception:
-                    pass
-
     tmp = fs.mkdtemp("javahost-jdk-")
+    stopped: List[str] = []
     try:
         # Adoptium publishes SHA-256; verify_sha512 expects sha512, so verify sha256 here.
         tgz = _fetch_with_sha256(url, tmp, sha, sha_url)
@@ -219,13 +210,34 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
                 fs.atomic_write(_version_marker(staging), semver + "\n", 0o644)
             except OSError:
                 pass
+        # Stop dependents only once staging is ready — a failed download/verify
+        # must not take apps down while the old tree is still intact.
+        if os.path.isdir(dest):
+            in_use = usage(major, home=dest)
+            if in_use:
+                from ..tomcat import service as _svc
+                for app in in_use:
+                    try:
+                        _svc.action(app, "stop")
+                        stopped.append(app)
+                    except Exception:
+                        pass
         # Atomic swap: existing tree → .old, staging → dest, then drop .old.
         if os.path.isdir(dest):
             old = dest + ".old"
             if os.path.isdir(old):
                 fs.safe_rmtree(old, require_marker=False)
             os.rename(dest, old)
-            os.rename(staging, dest)
+            try:
+                os.rename(staging, dest)
+            except Exception:
+                # Roll the live tree back so a failed second rename is not an outage.
+                if not os.path.isdir(dest) and os.path.isdir(old):
+                    try:
+                        os.rename(old, dest)
+                    except OSError:
+                        pass
+                raise
             fs.safe_rmtree(old, require_marker=False)
         else:
             os.rename(staging, dest)
@@ -235,6 +247,16 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
                 fs.safe_rmtree(staging, require_marker=False)
             except Exception:
                 pass
+        # Download/staging failures never stop apps. Swap failures restore
+        # ``dest`` above; restart anything we stopped so a failed update is
+        # not a lasting outage while the old JDK is still present.
+        if stopped and os.path.isdir(dest):
+            from ..tomcat import service as _svc
+            for app in stopped:
+                try:
+                    _svc.action(app, "start")
+                except Exception:
+                    pass
         raise
     finally:
         # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
@@ -262,11 +284,14 @@ def _is_plugin_runtime(path: str) -> bool:
     return rp == root or rp.startswith(root + os.sep)
 
 
-def usage(major: int) -> List[str]:
-    """App names whose pinned JAVA_HOME resolves to Java `major`.
+def usage(major: int, home: Optional[str] = None) -> List[str]:
+    """App names whose pinned JAVA_HOME matches Java ``major`` (or ``home``).
 
-    Scans every instance's setenv.sh / app.env for a JAVA_HOME and compares its
-    parsed major to `major`. Defensive: a malformed instance never raises here.
+    Scans every instance's setenv.sh / app.env for a JAVA_HOME. When ``home`` is
+    set, only apps whose resolved JAVA_HOME equals that path are returned (so
+    updating plugin ``jdk-17`` does not stop apps pinned to a distro JDK 17).
+    Without ``home``, any app whose parsed major matches is returned (UI /
+    uninstall overview). Defensive: a malformed instance never raises here.
     Imported lazily to avoid a runtime<->tomcat import cycle.
     """
     from ..tomcat import instance as _inst
@@ -275,6 +300,12 @@ def usage(major: int) -> List[str]:
     root = _inst.INSTANCE_ROOT
     if not os.path.isdir(root):
         return out
+    want = None
+    if home:
+        try:
+            want = os.path.realpath(home)
+        except OSError:
+            want = home
     for name in sorted(os.listdir(root)):
         base = os.path.join(root, name)
         if not os.path.isdir(base):
@@ -282,8 +313,17 @@ def usage(major: int) -> List[str]:
         try:
             env = _inst._read_setenv(base)
             jhome = env.get("JAVA_HOME") or _inst._read_app_env(base).get("JAVA_HOME", "")
-            if _inst._java_major_from_home(jhome) == int(major):
-                out.append(name)
+            if not jhome:
+                continue
+            if want is not None:
+                try:
+                    if os.path.realpath(jhome) != want:
+                        continue
+                except OSError:
+                    continue
+            elif _inst._java_major_from_home(jhome) != int(major):
+                continue
+            out.append(name)
         except Exception:
             continue
     return out
@@ -311,7 +351,10 @@ def uninstall(major: int, force: bool = False) -> Dict:
             "Java %d resolves to a panel-managed JDK (%s, shared); refusing to "
             "remove it. Reinstall into the plugin dir instead, don't remove the "
             "panel's copy." % (major, os.path.realpath(home)))
-    in_use = usage(major)
+    dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % major)
+    # Gate on apps pinned to the plugin tree being removed — not every app
+    # that happens to share the same major on a distro JDK.
+    in_use = usage(major, home=dest if os.path.isdir(dest) else home)
     if in_use and not force:
         raise RuntimeError(
             "Java %d is in use by: %s (pass force to remove anyway)"

@@ -1865,6 +1865,89 @@ def test_jdk_install_uses_staging_path(monkeypatch, tmp_path):
     assert tar_calls[0][-1].endswith(".staging"), "must extract into staging"
 
 
+def test_jdk_install_stops_only_after_staging(monkeypatch, tmp_path):
+    """Failed download must not stop apps; successful staging may stop pins."""
+    from core.runtime import java as j
+    from core.tomcat import instance as inst
+
+    dest_root = tmp_path / "runtimes"
+    dest_root.mkdir()
+    live = dest_root / "jdk-17"
+    live.mkdir()
+    (live / "bin").mkdir()
+    (live / "bin" / "java").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(j, "JDK_ROOT", str(dest_root))
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path / "apps"))
+    _mk_instance_with_java(tmp_path / "apps", "pinned", str(live))
+    _mk_instance_with_java(tmp_path / "apps", "other", "/usr/lib/jvm/java-17")
+
+    stops = []
+    monkeypatch.setattr(j, "_latest_asset", lambda *a, **k: {
+        "version": {"semver": "17.0.99+0"},
+        "binary": {"package": {"link": "https://example/jdk.tgz",
+                               "checksum": "ab" * 32}},
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(j, "_fetch_with_sha256", boom)
+    monkeypatch.setattr(j.fs, "mkdtemp", lambda *a, **k: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    class _Svc(object):
+        @staticmethod
+        def action(app, act):
+            stops.append((app, act))
+
+    import sys
+    monkeypatch.setitem(sys.modules, "core.tomcat.service", _Svc)
+    # Also patch the lazy import path used inside install_temurin
+    monkeypatch.setattr("core.tomcat.service.action", _Svc.action, raising=False)
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        j.install_temurin(17)
+    assert stops == [], "must not stop apps when staging never succeeds"
+
+    # Successful path: stop only the plugin-path pin, after staging extract.
+    monkeypatch.setattr(j, "_fetch_with_sha256",
+                        lambda url, tmp, sha, sha_url: str(tmp_path / "jdk.tgz"))
+    (tmp_path / "jdk.tgz").write_bytes(b"x")
+    order = []
+
+    def fake_run(argv, check=True):
+        order.append(("tar", argv[argv.index("-C") + 1] if "-C" in argv else ""))
+        if argv[:2] == ["tar", "-xzf"]:
+            dest = argv[argv.index("-C") + 1]
+            bindir = os.path.join(dest, "bin")
+            os.makedirs(bindir, exist_ok=True)
+            open(os.path.join(bindir, "java"), "w").write("#!/bin/sh\n")
+            os.chmod(os.path.join(bindir, "java"), 0o755)
+        return (0, "", "")
+
+    def stop_app(app, act):
+        order.append(("stop", app))
+        stops.append((app, act))
+
+    monkeypatch.setattr(j.shell, "run", fake_run)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+    monkeypatch.setattr(j.fs, "require_free", lambda *a, **k: None)
+    monkeypatch.setattr(j.fs, "safe_rmtree", lambda p, **k: None)
+    # Re-bind service.action used by install_temurin lazy import
+    import core.tomcat.service as svcmod
+    monkeypatch.setattr(svcmod, "action", stop_app)
+
+    stops.clear()
+    j.install_temurin(17)
+    assert ("tar", str(live) + ".staging") in order or any(
+        t == "tar" and str(s).endswith(".staging") for t, s in order)
+    tar_i = next(i for i, (t, _) in enumerate(order) if t == "tar")
+    stop_i = next(i for i, (t, _) in enumerate(order) if t == "stop")
+    assert tar_i < stop_i, "stop must happen after staging extract"
+    assert stops == [("pinned", "stop")]
+    assert ("other", "stop") not in stops
+
+
 # ---- maintenance.wipe_preview / wipe ----------------------------------------
 def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     from core import maintenance
