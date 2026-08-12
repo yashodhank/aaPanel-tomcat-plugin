@@ -727,6 +727,108 @@ def test_engine_default_port_used():
     assert ":3306/" in m["DB_URL"]
 
 
+def test_write_app_env_preserves_jar_loopback_keys(tmp_path):
+    """SetDbEnv must merge DB_* into app.env — never wipe JAR bind/JAVA_HOME."""
+    from core.db import _base as dbbase
+
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    # create_jar writes unquoted KEY=val lines
+    (base / "bin" / "app.env").write_text(
+        "SERVER_PORT=8090\n"
+        "SERVER_ADDRESS=127.0.0.1\n"
+        "SERVER_HOST=127.0.0.1\n"
+        "JAVA_HOME=/opt/jdk-17\n"
+        "SPRING_PROFILES_ACTIVE=prod\n"
+    )
+    mapping = pg.render_env(
+        host="127.0.0.1", port=5432, db="appdb", user="app",
+        password="s3cr3t-pass", version="16", ssl=False, java_major=17,
+    )
+    path = dbengines.write_app_env(str(base), mapping)
+    assert path.endswith("bin/app.env")
+    assert oct(os.stat(path).st_mode & 0o777) == "0o640"
+
+    env = dbbase.read_app_env(str(base))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["SERVER_HOST"] == "127.0.0.1"
+    assert env["SERVER_PORT"] == "8090"
+    assert env["JAVA_HOME"] == "/opt/jdk-17"
+    assert env["SPRING_PROFILES_ACTIVE"] == "prod"
+    assert env["DB_USER"] == "app"
+    assert env["DB_PASSWORD"] == "s3cr3t-pass"
+    assert env["DB_URL"].startswith("jdbc:postgresql://")
+    # password must not appear in the JDBC URL
+    assert "s3cr3t-pass" not in env["DB_URL"]
+
+
+def test_write_app_env_replaces_stale_db_keys_on_engine_switch(tmp_path):
+    """Switching engines drops prior DB_* (e.g. mongo DB_AUTH_SOURCE)."""
+    from core.db import _base as dbbase
+
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    (base / "bin" / "app.env").write_text(
+        'SERVER_ADDRESS="127.0.0.1"\n'
+        'DB_URL="mongodb://h:27017/old"\n'
+        'DB_AUTH_SOURCE="admin"\n'
+        'DB_PASSWORD="oldpass"\n'
+    )
+    mapping = mysql.MYSQL.render_env(
+        host="db", port=3306, db="appdb", user="u", password="newpass", ssl=False,
+    )
+    dbengines.write_app_env(str(base), mapping)
+    env = dbbase.read_app_env(str(base))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["DB_PASSWORD"] == "newpass"
+    assert "DB_AUTH_SOURCE" not in env
+    assert env["DB_URL"].startswith("jdbc:mysql://")
+
+
+def test_setdbenv_preserves_jar_loopback_keys(tmp_path, monkeypatch):
+    """Endpoint path: SetDbEnv must keep SERVER_ADDRESS=127.0.0.1 (C1)."""
+    import javahost_main
+    from core.db import _base as dbbase
+
+    app_dir = tmp_path / "demo"
+    (app_dir / "bin").mkdir(parents=True)
+    (app_dir / "bin" / "app.env").write_text(
+        "SERVER_PORT=9080\n"
+        "SERVER_ADDRESS=127.0.0.1\n"
+        "SERVER_HOST=127.0.0.1\n"
+        "JAVA_HOME=/www/server/javahost/jdk/17\n"
+    )
+    monkeypatch.setattr(javahost_main.instance, "base_path",
+                        lambda app: str(app_dir))
+
+    class G(object):
+        app = "demo"
+        db_engine = "postgresql"
+        db_host = "127.0.0.1"
+        db_port = "5432"
+        db_name = "appdb"
+        db_user = "app"
+        db_password = "never-echo-me"
+        db_version = "16"
+        db_ssl = "0"
+
+    res = javahost_main.javahost_main().SetDbEnv(G())
+    assert res.get("status") is True
+    body = res["msg"]
+    assert body["env"] == "written (secrets not echoed)"
+    assert "never-echo-me" not in str(res)
+    assert "DB_PASSWORD" not in str(res)
+
+    env = dbbase.read_app_env(str(app_dir))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["SERVER_HOST"] == "127.0.0.1"
+    assert env["SERVER_PORT"] == "9080"
+    assert env["JAVA_HOME"] == "/www/server/javahost/jdk/17"
+    assert env["DB_USER"] == "app"
+    assert env["DB_PASSWORD"] == "never-echo-me"
+    assert oct(os.stat(app_dir / "bin" / "app.env").st_mode & 0o777) == "0o640"
+
+
 def test_namespace_warning(tmp_path):
     z = _make_zip([("WEB-INF/classes/javax/servlet/http/HttpServlet.class", "x")])
     war_path = tmp_path / "c.war"
