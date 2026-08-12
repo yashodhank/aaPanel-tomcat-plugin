@@ -1171,21 +1171,9 @@ def test_aapanel_remove_site_falls_to_class_api(monkeypatch):
         def DeleteSite(self, g):
             return {"status": True, "msg": "ok"}
 
-<<<<<<< HEAD
     fake_mod = types.ModuleType("panelSite")
     fake_mod.panelSite = _FakeSiteObj
     monkeypatch.setitem(sys.modules, "panelSite", fake_mod)
-=======
-    class _FakePanelSiteMod:
-        @staticmethod
-        def panelSite():
-            return _FakeSiteObj()
-
-    # Import path is `from panelSite import panelSite as _SiteClass`
-    monkeypatch.setitem(sys.modules, "panelSite", type(sys)("panelSite"))
-    sys.modules["panelSite"].panelSite = _FakeSiteObj
-    monkeypatch.setattr(proxy, "AAPANEL_PANEL_CLASS", "/fake/panel/class")
->>>>>>> f48a7bb (fix(site): orphan-safe RemoveSite, restore via set_site, domain UI)
 
     removed = proxy.aapanel_remove_site("test.example.com")
     assert removed is True
