@@ -289,6 +289,11 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
         # Prefer reusing an existing covering wildcard without rewriting nginx.
         cert_domain, wildcard_name = _find_wildcard_cert(domain)
         if cert_domain and _cert_exists(cert_domain):
+            # Cert on disk is not enough — panel must actually serve HTTPS.
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "wildcard cert found but aaPanel SetSSL/HttpToHttps failed",
+                        "owner": "aapanel", "cert_domain": cert_domain}
             not_after = _cert_not_after(cert_domain)
             _mark_ssl(app, True, not_after=not_after)
             return {"ssl": True, "url": "https://%s/" % domain,
@@ -324,6 +329,11 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
             if err:
                 return {"ssl": False, "error": err}
             proxy._store_owner(app, "javahost") if hasattr(proxy, "_store_owner") else None
+        else:
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "wildcard cert found but aaPanel HTTPS enable failed",
+                        "owner": "aapanel"}
         _install_renewal_hook()
         _mark_ssl(app, True, not_after=not_after)
         return {"ssl": True, "url": "https://%s/" % domain,
@@ -357,8 +367,11 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
                 pass
         elif via == "certbot":
             # Cert issued into LE live dir but aaPanel site still owns HTTP —
-            # do NOT write a duplicate vhost; ask panel to pick up LE paths if possible.
-            panel_api.http_enable_site_ssl(domain)
+            # require panel to flip HTTPS before we mark ssl=true.
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "certbot issued a cert but aaPanel HTTPS enable failed",
+                        "owner": "aapanel", "via": "certbot"}
         _install_renewal_hook()
         _mark_ssl(app, True, not_after=not_after)
         res = {"ssl": True, "url": "https://%s/" % domain,
@@ -380,7 +393,10 @@ def disable(app: str, domain: str, port: int) -> Dict:
     port = validate.port(port)
     owner = proxy.read_owner(app)
     if owner == "aapanel":
-        panel_api.http_disable_site_ssl(domain)
+        if not panel_api.http_disable_site_ssl(domain):
+            return {"ssl": True, "error":
+                    "aaPanel HTTPS disable failed — SSL marker left on",
+                    "url": "https://%s/" % domain, "owner": "aapanel"}
         _mark_ssl(app, False)
         return {"ssl": False, "url": "http://%s/" % domain, "owner": "aapanel"}
     err = _activate_plugin_vhost(app, domain, port, ssl_on=False)
