@@ -1988,3 +1988,85 @@ def test_find_wildcard_cert_rejects_multi_label(monkeypatch):
     base, wildcard = ssl_mod._find_wildcard_cert("a.b.example.com")
     # Parent base is b.example.com; file check may "succeed" but SAN won't match *.b.example.com
     assert base is None and wildcard is None
+
+
+# ---- PR4 ops polish: WS map, JAR logs/repair, wipe schedules --------------------
+def test_ensure_ws_map_idempotent(monkeypatch, tmp_path):
+    conf = tmp_path / "nginx.conf"
+    conf.write_text("user www;\nhttp {\n    include mime.types;\n}\nevents {}\n")
+    monkeypatch.setattr(proxy, "nginx_test", lambda: True)
+    assert proxy.ensure_ws_map(str(conf)) is True
+    body = conf.read_text()
+    assert "map $http_upgrade $connection_upgrade" in body
+    assert "default upgrade;" in body
+    # second call is a no-op success
+    assert proxy.ensure_ws_map(str(conf)) is True
+    assert body.count("map $http_upgrade $connection_upgrade") == 1
+
+
+def test_ensure_ws_map_rolls_back_on_nginx_t_fail(monkeypatch, tmp_path):
+    conf = tmp_path / "nginx.conf"
+    original = "http {\n    keepalive_timeout 65;\n}\n"
+    conf.write_text(original)
+    monkeypatch.setattr(proxy, "nginx_test", lambda: False)
+    assert proxy.ensure_ws_map(str(conf)) is False
+    assert conf.read_text() == original
+
+
+def test_jar_tail_log_reads_app_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "jarapp"
+    (base / "logs").mkdir(parents=True)
+    (base / "app.jar").write_bytes(b"PK\x03\x04")  # marks type=jar
+    (base / "logs" / "app.out").write_text("\n".join("j%d" % i for i in range(1, 11)) + "\n")
+    assert instance.tail_log("jarapp", 3).splitlines() == ["j8", "j9", "j10"]
+
+
+def test_repair_jar_reinstalls_unit(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    (base / "bin" / "app.env").write_text(
+        "JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\nSERVER_ADDRESS=127.0.0.1\n")
+    (tmp_path / "etc" / "systemd" / "system").mkdir(parents=True)
+    unit = tmp_path / "etc" / "systemd" / "system" / "javahost-jarapp.service"
+    unit.write_text(
+        "ExecStart=/opt/jdk-17/bin/java -Xmx512m -jar /x/app.jar\n")
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "etc" / "systemd" / "system"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "etc" / "init.d"))
+    seen = {}
+
+    def _install(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen.update(app=app, java_home=java_home, port=port, java_opts=java_opts)
+        return "/unit"
+
+    monkeypatch.setattr(instance.service, "install_jar_unit", _install)
+    monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
+    monkeypatch.setattr(instance.service, "enable_start", lambda a: None)
+    monkeypatch.setattr(instance.service, "action", lambda a, act: None)
+    res = instance.repair("jarapp")
+    assert res["repaired"] is True and res["type"] == "jar"
+    assert seen["java_home"] == "/opt/jdk-17" and seen["port"] == 8099
+    assert seen["java_opts"] == "-Xmx512m"
+
+
+def test_wipe_apps_prunes_schedules(monkeypatch, tmp_path):
+    from core import maintenance
+    from core.backup import schedule as backupschedule
+    monkeypatch.setattr(maintenance, "_list_apps", lambda: ["gone"])
+    monkeypatch.setattr(maintenance.service, "action", lambda *a, **k: None)
+    monkeypatch.setattr(maintenance.service, "remove_unit", lambda *a, **k: None)
+    monkeypatch.setattr(maintenance.instance, "delete", lambda app: {"app": app, "removed": True})
+    pruned = []
+
+    def _rm(app):
+        pruned.append(app)
+        return {"app": app, "removed": True}
+
+    monkeypatch.setattr(backupschedule, "remove_schedule", _rm)
+    res = maintenance._wipe_apps()
+    assert res["removed"] == ["gone"]
+    assert "gone" in res["schedules_pruned"]
+    assert pruned == ["gone"]

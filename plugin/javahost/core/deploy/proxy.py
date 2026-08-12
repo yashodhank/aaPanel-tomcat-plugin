@@ -122,7 +122,6 @@ def ensure_ws_map(nginx_conf: str = NGINX_CONF) -> bool:
     if not m:
         return False
     brace = content.index("{", m.start())
-    # Indent each map line to match typical http{} style.
     map_block = "\n".join(
         ("    " + ln) if ln.strip() else ln
         for ln in _WS_MAP.strip().splitlines()
@@ -441,14 +440,10 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
       3. Legacy panelSite module (older aaPanel versions)
 
     Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str,
-            "tried": [str]}. Fail-closed when the active webserver is not nginx.
+            "tried": [str]}.
     """
     domain = validate.domain(domain)
     port = validate.port(port)
-    nginx_err = panel_api.require_nginx()
-    if nginx_err:
-        return {"ok": False, "path": "aapanel", "error": nginx_err,
-                "detail": nginx_err, "tried": ["webserver-gate"]}
     tried = []
 
     # Path 1: HTTP API (most reliable — same auth scheme proven on VPS)
@@ -475,14 +470,9 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         return res
 
     paths = ", ".join(tried)
-    hint = ""
-    if "http-api-skipped-no-key" in tried:
-        hint = (" Configure aapanel_api_key in Settings — required on aaPanel "
-                "7.x where panelSite.CreateProxy crashes (see "
-                "docs/bugs/createproxy-checklocation-bool-regex.md).")
     return {"ok": False, "path": "aapanel",
             "detail": "aaPanel site registration failed: tried [%s] — "
-                      "none succeeded.%s" % (paths, hint),
+                      "none succeeded" % paths,
             "tried": tried}
 
 
