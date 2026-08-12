@@ -187,7 +187,8 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
 
     # Prior failed CreateProxy attempts may have left an inline `location`
     # block in the site conf; scrub before retrying so nginx -t can pass.
-    scrub_site_inline_proxy(domain)
+    # Keep the pre-scrub body so we can restore if attach ultimately fails.
+    _, scrub_snap = scrub_site_inline_proxy(domain)
 
     proxy_body = {
         "proxyname": "javahost-" + domain.replace(".", "-")[:40],
@@ -236,6 +237,9 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
                 "detail": "via AddSite + panel proxy files -> %s (CreateProxy was: %s)"
                 % (backend, last_detail or "failed")}
 
+    # Total failure — restore pre-scrub site conf so we don't leave a blanked
+    # reverse-proxy when CreateProxy/fallback both failed.
+    _restore_site_conf(domain, scrub_snap)
     return {
         "ok": False,
         "path": "aapanel-http",
@@ -256,27 +260,38 @@ _PROXY_INLINE_RE = re.compile(
 )
 
 
-def scrub_site_inline_proxy(domain: str) -> bool:
+def scrub_site_inline_proxy(domain: str) -> Tuple[bool, str]:
     """Remove inline #PROXY-START..#PROXY-END blocks from the site vhost conf.
 
-    Returns True when the file was rewritten. Best-effort; never raises.
+    Returns (rewrote, previous_body_or_empty). previous_body is set when the
+    file was rewritten so callers can restore on later failure.
     """
     site_conf = _AAPANEL_SITE_CONF % domain
     if not os.path.isfile(site_conf):
-        return False
+        return False, ""
     try:
         with open(site_conf, encoding="utf-8", errors="replace") as f:
             body = f.read()
     except OSError:
-        return False
+        return False, ""
     new_body = _PROXY_INLINE_RE.sub("", body)
     if new_body == body:
-        return False
+        return False, ""
     try:
         fs.atomic_write(site_conf, new_body, mode=0o644)
     except OSError:
-        return False
-    return True
+        return False, ""
+    return True, body
+
+
+def _restore_site_conf(domain: str, body: str) -> None:
+    if not body:
+        return
+    site_conf = _AAPANEL_SITE_CONF % domain
+    try:
+        fs.atomic_write(site_conf, body, mode=0o644)
+    except OSError:
+        pass
 
 
 def _register_proxyfile(domain: str, port: int) -> Tuple[bool, str]:
@@ -308,8 +323,9 @@ def _register_proxyfile(domain: str, port: int) -> Tuple[bool, str]:
             with open(path, encoding="utf-8", errors="replace") as f:
                 raw = f.read().strip() or "[]"
             parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                rows = parsed
+            if not isinstance(parsed, list):
+                return False, "unexpected proxyfile.json shape (want list)"
+            rows = parsed
         except (OSError, ValueError, TypeError) as e:
             return False, "cannot read proxyfile.json: %s" % e
     kept = []
@@ -398,7 +414,8 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
       /www/server/panel/vhost/nginx/proxy/<domain>/<md5>_<domain>.conf
       include .../proxy/<domain>/*.conf;  inside the site server{} block
       /www/server/panel/data/proxyfile.json entry (Website UI source of truth)
-    Returns (ok, error_or_empty).
+    Returns (ok, error_or_empty). Rolls back site conf / proxyfile / proxy
+    snippet when ``nginx -t`` fails after the write.
     """
     backend = "http://127.0.0.1:%d" % int(port)
     site_conf = _AAPANEL_SITE_CONF % domain
@@ -411,32 +428,65 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
     except OSError as e:
         return False, "cannot create proxy dir: %s" % e
 
+    try:
+        with open(site_conf, encoding="utf-8", errors="replace") as f:
+            site_snap = f.read()
+    except OSError as e:
+        return False, "cannot read site conf: %s" % e
+
+    proxyfile_snap = None
+    if os.path.isfile(_AAPANEL_PROXYFILE):
+        try:
+            with open(_AAPANEL_PROXYFILE, encoding="utf-8", errors="replace") as f:
+                proxyfile_snap = f.read()
+        except OSError:
+            proxyfile_snap = None
+
     digest = hashlib.md5(domain.encode()).hexdigest()  # nosec B324 — filename id only
     conf_path = os.path.join(proxy_dir, "%s_%s.conf" % (digest, domain))
+    conf_existed = os.path.isfile(conf_path)
+    conf_snap = None
+    if conf_existed:
+        try:
+            with open(conf_path, encoding="utf-8", errors="replace") as f:
+                conf_snap = f.read()
+        except OSError:
+            conf_snap = None
+
+    def _rollback(err: str) -> Tuple[bool, str]:
+        _restore_site_conf(domain, site_snap)
+        if proxyfile_snap is not None:
+            try:
+                fs.atomic_write(_AAPANEL_PROXYFILE, proxyfile_snap, mode=0o644)
+            except OSError:
+                pass
+        try:
+            if conf_existed and conf_snap is not None:
+                fs.atomic_write(conf_path, conf_snap, mode=0o644)
+            elif os.path.isfile(conf_path) and not conf_existed:
+                os.unlink(conf_path)
+        except OSError:
+            pass
+        return False, err
+
     try:
         fs.atomic_write(conf_path, _proxy_conf_body(backend), mode=0o644)
     except OSError as e:
         return False, "cannot write proxy conf: %s" % e
 
     try:
-        with open(site_conf, encoding="utf-8", errors="replace") as f:
-            site_body = f.read()
-    except OSError as e:
-        return False, "cannot read site conf: %s" % e
-
-    try:
-        new_body = _ensure_site_proxy_include(site_body, include_line, domain)
+        new_body = _ensure_site_proxy_include(site_snap, include_line, domain)
     except ValueError as e:
-        return False, str(e)
-    if new_body != site_body:
+        return _rollback(str(e))
+    if new_body != site_snap:
         try:
             fs.atomic_write(site_conf, new_body, mode=0o644)
         except OSError as e:
-            return False, "cannot update site conf include: %s" % e
+            return _rollback("cannot update site conf include: %s" % e)
 
     pf_ok, pf_err = _register_proxyfile(domain, int(port))
     if not pf_ok:
-        return False, pf_err
+        return _rollback(pf_err)
 
     # Validate + reload nginx (same as CreateProxy would).
     nginx = "/www/server/nginx/sbin/nginx"
@@ -446,10 +496,10 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
         rc, out, err = run([nginx, "-t"], check=False, timeout=15)
         if rc != 0:
             detail = ((err or "") + (out or "")).strip()[-400:]
-            return False, "nginx -t failed after proxy write: %s" % detail
+            return _rollback("nginx -t failed after proxy write: %s" % detail)
         run([nginx, "-s", "reload"], check=False, timeout=15)
     except Exception as e:
-        return False, "nginx reload failed: %s" % e
+        return _rollback("nginx reload failed: %s" % e)
     return True, ""
 
 
