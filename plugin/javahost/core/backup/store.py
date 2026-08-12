@@ -112,16 +112,45 @@ def _parse_xmx_mb(java_opts: str) -> Optional[int]:
     return n * 1024 if m.group(2).lower() == "g" else n
 
 
+def _read_unit_java_opts(app: str) -> str:
+    """Best-effort JAVA_OPTS from the installed systemd/init.d unit (JAR apps
+    bake opts into the unit; setenv.sh is absent). Never raises."""
+    candidates = [
+        "/etc/systemd/system/javahost-%s.service" % app,
+        "/etc/init.d/javahost-%s" % app,
+    ]
+    for path in candidates:
+        try:
+            if not os.path.isfile(path):
+                continue
+            body = open(path, errors="replace").read()
+            # systemd: ExecStart=.../java <opts> -jar ...
+            m = re.search(r"/bin/java\s+(.+?)\s+-jar\b", body)
+            if m:
+                return m.group(1).strip()
+            # init.d: JAVA_OPTS="..."
+            m = re.search(r'^JAVA_OPTS="([^"]*)"', body, re.M)
+            if m:
+                return m.group(1).strip()
+        except OSError:
+            continue
+    return ""
+
+
 def _build_manifest(app: str, base: str) -> Dict:
     info = instance._app_info(app)
     setenv = instance._read_setenv(base)
+    java_opts = (setenv.get("JAVA_OPTS") or "").strip()
+    if not java_opts and (info.get("type") or "") == "jar":
+        java_opts = _read_unit_java_opts(app)
     return {
         "format": MANIFEST_FORMAT,
         "app": app,
         "type": info.get("type") or "war",
         "tomcat_major": info.get("tomcat"),
         "java_major": info.get("java"),
-        "memory_mb": _parse_xmx_mb(setenv.get("JAVA_OPTS", "")),
+        "memory_mb": _parse_xmx_mb(java_opts),
+        "java_opts": java_opts or None,
         "port": info.get("port"),
         "domain": info.get("domain"),
         "ssl_enabled": bool(info.get("ssl")),
@@ -400,6 +429,55 @@ def _clear_site_markers(base: str) -> None:
                 pass
 
 
+def _secure_restored_secrets(base: str, archive_path: str = None) -> None:
+    """Force secret modes after extract (tar members may carry looser modes).
+
+    Archives that carry DB creds → 0600; bin/app.env → 0640.
+    """
+    if archive_path and os.path.isfile(archive_path):
+        try:
+            os.chmod(archive_path, 0o600)
+        except OSError:
+            pass
+    envp = os.path.join(base, "bin", "app.env")
+    if os.path.isfile(envp):
+        try:
+            os.chmod(envp, 0o640)
+        except OSError:
+            pass
+
+
+def _restore_java_opts(base: str, itype: str, manifest: Dict,
+                       java_home: str) -> str:
+    """Rebuild JVM opts for a restored unit from setenv / manifest.
+
+    JAR backups do not ship the rendered systemd unit, so restore previously
+    reinstalled with empty java_opts. Prefer setenv JAVA_OPTS, then manifest
+    java_opts, else regenerate defaults from manifest memory_mb.
+    """
+    env = instance._read_setenv(base)
+    opts = (env.get("JAVA_OPTS") or "").strip()
+    if opts:
+        return opts
+    man_opts = (manifest.get("java_opts") or "").strip()
+    if man_opts:
+        from ..runtime import java as _java, jvm_opts
+        major = _java.probe(java_home) or instance._java_major_from_home(java_home) or 17
+        cleaned, _warns = jvm_opts.sanitize(man_opts.split(), int(major))
+        return " ".join(cleaned)
+    mem = manifest.get("memory_mb")
+    if not mem:
+        return ""
+    try:
+        mem_i = int(mem)
+    except (TypeError, ValueError):
+        return ""
+    from ..runtime import java as _java, jvm_opts
+    major = _java.probe(java_home) or instance._java_major_from_home(java_home) or 17
+    cleaned, _warns = jvm_opts.sanitize(jvm_opts.default_opts(mem_i), int(major))
+    return " ".join(cleaned)
+
+
 def restore(archive_path: str, as_name: Optional[str] = None,
             domain: Optional[str] = None, user: str = "www") -> Dict:
     """Restore an app from a backup archive.
@@ -450,6 +528,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         shutil.rmtree(staging, ignore_errors=True)
 
     fs.mark_managed(base)
+    _secure_restored_secrets(base, archive_path)
 
     # port + domain
     if new_mode:
@@ -468,16 +547,21 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     # re-render setenv (fixes CATALINA_BASE/app for a new name) + the service unit
     env = instance._read_setenv(base)
     java_home = env.get("JAVA_HOME") or instance._read_app_env(base).get("JAVA_HOME", "")
+    java_opts = _restore_java_opts(base, itype, manifest, java_home)
     if itype == "jar":
-        service.install_jar_unit(target, java_home, base, port or 0, java_opts="", user=user)
+        service.install_jar_unit(target, java_home, base, port or 0,
+                                 java_opts=java_opts, user=user)
     else:
         catalina_home = env.get("CATALINA_HOME", "")
-        opts = [o for o in (env.get("JAVA_OPTS", "") or "").split() if o]
+        opts = [o for o in (java_opts or env.get("JAVA_OPTS", "") or "").split() if o]
         if java_home and catalina_home:
             service.write_setenv(base, target, java_home, catalina_home, opts, [])
             service.install_unit(target, java_home, catalina_home, base, user=user)
         else:
             raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
+
+    # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
+    _secure_restored_secrets(base, archive_path)
 
     service.enable_start(target)
 

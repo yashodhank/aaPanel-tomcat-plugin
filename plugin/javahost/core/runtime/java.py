@@ -170,7 +170,12 @@ def version_newer(latest: str, installed: str) -> bool:
 
 
 def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
-    """Download + verify + extract Temurin JDK <major>. Returns JAVA_HOME."""
+    """Download + verify + staged-extract Temurin JDK <major>. Returns JAVA_HOME.
+
+    Extract lands in ``jdk-<major>.staging`` and is atomically renamed into
+    place (same pattern as Tomcat installer). Replacing an in-use tree stops
+    dependents first so they do not race a half-written JAVA_HOME.
+    """
     if major not in (17, 21, 11, 8):
         raise ValueError("unsupported JDK major to install: %s" % major)
 
@@ -184,23 +189,53 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
     else:
         sha_url = None
 
+    dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
+    staging = dest + ".staging"
+    # If we are about to replace a live tree that apps still pin, stop them
+    # before the swap so restarts do not hit a transient missing JAVA_HOME.
+    if os.path.isdir(dest):
+        in_use = usage(major)
+        if in_use:
+            from ..tomcat import service as _svc
+            for app in in_use:
+                try:
+                    _svc.action(app, "stop")
+                except Exception:
+                    pass
+
     tmp = fs.mkdtemp("javahost-jdk-")
     try:
         # Adoptium publishes SHA-256; verify_sha512 expects sha512, so verify sha256 here.
         tgz = _fetch_with_sha256(url, tmp, sha, sha_url)
-        dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
         fs.ensure_dir(JDK_ROOT)
         fs.require_free(JDK_ROOT, 400 * (1 << 20))
-        if os.path.isdir(dest):
-            fs.safe_rmtree(dest, require_marker=False)
-        fs.ensure_dir(dest)
-        shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", dest])
-        fs.mark_managed(dest)
+        if os.path.isdir(staging):
+            fs.safe_rmtree(staging, require_marker=False)
+        fs.ensure_dir(staging)
+        shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", staging])
+        fs.mark_managed(staging)
         if semver:
             try:
-                fs.atomic_write(_version_marker(dest), semver + "\n", 0o644)
+                fs.atomic_write(_version_marker(staging), semver + "\n", 0o644)
             except OSError:
                 pass
+        # Atomic swap: existing tree → .old, staging → dest, then drop .old.
+        if os.path.isdir(dest):
+            old = dest + ".old"
+            if os.path.isdir(old):
+                fs.safe_rmtree(old, require_marker=False)
+            os.rename(dest, old)
+            os.rename(staging, dest)
+            fs.safe_rmtree(old, require_marker=False)
+        else:
+            os.rename(staging, dest)
+    except Exception:
+        if os.path.isdir(staging):
+            try:
+                fs.safe_rmtree(staging, require_marker=False)
+            except Exception:
+                pass
+        raise
     finally:
         # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
         # directly: safe_rmtree only permits MANAGED_ROOTS and would refuse /tmp.
