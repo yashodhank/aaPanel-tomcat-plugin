@@ -54,6 +54,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 300;
     }
 }
@@ -61,6 +63,8 @@ server {
 
 # HTTPS vhost: port-80 server serves only ACME + redirects to https; the 443
 # server terminates TLS and proxies to the backend.
+# @@http2_line@@ is either "    http2 on;\n" (nginx ≥1.25.1) or "" with
+# listen lines carrying the legacy "http2" flag (older aaPanel nginx).
 _TEMPLATE_SSL = """# Managed by JavaHost — instance @@app@@ (@@domain@@) [SSL]. Do not edit by hand.
 server {
     listen 80;
@@ -72,10 +76,9 @@ server {
     }
 }
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
-    server_name @@domain@@;
+    listen @@listen_443@@;
+    listen [::]:@@listen_443_v6@@;
+@@http2_line@@    server_name @@domain@@;
     ssl_certificate /etc/letsencrypt/live/@@cert_domain@@/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/@@cert_domain@@/privkey.pem;
     location / {
@@ -85,10 +88,35 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 300;
     }
 }
 """
+
+# map $http_upgrade $connection_upgrade is required for WS; emit once via include hint.
+_WS_MAP = """map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+"""
+
+
+def _nginx_supports_http2_on() -> bool:
+    """True when `nginx -V` reports a version that accepts standalone `http2 on;`."""
+    nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
+    try:
+        rc, out, err = shell.run([nginx, "-V"], check=False)
+    except Exception:
+        return False
+    blob = (out or "") + (err or "")
+    m = re.search(r"nginx/(\d+)\.(\d+)\.(\d+)", blob)
+    if not m:
+        return False
+    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # http2 on; directive: nginx 1.25.1+
+    return (major, minor, patch) >= (1, 25, 1)
 
 
 def vhost_path(app: str) -> str:
@@ -109,8 +137,8 @@ def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
     paths are /etc/letsencrypt/live/<cert_domain>/ instead of <domain>/.
     Used for wildcard certs where the cert lives at the base domain path.
 
-    wildcard_name (optional): e.g. ``*.example.com`` — added to server_name
-    alongside the primary domain.
+    wildcard_name is accepted for API compatibility but is NEVER added to
+    server_name (doing so would hijack sibling hosts under the same wildcard).
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
@@ -118,16 +146,24 @@ def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
     fs.ensure_dir(VHOST_DIR)
     acme = _ACME_LOCATION.replace("@@acme@@", ACME_WEBROOT)
     cert_for = cert_domain or domain
-    server_names = domain
-    if wildcard_name:
-        server_names = "%s %s" % (domain, wildcard_name)
+    # Intentionally ignore wildcard_name for server_name — cert reuse only.
+    _ = wildcard_name
     template = _TEMPLATE_SSL if ssl else _TEMPLATE
+    if ssl and _nginx_supports_http2_on():
+        listen_443, listen_443_v6, http2_line = "443 ssl", "443 ssl", "    http2 on;\n"
+    elif ssl:
+        listen_443, listen_443_v6, http2_line = "443 ssl http2", "443 ssl http2", ""
+    else:
+        listen_443, listen_443_v6, http2_line = "443 ssl", "443 ssl", ""
     body = (template
             .replace("@@acme_location@@", acme)
             .replace("@@app@@", app)
             .replace("@@cert_domain@@", cert_for)  # cert at base domain path
-            .replace("@@domain@@", server_names)
-            .replace("@@port@@", str(port)))
+            .replace("@@domain@@", domain)
+            .replace("@@port@@", str(port))
+            .replace("@@listen_443@@", listen_443)
+            .replace("@@listen_443_v6@@", listen_443_v6)
+            .replace("@@http2_line@@", http2_line))
     path = vhost_path(app)
     fs.atomic_write(path, body, mode=0o644)
     return path
@@ -168,10 +204,8 @@ _INCLUDE_LINE = "include %s/*.conf;" % VHOST_DIR
 def ensure_include(nginx_conf: str = NGINX_CONF) -> bool:
     """Idempotently add our vhost include into nginx's http{} block.
 
-    Returns True if the include was added, False if it was already present (or
-    the conf is unavailable). Inserts immediately after the opening `http {` so
-    the directive lands inside the http context. Never touches other plugins'
-    server blocks — only this one include line.
+    Returns True when the include is present and valid (already there or newly
+    added), False if the conf is missing or nginx -t rejects the change.
     """
     if not os.path.isfile(nginx_conf):
         return False
@@ -180,7 +214,7 @@ def ensure_include(nginx_conf: str = NGINX_CONF) -> bool:
     if VHOST_DIR in content and "include" in content:
         # already referenced (idempotent — tolerate trailing-slash variants)
         if _INCLUDE_LINE in content or ("%s/*.conf" % VHOST_DIR) in content:
-            return False
+            return True
     # Locate the http{} block by a real `http {` token (not a bare substring
     # match, which would also hit comments, "https", $http_host, etc.).
     m = re.search(r"\bhttp\s*\{", content)
@@ -462,10 +496,24 @@ def _site_marker(app: str) -> str:
     return os.path.join(instance.base_path(app), "bin", "site.domain")
 
 
+def _owner_marker(app: str) -> str:
+    from ..tomcat import instance
+    app = validate.identifier(app, "app")
+    return os.path.join(instance.base_path(app), "bin", "site.owner")
+
+
 def _store_domain(app: str, domain: str) -> None:
     path = _site_marker(app)
     fs.ensure_dir(os.path.dirname(path))
     fs.atomic_write(path, domain + "\n", mode=0o644)
+
+
+def _store_owner(app: str, owner: str) -> None:
+    """Record who owns the public site config: 'aapanel' or 'javahost'."""
+    owner = str(owner or "").strip().lower() or "aapanel"
+    path = _owner_marker(app)
+    fs.ensure_dir(os.path.dirname(path))
+    fs.atomic_write(path, owner + "\n", mode=0o644)
 
 
 def _clear_domain(app: str) -> None:
@@ -478,6 +526,12 @@ def _clear_domain(app: str) -> None:
             os.unlink(path)
         except OSError:
             pass
+    try:
+        op = _owner_marker(app)
+        if os.path.exists(op):
+            os.unlink(op)
+    except OSError:
+        pass
 
 
 def read_domain(app: str) -> Optional[str]:
@@ -494,6 +548,23 @@ def read_domain(app: str) -> Optional[str]:
         return d or None
     except OSError:
         return None
+
+
+def read_owner(app: str) -> str:
+    """Who owns the public site nginx/ssl config: 'aapanel' (default) or 'javahost'."""
+    try:
+        path = _owner_marker(app)
+    except Exception:
+        return "aapanel"
+    if not os.path.isfile(path):
+        # Domains created via SetSite are aaPanel-owned; missing marker => aapanel.
+        return "aapanel" if read_domain(app) else "javahost"
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            v = f.read().strip().lower()
+        return v if v in ("aapanel", "javahost") else "aapanel"
+    except OSError:
+        return "aapanel"
 
 
 def set_site(app: str, domain: str, port: int) -> Dict:
@@ -520,10 +591,20 @@ def set_site(app: str, domain: str, port: int) -> Dict:
                % (tried_str, detail, hint))
         return {"ok": False, "error": msg}
 
-    ensure_include()
+    # Do not inject a competing JavaHost vhost — aaPanel owns the site conf.
     _store_domain(app, domain)
+    _store_owner(app, "aapanel")
+    # Remove any leftover plugin vhost for this app to avoid duplicate server_name.
+    try:
+        path = vhost_path(app)
+        had = os.path.exists(path)
+        remove_vhost(app)
+        if had:
+            reload_nginx()
+    except Exception:
+        pass
     return {"ok": True, "domain": domain, "url": "http://%s/" % domain,
-            "via": "aapanel", "aapanel": aap.get("detail", "")}
+            "via": "aapanel", "owner": "aapanel", "aapanel": aap.get("detail", "")}
 
 
 def remove_site(app: str) -> Dict:

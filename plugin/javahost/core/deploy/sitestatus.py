@@ -38,7 +38,7 @@ def _cert_info(domain: str) -> Optional[Dict]:
     output can't be parsed (the file is there, we just can't read the date)."""
     path = ssl._live_fullchain(domain)
     try:
-        if not os.path.isfile(path):
+        if not path or not os.path.isfile(path):
             return None
     except Exception:
         return None

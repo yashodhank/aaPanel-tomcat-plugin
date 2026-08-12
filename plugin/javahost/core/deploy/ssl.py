@@ -37,27 +37,50 @@ from ..util import fs, shell, validate
 SSL_MARKER_NAME = "site.ssl"
 # certbot deploy hook: runs after every successful renewal.
 RENEWAL_HOOK = "/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh"
-_RENEWAL_HOOK_BODY = "#!/bin/sh\n# Managed by JavaHost. Reload nginx after LE renewal.\nnginx -s reload\n"
+_RENEWAL_HOOK_BODY = """#!/bin/sh
+# Managed by JavaHost. Reload nginx after LE renewal and refresh SSL markers.
+nginx -s reload
+python3 - <<'PY'
+try:
+    from core.deploy import ssl as jh_ssl
+    jh_ssl.refresh_all_markers()
+except Exception:
+    pass
+PY
+"""
+
+# aaPanel panel-managed certificate directory (common on Nginx installs).
+AAPANEL_CERT_ROOT = "/www/server/panel/vhost/cert"
 
 
-def _live_fullchain(domain: str) -> str:
-    return "/etc/letsencrypt/live/%s/fullchain.pem" % domain
+def _live_fullchain(domain: str) -> Optional[str]:
+    """Return path to a usable fullchain for <domain>, or None.
+
+    Checks Let's Encrypt live dir first, then aaPanel's panel cert store.
+    """
+    candidates = [
+        "/etc/letsencrypt/live/%s/fullchain.pem" % domain,
+        os.path.join(AAPANEL_CERT_ROOT, domain, "fullchain.pem"),
+        os.path.join(AAPANEL_CERT_ROOT, domain, "cert.pem"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def _cert_exists(domain: str) -> bool:
-    """Whether a live LE cert is present for <domain>. Isolated so tests can
+    """Whether a live cert is present for <domain>. Isolated so tests can
     monkeypatch it instead of touching /etc."""
-    return os.path.isfile(_live_fullchain(domain))
+    return _live_fullchain(domain) is not None
 
 
 def _cert_not_after(domain: str) -> Optional[str]:
     """notAfter (ISO 8601) of the live fullchain, via `openssl x509 -enddate`.
     Best-effort: returns None if the cert/openssl is absent or unparseable.
     Never raises (the cert was just placed; this is only for the cheap marker)."""
-    from ..util import shell
-    import time
     path = _live_fullchain(domain)
-    if not os.path.isfile(path):
+    if not path:
         return None
     try:
         # openssl: fixed argv, no shell; path is the plugin-known live cert file.
@@ -183,85 +206,176 @@ def _install_renewal_hook() -> None:
 
 # --- public API --------------------------------------------------------------
 def _find_wildcard_cert(domain: str) -> Tuple[Optional[str], Optional[str]]:
-    """Check if a wildcard cert covers *domain*. Returns (base_domain, wildcard_name)
-    or (None, None) if none found. Scans /etc/letsencrypt/live/ for base domains
-    whose SAN includes ``*.base`` matching this domain."""
+    """Check if a single-label wildcard cert covers *domain*.
+
+    ``*.example.com`` matches ``app.example.com`` only — never multi-label hosts
+    like ``a.b.example.com``. Returns (base_domain, wildcard_name) or (None, None).
+    """
     parts = domain.split(".")
     if len(parts) < 2:
         return None, None
-    for i in range(0, len(parts) - 1):
-        base = ".".join(parts[i:])
-        cert_dir = os.path.join("/etc/letsencrypt/live", base)
-        pem = os.path.join(cert_dir, "fullchain.pem")
-        if not os.path.isfile(pem):
-            continue
-        try:
-            rc, out, _ = shell.run(
-                ["openssl", "x509", "-text", "-noout", "-in", pem],
-                check=False, timeout=10)
-            if rc != 0 or not out:
-                continue
-            wildcard_pattern = r"DNS:\*\." + re.escape(base)
-            if re.search(wildcard_pattern, out):
-                return base, "*." + base
-        except Exception:
-            continue
+    # Only the immediate parent may carry a covering wildcard (DNS semantics).
+    base = ".".join(parts[1:])
+    cert_dir = os.path.join("/etc/letsencrypt/live", base)
+    pem = os.path.join(cert_dir, "fullchain.pem")
+    if not os.path.isfile(pem):
+        return None, None
+    try:
+        rc, out, _ = shell.run(
+            ["openssl", "x509", "-text", "-noout", "-in", pem],
+            check=False, timeout=10)
+        if rc != 0 or not out:
+            return None, None
+        wildcard_pattern = r"DNS:\*\." + re.escape(base)
+        if re.search(wildcard_pattern, out):
+            return base, "*." + base
+    except Exception:
+        return None, None
     return None, None
+
+
+def refresh_all_markers() -> int:
+    """Re-read not_after for every app with ssl enabled; used by renew hook."""
+    from ..tomcat import instance
+    n = 0
+    try:
+        apps = instance.list_apps()
+    except Exception:
+        return 0
+    for info in apps or []:
+        app = (info or {}).get("app")
+        if not app or not read_ssl(app):
+            continue
+        domain = proxy.read_domain(app)
+        if not domain:
+            continue
+        # Prefer wildcard base cert if that is what covers this host.
+        cert_domain, _ = _find_wildcard_cert(domain)
+        dig = cert_domain if cert_domain and _cert_exists(cert_domain) else domain
+        if not _cert_exists(dig):
+            continue
+        _mark_ssl(app, True, not_after=_cert_not_after(dig))
+        n += 1
+    return n
+
+
+def _activate_plugin_vhost(app: str, domain: str, port: int, *,
+                           ssl_on: bool, cert_domain: Optional[str] = None,
+                           wildcard_name: Optional[str] = None) -> Optional[str]:
+    """Write plugin vhost and reload nginx fail-closed. Returns error or None."""
+    proxy.write_vhost(app, domain, port, ssl=ssl_on,
+                      cert_domain=cert_domain, wildcard_name=wildcard_name)
+    if not proxy.ensure_include():
+        return "failed to ensure JavaHost nginx include (nginx -t rejected?)"
+    if not proxy.reload_nginx():
+        return "nginx -t / reload failed after writing SSL vhost"
+    return None
 
 
 def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dict:
     """Provision SSL for <app> at <domain> -> 127.0.0.1:<port>.
 
-    Ensures the ACME webroot + an HTTP vhost (so the challenge is reachable),
-    then issues a cert: aaPanel native first, certbot fallback. On success the
-    vhost is rewritten ssl=True, nginx reloaded, the renewal hook installed, and
-    the SSL marker set. Returns {"ssl":True,"url":...,"via":...} or, on issuance
-    failure, {"ssl":False,"error":...} (HTTP vhost left intact).
+    When the site is aaPanel-owned (SetSite path), SSL is enabled through aaPanel
+    APIs so we do not write a competing JavaHost nginx vhost. Plugin vhosts are
+    used only for javahost-owned / certbot fallback sites, fail-closed on reload.
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
+    owner = proxy.read_owner(app)
 
-    # 1) make the challenge reachable: webroot + HTTP vhost + reload
+    # --- aaPanel-owned site: let the panel manage the vhost ------------------
+    if owner == "aapanel" and panel_api.api_key_configured():
+        # Prefer reusing an existing covering wildcard without rewriting nginx.
+        cert_domain, wildcard_name = _find_wildcard_cert(domain)
+        if cert_domain and _cert_exists(cert_domain):
+            # Cert on disk is not enough — panel must actually serve HTTPS.
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "wildcard cert found but aaPanel SetSSL/HttpToHttps failed",
+                        "owner": "aapanel", "cert_domain": cert_domain}
+            not_after = _cert_not_after(cert_domain)
+            _mark_ssl(app, True, not_after=not_after)
+            return {"ssl": True, "url": "https://%s/" % domain,
+                    "via": "wildcard", "owner": "aapanel",
+                    "cert_domain": cert_domain, "wildcard": wildcard_name}
+        if panel_api.http_enable_site_ssl(domain) and _cert_exists(domain):
+            not_after = _cert_not_after(domain)
+            _mark_ssl(app, True, not_after=not_after)
+            return {"ssl": True, "url": "https://%s/" % domain,
+                    "via": "aapanel", "owner": "aapanel",
+                    "not_after": not_after} if not_after else {
+                        "ssl": True, "url": "https://%s/" % domain,
+                        "via": "aapanel", "owner": "aapanel"}
+        # Native path did not place a discoverable cert — fall through to
+        # certbot against the *existing* aaPanel HTTP site (no plugin vhost).
+
+    # --- plugin / certbot path (javahost-owned or aaPanel ACME miss) ---------
     fs.ensure_dir(proxy.ACME_WEBROOT)
-    proxy.write_vhost(app, domain, port, ssl=False)
-    proxy.ensure_include()
-    proxy.reload_nginx()
 
-    # 2) check for existing wildcard cert covering this domain (Phase 1)
+    # Only write a competing HTTP vhost when the site is javahost-owned.
+    if owner != "aapanel":
+        err = _activate_plugin_vhost(app, domain, port, ssl_on=False)
+        if err:
+            return {"ssl": False, "error": err}
+
     cert_domain, wildcard_name = _find_wildcard_cert(domain)
     if cert_domain and _cert_exists(cert_domain):
         not_after = _cert_not_after(cert_domain)
-        proxy.write_vhost(app, domain, port, ssl=True,
-                          cert_domain=cert_domain,
-                          wildcard_name=wildcard_name)
-        proxy.reload_nginx()
+        if owner != "aapanel":
+            err = _activate_plugin_vhost(
+                app, domain, port, ssl_on=True,
+                cert_domain=cert_domain, wildcard_name=wildcard_name)
+            if err:
+                return {"ssl": False, "error": err}
+            proxy._store_owner(app, "javahost") if hasattr(proxy, "_store_owner") else None
+        else:
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "wildcard cert found but aaPanel HTTPS enable failed",
+                        "owner": "aapanel"}
         _install_renewal_hook()
         _mark_ssl(app, True, not_after=not_after)
         return {"ssl": True, "url": "https://%s/" % domain,
                 "via": "wildcard", "cert_domain": cert_domain,
                 "wildcard": wildcard_name}
 
-    # 3) issue — native first, certbot fallback. The certbot fallback ALWAYS runs
-    #    when the native path didn't actually place a cert (a native call can
-    #    "succeed" yet leave no live cert on broken ACME stacks). Only a real cert
-    #    on disk counts as success.
     via = None
     certbot_err = None
-    if _aapanel_apply(domain) and _cert_exists(domain):
-        via = "aapanel"
+    if owner != "aapanel":
+        if _aapanel_apply(domain) and _cert_exists(domain):
+            via = "aapanel"
     if not via:
-        ok, certbot_err = _certbot_issue(domain, email)
-        if ok:
-            via = "certbot"
+        # certbot is optional — surface a clear error when the binary is missing
+        if not shell.which("certbot"):
+            certbot_err = ("certbot not installed (optional dependency for "
+                           "SSL when aaPanel ACME is unavailable)")
+        else:
+            ok, certbot_err = _certbot_issue(domain, email)
+            if ok:
+                via = "certbot"
 
     if _cert_exists(domain):
         not_after = _cert_not_after(domain)
-        proxy.write_vhost(app, domain, port, ssl=True)
-        proxy.reload_nginx()
+        if owner != "aapanel":
+            err = _activate_plugin_vhost(app, domain, port, ssl_on=True)
+            if err:
+                return {"ssl": False, "error": err}
+            try:
+                proxy._store_owner(app, "javahost")
+            except Exception:
+                pass
+        elif via == "certbot":
+            # Cert issued into LE live dir but aaPanel site still owns HTTP —
+            # require panel to flip HTTPS before we mark ssl=true.
+            if not panel_api.http_enable_site_ssl(domain):
+                return {"ssl": False, "error":
+                        "certbot issued a cert but aaPanel HTTPS enable failed",
+                        "owner": "aapanel", "via": "certbot"}
         _install_renewal_hook()
         _mark_ssl(app, True, not_after=not_after)
-        res = {"ssl": True, "url": "https://%s/" % domain, "via": via or "unknown"}
+        res = {"ssl": True, "url": "https://%s/" % domain,
+               "via": via or "unknown", "owner": owner}
         if not_after:
             res["not_after"] = not_after
         return res
@@ -273,12 +387,21 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
 
 
 def disable(app: str, domain: str, port: int) -> Dict:
-    """Revert <app> to plain HTTP: rewrite vhost ssl=False, reload, clear the SSL
-    marker. The cert is KEPT on disk so re-enable is instant."""
+    """Revert <app> to plain HTTP. Cert is KEPT on disk so re-enable is instant."""
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
-    proxy.write_vhost(app, domain, port, ssl=False)
-    proxy.reload_nginx()
+    owner = proxy.read_owner(app)
+    if owner == "aapanel":
+        if not panel_api.http_disable_site_ssl(domain):
+            return {"ssl": True, "error":
+                    "aaPanel HTTPS disable failed — SSL marker left on",
+                    "url": "https://%s/" % domain, "owner": "aapanel"}
+        _mark_ssl(app, False)
+        return {"ssl": False, "url": "http://%s/" % domain, "owner": "aapanel"}
+    err = _activate_plugin_vhost(app, domain, port, ssl_on=False)
+    if err:
+        # Still clear the marker only if reload succeeded historically; fail closed.
+        return {"ssl": True, "error": err, "url": "https://%s/" % domain}
     _mark_ssl(app, False)
     return {"ssl": False, "url": "http://%s/" % domain}
