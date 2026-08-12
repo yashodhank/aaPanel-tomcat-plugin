@@ -10,6 +10,7 @@ javax->jakarta namespace mismatch on Tomcat 10/11 (closes F5).
 from __future__ import annotations
 
 import os
+import shutil
 import zipfile
 from typing import List, Optional
 
@@ -57,6 +58,53 @@ def safe_extract(war_path: str, dest_dir: str) -> str:
                     if not chunk:
                         break
                     out.write(chunk)
+    return dest_dir
+
+
+def _rmtree_quiet(path: str) -> None:
+    """Best-effort remove of a staging/backup tree (never raises)."""
+    if not path or not os.path.exists(path):
+        return
+    try:
+        if os.path.islink(path) or os.path.isfile(path):
+            os.unlink(path)
+        else:
+            shutil.rmtree(path)
+    except OSError:
+        pass
+
+
+def replace_root(war_path: str, dest_dir: str) -> str:
+    """Atomically replace an exploded webapp dir with the contents of a WAR.
+
+    Extracts into a sibling staging directory, swaps it into place (renaming any
+    existing dest aside), then deletes the backup. On failure after the swap
+    attempt, restores the backup when possible. Unlike ``safe_extract`` into a
+    live ROOT, this never leaves a half-overlaid mix of old and new files.
+    """
+    if not war_path or not os.path.isfile(war_path):
+        raise FileNotFoundError("WAR not found: %r" % war_path)
+    parent = os.path.dirname(os.path.abspath(dest_dir)) or "."
+    fs.ensure_dir(parent)
+    staging = os.path.join(parent, ".ROOT.staging-%d" % os.getpid())
+    backup = os.path.join(parent, ".ROOT.bak-%d" % os.getpid())
+    _rmtree_quiet(staging)
+    _rmtree_quiet(backup)
+    try:
+        safe_extract(war_path, staging)
+        if os.path.lexists(dest_dir):
+            os.rename(dest_dir, backup)
+        os.rename(staging, dest_dir)
+    except Exception:
+        # Roll back if we moved the live tree aside but failed to promote staging.
+        if not os.path.lexists(dest_dir) and os.path.lexists(backup):
+            try:
+                os.rename(backup, dest_dir)
+            except OSError:
+                pass
+        _rmtree_quiet(staging)
+        raise
+    _rmtree_quiet(backup)
     return dest_dir
 
 
