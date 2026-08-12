@@ -86,12 +86,7 @@ class javahost_main(object):
                 # Public-domain suffix (config "site_suffix", "" when unset) so the
                 # UI can offer "<app>.<suffix>" defaults; empty => UI must prompt.
                 "site_suffix": config.site_suffix(),
-<<<<<<< HEAD
-=======
-                "aapanel_api_key_set": bool(config.aapanel_api_key()),
-                "aapanel_port": config.aapanel_port(),
                 "plugin_version": config.plugin_version(),
->>>>>>> be8c7cc (feat(ui): show plugin version in header instead of license pill)
             })
         except Exception as e:
             return panel.err(str(e))
