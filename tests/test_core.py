@@ -1503,6 +1503,48 @@ def test_setsitessl_disable_ok_is_panel_ok(monkeypatch):
     assert res.get("msg", {}).get("ssl") is False
 
 
+def test_setsitessl_disable_failure_is_panel_err(monkeypatch):
+    """ssl.disable leaving ssl=True / error must be panel.err, not panel.ok."""
+    import javahost_main
+
+    monkeypatch.setattr(javahost_main.proxy, "read_domain",
+                        lambda app: "app.example.com")
+    monkeypatch.setattr(javahost_main.instance, "detail",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(javahost_main.instance, "health",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(
+        javahost_main.ssl, "disable",
+        lambda app, domain, port: {
+            "ssl": True,
+            "error": "aaPanel HTTPS disable failed — SSL marker left on",
+            "url": "https://app.example.com/",
+        },
+    )
+
+    class G(object):
+        app = "demo"
+        enable = "0"
+        domain = None
+        email = None
+
+    res = javahost_main.javahost_main().SetSiteSSL(G())
+    assert res.get("status") is False
+    assert "disable failed" in (res.get("msg") or "").lower()
+
+
+def test_set_site_fails_closed_when_not_nginx(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "demo" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "apache")
+    res = proxy.set_site("demo", "demo.example.com", 8080)
+    assert res["ok"] is False
+    assert "nginx" in res["error"].lower()
+    assert "apache" in res["error"].lower()
+
+
 # ---- sitestatus.probe shape (openssl + urllib monkeypatched) ----------------
 def test_sitestatus_probe_full_shape(monkeypatch, tmp_path):
     from core.tomcat import instance as inst
