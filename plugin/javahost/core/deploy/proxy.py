@@ -17,6 +17,7 @@ import re
 from typing import Dict, Optional
 
 from .. import config
+from ..compat import aapanel as panel_api
 from ..util import shell, fs, validate
 
 VHOST_DIR = "/www/server/javahost/vhost/nginx"
@@ -251,6 +252,7 @@ def _try_aapanel_class_api(domain: str, port: int) -> Optional[Dict]:
         g["subfilter"] = "[]"
         g["advanced"] = 0
         g["cachetime"] = 0
+        g["nocheck"] = "1"
 
         # CreateProxy is the dedicated aaPanel method for reverse-proxy sites
         res = site_obj.CreateProxy(g)
@@ -291,6 +293,7 @@ def _try_legacy_panelSite_import(domain: str, port: int) -> Optional[Dict]:
         g["subfilter"] = "[]"
         g["advanced"] = 0
         g["cachetime"] = 0
+        g["nocheck"] = "1"
 
         if hasattr(site, "CreateProxy"):
             res = site.CreateProxy(g)
@@ -327,140 +330,23 @@ def _try_legacy_panelSite_import(domain: str, port: int) -> Optional[Dict]:
 
 
 def _try_aapanel_http_api(domain: str, port: int) -> Optional[Dict]:
-    """Path 3: aaPanel's loopback HTTP API for site creation.
+    """Path 3: aaPanel loopback HTTP API — AddSite then CreateProxy with upstream.
 
-    Calls POST /site?action=AddSite with the same auth scheme already
-    proven in ssl.py (_aapanel_apply). Returns a success dict or None
-    when api_sk is unset or the call fails (caller falls through).
+    AddSite alone does not wire proxysite on typical builds; CreateProxy must
+    follow. Auth + HTTP live in compat.aapanel (sole panel-coupling module).
     """
-    api_sk = config.aapanel_api_key()
-    if not api_sk:
+    if not panel_api.api_key_configured():
         return None
     try:
-        import hashlib
-        import json
-        import time
-        import urllib.parse
-        import urllib.request
-        import ssl as _sslmod
-
-        panel_port = config.aapanel_port()
-        request_time = int(time.time())
-        sk_md5 = hashlib.md5(api_sk.encode()).hexdigest()  # nosec B324
-        token = hashlib.md5(
-            (str(request_time) + sk_md5).encode()
-        ).hexdigest()  # nosec B324
-
-        query = urllib.parse.urlencode({
-            "action": "AddSite",
-            "request_time": str(request_time),
-            "request_token": token,
-        })
-        url = "https://127.0.0.1:%d/site?%s" % (panel_port, query)
-
-        body = urllib.parse.urlencode({
-            "webname": json.dumps({"domain": domain, "domainlist": [], "count": 0}),
-            "path": "/www/wwwroot/%s" % domain,
-            "type": "proxy",
-            "type_id": "0",
-            "version": "00",
-            "port": "80",
-            "ps": "JavaHost: %s -> 127.0.0.1:%d" % (domain, port),
-            "ftp": "false",
-            "sql": "false",
-            "set_ssl": "0",
-        }).encode()
-
-        ctx = _sslmod.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _sslmod.CERT_NONE
-        req = urllib.request.Request(url, data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:  # noqa: S310
-            raw = resp.read().decode("utf-8", "replace")
-        data = json.loads(raw)
-        if isinstance(data, dict) and (data.get("status") or data.get("siteStatus")):
-            return {"ok": True, "path": "aapanel-http",
-                    "detail": "via HTTP AddSite"}
-        return None
+        return panel_api.http_add_site_with_proxy(domain, port)
     except Exception:
         return None
 
 
 def _aapanel_http_remove_site(domain: str) -> bool:
-    """Remove a site via aaPanel's HTTP API.
-
-    Queries the site ID from GET /data?action=getData&table=sites,
-    then calls POST /site?action=DeleteSite. Returns True if deleted.
-    """
-    api_sk = config.aapanel_api_key()
-    if not api_sk:
-        return False
+    """Remove a site via aaPanel's HTTP API (compat helper)."""
     try:
-        import hashlib
-        import json
-        import time
-        import urllib.parse
-        import urllib.request
-        import ssl as _sslmod
-
-        panel_port = config.aapanel_port()
-        request_time = int(time.time())
-        sk_md5 = hashlib.md5(api_sk.encode()).hexdigest()  # nosec B324
-        token = hashlib.md5(
-            (str(request_time) + sk_md5).encode()
-        ).hexdigest()  # nosec B324
-
-        ctx = _sslmod.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _sslmod.CERT_NONE
-
-        # Step 1: look up the site ID
-        qs = urllib.parse.urlencode({
-            "action": "getData",
-            "table": "sites",
-            "search": domain,
-            "request_time": str(request_time),
-            "request_token": token,
-        })
-        url = "https://127.0.0.1:%d/data?%s" % (panel_port, qs)
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:  # noqa: S310
-            raw = resp.read().decode("utf-8", "replace")
-        result = json.loads(raw)
-        site_id = None
-        if isinstance(result, dict):
-            data_list = result.get("data") or result.get("msg") or []
-            if isinstance(data_list, list):
-                for row in data_list:
-                    if isinstance(row, dict) and row.get("name") == domain:
-                        site_id = row.get("id")
-                        break
-        if not site_id:
-            return False
-
-        # Step 2: delete the site
-        request_time2 = int(time.time())
-        token2 = hashlib.md5(
-            (str(request_time2) + sk_md5).encode()
-        ).hexdigest()  # nosec B324
-
-        qs2 = urllib.parse.urlencode({
-            "action": "DeleteSite",
-            "request_time": str(request_time2),
-            "request_token": token2,
-        })
-        url2 = "https://127.0.0.1:%d/site?%s" % (panel_port, qs2)
-        body = urllib.parse.urlencode({
-            "id": str(site_id),
-            "webname": domain,
-        }).encode()
-        req2 = urllib.request.Request(url2, data=body, method="POST")
-        with urllib.request.urlopen(req2, timeout=30, context=ctx) as resp2:  # noqa: S310
-            raw2 = resp2.read().decode("utf-8", "replace")
-        data2 = json.loads(raw2)
-        if isinstance(data2, dict) and data2.get("status"):
-            return True
-        return False
+        return bool(panel_api.http_remove_site(domain))
     except Exception:
         return False
 
@@ -529,8 +415,8 @@ def aapanel_remove_site(domain: str) -> bool:
             panel_class = AAPANEL_PANEL_CLASS
             if panel_class not in sys.path:
                 sys.path.insert(0, panel_class)
-            from site import site as panelSite  # noqa: F401
-            site_obj = panelSite()
+            from panelSite import panelSite as _SiteClass  # noqa: F401
+            site_obj = _SiteClass()
 
             class _G(object):
                 pass

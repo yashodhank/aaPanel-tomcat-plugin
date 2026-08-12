@@ -747,6 +747,13 @@
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
+          <div><h3>aaPanel API</h3><p>Interface API key used for reverse-proxy site registration and native ACME</p></div>
+          <button class="jh-btn ghost sm" id="jh-panelapi-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-panelapi-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
+        <div class="jh-card-h">
           <div><h3>Log management</h3><p>Automatic rotation keeps logs from filling the disk; purge reclaims old rotations</p></div>
           <button class="jh-btn ghost sm" id="jh-logcfg-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
@@ -1244,6 +1251,64 @@
       renderDangerZone(p);
     });
   }
+  // --- Settings: aaPanel API key / panel port --------------------------------
+  function refreshPanelApi(btn){
+    var body = $('jh-panelapi-body'); if(!body) return;
+    busy(btn, true);
+    call('GetPanelApi', {}, function(r){
+      busy(btn, false);
+      var b = $('jh-panelapi-body'); if(!b) return;
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object'){
+        b.innerHTML = '<div class="jh-alert info">'+ic('info')+
+          '<div>Panel API settings are unavailable on this server build.</div></div>';
+        return;
+      }
+      renderPanelApi(p);
+    });
+  }
+  function renderPanelApi(p){
+    var body = $('jh-panelapi-body'); if(!body) return;
+    var set = !!(p && p.aapanel_api_key_set);
+    var port = (p && p.aapanel_port != null) ? p.aapanel_port : '';
+    body.innerHTML =
+      '<div class="jh-rows">'+
+        '<div class="jh-kv"><span>API key status</span>'+
+          (set ? pillSpan('ok', 'configured', 'Interface API key is stored in plugin config')
+               : pillSpan('warn', 'not set', 'SetSite HTTP fallback and native ACME need api_sk'))+'</div>'+
+        '<div class="jh-field wide"><label for="panelapi-key">Interface API key (api_sk)</label>'+
+          '<input id="panelapi-key" type="password" autocomplete="off" placeholder="'+(set?'•••••••• (leave blank to keep)':'Paste from aaPanel → Settings → API')+'"></div>'+
+        '<div class="jh-field" style="max-width:12rem"><label for="panelapi-port">Panel port</label>'+
+          '<input id="panelapi-port" type="number" min="1" max="65535" value="'+esc(String(port))+'"></div>'+
+        '<div class="jh-hint">Find <code>api_sk</code> under aaPanel → Settings → API Interface. Leave the key blank when saving to keep the current value; clear the key by saving an empty value after checking “Clear key”.</div>'+
+        '<label class="jh-kv" style="cursor:pointer"><span>Clear stored API key</span>'+
+          '<input type="checkbox" id="panelapi-clear" style="width:auto"></label>'+
+        '<div class="jh-spread" style="margin-top:var(--s3);gap:var(--s2)">'+
+          '<button class="jh-btn accent sm" id="jh-panelapi-save" type="button">'+ic('check')+'Save</button>'+
+        '</div>'+
+      '</div>';
+  }
+  function savePanelApi(btn){
+    busy(btn, true);
+    var data = {};
+    var clear = $('panelapi-clear') && $('panelapi-clear').checked;
+    var keyEl = $('panelapi-key');
+    var portEl = $('panelapi-port');
+    if(clear){ data.api_key = ''; }
+    else if(keyEl && String(keyEl.value || '').trim()){ data.api_key = String(keyEl.value).trim(); }
+    if(portEl){ data.port = String(portEl.value || '').trim(); }
+    if(data.api_key === undefined && data.port === undefined){
+      busy(btn, false); toast('Nothing to save', 'err'); return;
+    }
+    call('SetPanelApi', data, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'save failed', 'err', 'aaPanel API'); return; }
+      toast('aaPanel API settings saved', 'ok');
+      renderPanelApi(p);
+    });
+  }
+
   // --- Settings: Log management (rotation + purge) ---------------------------
   var LOGCFG = null;
   function fmtKB(n){
@@ -3883,7 +3948,7 @@
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
     if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
-    if(name === 'settings'){ refreshLogConfig(); refreshDangerZone(); }
+    if(name === 'settings'){ refreshPanelApi(); refreshLogConfig(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -4200,6 +4265,8 @@
     if(ds.schedDel){ removeSchedule(ds.schedDel, b); return; }
     // settings / danger zone
     if(b.id === 'jh-run-wizard'){ openWizard(); return; }
+    if(b.id === 'jh-panelapi-refresh'){ refreshPanelApi(b); return; }
+    if(b.id === 'jh-panelapi-save'){ savePanelApi(b); return; }
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }
     if(b.id === 'jh-logcfg-save'){ saveLogConfig(b); return; }
     if(b.id === 'jh-logcfg-purge'){ purgeLogsNow(b); return; }
