@@ -30,7 +30,9 @@ DB_DRIVER        # driver class
 DB_DRIVER_MAVEN  # coordinates to drop into your build / CATALINA_HOME/lib
 ```
 
-- **Never** hardcode credentials in the WAR or source.
+- **Never** hardcode credentials in the WAR or source. See
+  [WAR packaging and Spring Boot deploy](war-packaging-and-deploy.md) for how to
+  keep JDBC/Redis settings out of the artifact.
 - Credentials never appear in process listings, the connection URL, or logs.
 
 ### Example URLs produced

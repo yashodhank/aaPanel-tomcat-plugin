@@ -107,6 +107,9 @@ job flow, SSL decision, and the status-semantics model).
 
 ## Documentation
 
+- [WAR packaging & Spring Boot deploy](docs/war-packaging-and-deploy.md) —
+  how to build Tomcat/executable WARs for JavaHost, port and readiness rules,
+  operator checklists, and honest verification (developer + deploy guide).
 - [User Guide](docs/user-guide.md) — task-oriented walkthrough of the UI
   (install, runtimes, apps, WAR/JAR deploy, databases, proxy, per-site HTTPS,
   Activity, Settings/Danger zone, hardening).

@@ -261,6 +261,10 @@ Apache `javax`→`jakarta` migration tool first, then deploys the converted
 artifact. A plain deploy onto a `jakarta` line still surfaces a **namespace
 warning** if the WAR looks like `javax.*`.
 
+For Spring Boot WARs (executable or `ServletInitializer`), port rules, readiness
+URLs, and packaging checklists, see
+[WAR packaging and Spring Boot deploy](war-packaging-and-deploy.md).
+
 ### Lifecycle, repair, delete
 
 Each row has an inline **Start / Stop / Restart** control and a **More actions**

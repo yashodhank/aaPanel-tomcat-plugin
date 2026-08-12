@@ -979,7 +979,8 @@ class javahost_main(object):
     # docs bundled with the plugin, served on-the-fly to the Help viewer
     _DOCS_DIR = os.path.join(_HERE, "docs")
     _ALLOWED_DOCS = ("user-guide", "system-hardening", "single-vs-multi-mode",
-                     "databases-java-apps", "backup-restore", "troubleshooting")
+                     "databases-java-apps", "backup-restore", "troubleshooting",
+                     "war-packaging-and-deploy")
 
     def GetDoc(self, get):
         """Return a bundled doc's markdown for in-UI rendering (no 404 file links)."""
