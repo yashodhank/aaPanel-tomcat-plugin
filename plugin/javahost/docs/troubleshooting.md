@@ -186,6 +186,26 @@ real domain must exist (stored site domain, explicit `domain`, or the
 disk**, so re-enabling is instant. The drawer's **Site & SSL** block
 (`GetSiteStatus`) reports cert validity/expiry and live reachability.
 
+## Spring Boot / WAR packaging symptoms
+
+For how to **package** Boot WARs (Tomcat vs executable, `server.port`, readiness
+URLs, Jakarta matrix), see
+[WAR packaging and Spring Boot deploy](war-packaging-and-deploy.md).
+
+Common operator symptoms:
+
+- **`/` returns 404 after a successful deploy** — often normal for API-only
+  apps. Curl swagger, OpenAPI, or `/actuator/health` instead.
+- **Marked port connection refused, service `active`** — executable WAR may be
+  listening on a packaged `server.port` instead of `SERVER_PORT`. Prefer Tomcat
+  WAR mode or fix packaging; confirm with `Tomcat started on port …` in logs.
+- **Namespace warning missing on a Boot 3 WAR** — detector can return no
+  namespace when there is no `web.xml`; still use Tomcat 10.1/11 + Java 17.
+- **App expects `/app/...` paths** — Docker assumptions; create real host paths
+  or reconfigure. JavaHost does not mount container volumes.
+- **Large browser WAR upload fails** — stage via the panel file manager / server
+  path, then Deploy WAR.
+
 ## Where logs live
 
 - **Per-app logs:** `/www/server/javahost/instances/<app>/logs/`. JavaHost reads
