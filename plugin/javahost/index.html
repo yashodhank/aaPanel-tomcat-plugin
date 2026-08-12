@@ -1212,6 +1212,67 @@
     });
   }
 
+  // Tomcat uninstall gate — mirrors JDK uninstall (GetTomcatUsage → confirm / force).
+  function doUninstallTomcat(version, force, btn){
+    var label = 'Tomcat '+version+' uninstall';
+    var data = {version: version};
+    if(force) data.force = 1;
+    busy(btn, true);
+    startJob('UninstallTomcat', data, label, btn);
+  }
+  function uninstallTomcat(version, btn){
+    call('GetTomcatUsage', {version: version}, function(r){
+      var p = payload(r);
+      var inUse = (!failed(r) && p && Array.isArray(p.in_use_by)) ? p.in_use_by : [];
+      if(inUse.length){
+        confirmTomcatInUse(version, inUse, btn);
+      } else {
+        confirmUninstallTomcat(version, btn);
+      }
+    });
+  }
+  function confirmUninstallTomcat(version, btn){
+    openModal({
+      title:'Uninstall Tomcat '+version, sub:'Removes this shared CATALINA_HOME',
+      returnFocus: btn,
+      body:
+        '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div>This permanently removes the Tomcat '+esc(version)+' shared home managed by JavaHost. '+
+          'Apps configured on this major will fail to start until repointed.</div></div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Uninstall', 'danger', function(b){
+          closeModal();
+          doUninstallTomcat(version, false, btn);
+        }, 'trash')
+      ]
+    });
+  }
+  function confirmTomcatInUse(version, apps, btn){
+    var n = apps.length;
+    var noun = n === 1 ? 'app' : 'apps';
+    var chips = apps.map(function(a){
+      return '<span class="jh-chip" role="listitem" title="'+esc(a)+'">'+ic('box')+esc(a)+'</span>';
+    }).join('');
+    openModal({
+      title:'Tomcat '+version+' is in use', sub:'Dependent apps must be stopped or migrated first',
+      returnFocus: btn,
+      body:
+        '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div><b>Tomcat '+esc(version)+' is used by '+n+' '+noun+'.</b> '+
+          'Stop or migrate them before removing this shared home — forcing stops them and leaves them without a Tomcat '+esc(version)+' runtime.</div></div>'+
+        '<div class="jh-deplist" tabindex="0" role="list" '+
+          'aria-label="Apps using Tomcat '+esc(version)+'">'+chips+'</div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Force uninstall anyway', 'danger ghost', function(b){
+          closeModal();
+          doUninstallTomcat(version, true, btn);
+        }, 'trash')
+      ]
+    });
+  }
+
   // =====================================================================
   // DANGER ZONE (Settings section) — preview + scoped wipe
   //   On entering Settings we call WipePreview{} -> {apps,jdks,tomcats,sites,
@@ -4297,8 +4358,7 @@
     if(ds.tcUpdate){ busy(b, true);
       startJob('UpdateTomcat', {version:ds.tcUpdate}, 'Tomcat '+ds.tcUpdate+' update', b); return; }
     if(ds.tcUninstall){
-      if(!confirm('Uninstall Tomcat '+ds.tcUninstall+'? Apps on this major may break.')) return;
-      busy(b, true); startJob('UninstallTomcat', {version:ds.tcUninstall}, 'Tomcat '+ds.tcUninstall+' uninstall', b); return;
+      uninstallTomcat(ds.tcUninstall, b); return;
     }
 
     // settings / remote storage
