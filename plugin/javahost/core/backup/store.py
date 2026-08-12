@@ -5,10 +5,12 @@ Local backup store + restore for JavaHost apps.
 An archive captures everything needed to recreate an app EXCEPT regenerable /
 sensitive externals:
   IN  : manifest.json, base/conf, base/webapps, base/bin (setenv.sh, app.env,
-        site.domain, site.ssl), base/app.jar (jar apps), nginx/<app>.conf
+        site.domain, site.ssl), base/app.jar (jar apps)
   OUT : logs/ work/ temp/, the systemd/init.d unit (re-rendered on restore — we
-        never unpack an executable unit), and ALL of /etc/letsencrypt (private
-        keys are never bundled; SSL is RE-ISSUED on restore, best-effort).
+        never unpack an executable unit), plugin-owned nginx/<app>.conf (unused
+        on restore — sites are republished via proxy.set_site / aaPanel), and
+        ALL of /etc/letsencrypt (private keys are never bundled; SSL is
+        RE-ISSUED on restore, best-effort).
 
 Restore has two modes:
   * overwrite (as_name=None): stop+delete the existing app, restore in place with
@@ -164,9 +166,8 @@ def backup_app(app: str, remotes=None) -> Dict:
         jar = os.path.join(base, "app.jar")
         if os.path.isfile(jar):
             members.append((jar, "base/app.jar"))
-        vhost = proxy.vhost_path(app)
-        if os.path.isfile(vhost):
-            members.append((vhost, "nginx/%s.conf" % app))
+        # Do not pack plugin-owned nginx/<app>.conf — restore always republishes
+        # via proxy.set_site (aaPanel), so a stale vhost snapshot is dead weight.
 
         name = "backup-%s-%s.tar.gz" % (app, _now_stamp())
         dest = os.path.join(root, name)

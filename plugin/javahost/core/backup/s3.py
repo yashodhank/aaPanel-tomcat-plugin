@@ -183,24 +183,58 @@ class S3Client:
 
     def list_objects(self, prefix: Optional[str] = None) -> List[Dict]:
         """ListObjectsV2 under the client prefix (optionally narrowed). Returns
-        [{key, name, size}] (name = key with the client prefix stripped)."""
+        [{key, name, size}] (name = key with the client prefix stripped).
+
+        Follows ContinuationToken / IsTruncated until the listing is complete
+        (S3 returns at most 1000 keys per page by default).
+        """
         q = {"list-type": "2"}
         eff_prefix = self.prefix
         if prefix:
             eff_prefix = ("%s/%s" % (self.prefix, prefix)).lstrip("/") if self.prefix else prefix
         if eff_prefix:
             q["prefix"] = eff_prefix
-        headers = self._sign("GET", "", q, _EMPTY_SHA)
-        conn = self._conn()
+        out: List[Dict] = []
+        token = None
+        while True:
+            page_q = dict(q)
+            if token:
+                page_q["continuation-token"] = token
+            headers = self._sign("GET", "", page_q, _EMPTY_SHA)
+            conn = self._conn()
+            try:
+                conn.request("GET", self._path("", page_q), headers=headers)
+                resp = conn.getresponse()
+                data = resp.read()
+                if resp.status != 200:
+                    raise S3Error("LIST failed: HTTP %d %s" % (
+                        resp.status, data[:300].decode("utf-8", "replace")))
+            finally:
+                conn.close()
+            out.extend(self._parse_list(data))
+            token = self._parse_continuation(data)
+            if not token:
+                break
+        return out
+
+    def _parse_continuation(self, data: bytes) -> Optional[str]:
+        """Return NextContinuationToken when IsTruncated is true, else None."""
+        head = data[:8192].lower()
+        if b"<!doctype" in head or b"<!entity" in head:
+            return None
         try:
-            conn.request("GET", self._path("", q), headers=headers)
-            resp = conn.getresponse()
-            data = resp.read()
-            if resp.status != 200:
-                raise S3Error("LIST failed: HTTP %d %s" % (resp.status, data[:300].decode("utf-8", "replace")))
-        finally:
-            conn.close()
-        return self._parse_list(data)
+            root = ET.fromstring(data)  # nosec B314 — DTD/entities rejected above
+        except ET.ParseError:
+            return None
+        truncated = False
+        token = None
+        for el in root.iter():
+            tag = el.tag.rsplit("}", 1)[-1] if "}" in el.tag else el.tag
+            if tag == "IsTruncated" and (el.text or "").strip().lower() == "true":
+                truncated = True
+            elif tag == "NextContinuationToken" and el.text:
+                token = el.text.strip()
+        return token if truncated else None
 
     def _parse_list(self, data: bytes) -> List[Dict]:
         out: List[Dict] = []

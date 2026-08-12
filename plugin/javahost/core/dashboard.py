@@ -19,13 +19,12 @@ import os
 from typing import Dict, List, Optional
 
 from . import jobs, maintenance
+from .backup import store as backupstore
 from .deploy import ssl
 from .tomcat import instance
 
 # Flag certs with fewer than this many days left.
 EXPIRY_WARN_DAYS = 30
-# Backups dir (Phase-2 store writes here; sized defensively even before it exists).
-BACKUPS_ROOT = os.path.join(maintenance.DATA_ROOT, "backups")
 
 
 def _days_left(iso: str) -> Optional[int]:
@@ -126,7 +125,7 @@ def summary() -> Dict:
 
     try:
         inst_bytes = maintenance._dir_size(instance.INSTANCE_ROOT)
-        bak_bytes = maintenance._dir_size(BACKUPS_ROOT)
+        bak_bytes = maintenance._dir_size(backupstore._backups_root())
         disk = {
             "instances_bytes": inst_bytes,
             "instances_mb": round(inst_bytes / (1 << 20), 1),

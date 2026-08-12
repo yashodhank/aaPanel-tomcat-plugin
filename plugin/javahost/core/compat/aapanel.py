@@ -598,6 +598,15 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
     nginx_err = require_nginx()
     if nginx_err:
         return False, nginx_err
+
+    # Snippets reference $connection_upgrade — install the map once if missing.
+    # Note: PR2 (webserver fail-closed) may also touch this function; keep additive.
+    try:
+        from ..deploy import proxy as proxymod
+        proxymod.ensure_ws_map()
+    except Exception:
+        pass
+
     backend = "http://127.0.0.1:%d" % int(port)
     site_conf = _AAPANEL_SITE_CONF % domain
     proxy_dir = _AAPANEL_PROXY_DIR % domain
