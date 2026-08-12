@@ -263,11 +263,8 @@ def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
                                       "detail": "via panelSite.CreateProxy"})
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
     monkeypatch.setattr(proxy, "_store_owner", lambda app, owner: None)
-<<<<<<< HEAD
-=======
     monkeypatch.setattr(proxy, "read_domain", lambda app: None)
     monkeypatch.setattr(proxy, "remove_vhost", lambda app: None)
->>>>>>> 3914504 (test(proxy): mock owner/domain helpers in set_site aapanel preference test)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
     res = proxy.set_site("demo", "demo.example.com", 8081)
