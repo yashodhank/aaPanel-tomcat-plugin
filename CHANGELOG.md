@@ -3,6 +3,37 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.29.0] — 2026-08-12
+
+### Added
+- **WAR packaging & deploy guide** (`docs/war-packaging-and-deploy.md` + Help tab):
+  Spring Boot Tomcat vs executable mode, port ownership, Jakarta matrix, operator
+  checklists, and honest verification (#16).
+- **Plugin version in header** — UI pill shows `vX.Y.Z` from `GetStatus.plugin_version`
+  (#15).
+- **aaPanel API settings** — Settings UI + `GetPanelApi` / `SetPanelApi` for interface
+  API key and panel port (#12).
+- **CreateProxy hardening** — nginx `proxy/` dir bootstrap, retries, `proxyfile.json`
+  registration, conf snapshot/restore on attach failure (#12, #18).
+
+### Fixed
+- **Honest API envelopes** — `SetSite` / `SetSiteSSL` return `panel.err` on business
+  failure; UI treats nested `ok` / `ssl`+`error` (#10).
+- **WAR deploy activates** — atomic `replace_root` + Tomcat restart on
+  Deploy/Upload/Migrate; Tomcat-only checks; MigrateWar `/tmp` cleanup (#11).
+- **Real reverse-proxy upstream** — HTTP `AddSite` followed by `CreateProxy` with
+  `http://127.0.0.1:<port>`; panel HTTP centralized in `compat/aapanel.py` (#12).
+- **aaPanel-owned SSL** — no competing JavaHost vhost when site is panel-owned;
+  fail-closed nginx reload; wildcard without sibling `server_name` hijack; http2
+  compatibility; WebSocket upgrade headers (#17).
+- **Site lifecycle / orphans** — create new aaPanel site before removing previous
+  domain; keep instance when `RemoveSite` fails; restore via `set_site`; Change/Remove
+  domain UI (#18, superseded closed #14).
+
+### Changed
+- `SetSite` marks aaPanel ownership and strips leftover plugin vhosts when
+  registration succeeds via the panel (#17).
+
 ## [0.28.1] — 2026-06-10
 
 ### Fixed
