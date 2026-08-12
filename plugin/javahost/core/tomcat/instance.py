@@ -381,6 +381,9 @@ def create(app: str, major: str, port: int, memory_mb: int,
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), major_java)
     service.write_setenv(base, app, java_home, home, opts, [])
     _render_conf(base, app, port, catalina_home=home)
+    from . import hardening
+    hardening.assert_no_ajp(os.path.join(base, "conf", "server.xml"))
+    hardening.secure_perms(base, user=user)
     # The service runs as `user` (default www); give it ownership of CATALINA_BASE
     # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
     from ..util import shell
@@ -689,6 +692,12 @@ def delete(app: str, *, purge: bool = True) -> Dict:
         site_cleanup = proxy.remove_site(app)
     except Exception as e:
         site_cleanup = {"removed": False, "error": str(e)}
+    # Drop any backup schedule/cron entry for this app (partial wipe + DeleteApp).
+    try:
+        from ..backup import schedule as backupschedule
+        backupschedule.remove_schedule(app)
+    except Exception:
+        pass
     service.remove_unit(app)
     base = base_path(app)
     removed = False
@@ -715,18 +724,70 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     return out
 
 
+def _read_jar_java_opts(app: str, base: str) -> str:
+    """Best-effort recover JAVA_OPTS from an existing JAR unit (systemd/init.d)."""
+    unit = os.path.join(service.SYSTEMD_DIR, "javahost-%s.service" % app)
+    if os.path.isfile(unit):
+        try:
+            with open(unit, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            m = re.search(r"ExecStart=\S+/java\s+(.*?)\s+-jar\s+", text)
+            if m:
+                return m.group(1).strip()
+        except OSError:
+            pass
+    initd = os.path.join(service.INITD_DIR, "javahost-%s" % app)
+    if os.path.isfile(initd):
+        try:
+            with open(initd, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = re.match(r'\s*JAVA_OPTS="(.*)"\s*$', line)
+                    if m:
+                        return m.group(1).strip()
+        except OSError:
+            pass
+    return ""
+
+
 def repair(app: str) -> Dict:
-    """Re-render the service unit from the existing setenv and restart. Useful
-    after an OS upgrade or a stale/half-broken unit."""
+    """Re-render the service unit from existing config and restart.
+
+    Tomcat apps: re-read setenv, re-assert AJP-off + conf perms, reinstall unit.
+    JAR apps: re-read app.env (JAVA_HOME/SERVER_PORT) + recover java_opts from
+    the existing unit when present, then reinstall the jar unit.
+    """
     app = validate.identifier(app, "app")
     base = base_path(app)
     if not exists(app):
         raise RuntimeError("no such app: %s" % app)
+    itype = _instance_type(base)
+    if itype == "jar":
+        env = _read_app_env(base)
+        java_home = env.get("JAVA_HOME", "")
+        port = _read_port(base)
+        if not java_home:
+            raise RuntimeError("cannot repair JAR %s: app.env missing JAVA_HOME" % app)
+        if not port:
+            raise RuntimeError("cannot repair JAR %s: no SERVER_PORT / port marker" % app)
+        java_opts = _read_jar_java_opts(app, base)
+        service.install_jar_unit(app, java_home, base, int(port),
+                                 java_opts=java_opts, user="www")
+        if service.status(app) == "active":
+            service.action(app, "restart")
+        else:
+            service.enable_start(app)
+        return {"app": app, "type": "jar", "status": service.status(app),
+                "repaired": True}
+
     env = _read_setenv(base)
     java_home = env.get("JAVA_HOME", "")
     home = env.get("CATALINA_HOME", "")
     if not (java_home and home):
         raise RuntimeError("cannot repair %s: setenv missing JAVA_HOME/CATALINA_HOME" % app)
+    from . import hardening
+    sx = os.path.join(base, "conf", "server.xml")
+    hardening.assert_no_ajp(sx)
+    hardening.secure_perms(base, user="www")
     # clean stale pid, reinstall unit, restart
     pid = os.path.join(base, "temp", "tomcat.pid")
     if os.path.exists(pid):
@@ -736,7 +797,7 @@ def repair(app: str) -> Dict:
             pass
     service.install_unit(app, java_home, home, base)
     service.action(app, "restart") if service.status(app) == "active" else service.enable_start(app)
-    return {"app": app, "status": service.status(app), "repaired": True}
+    return {"app": app, "type": itype, "status": service.status(app), "repaired": True}
 
 
 def detail(app: str) -> Dict:
@@ -759,14 +820,22 @@ def detail(app: str) -> Dict:
 def tail_log(app: str, lines: int = 200) -> str:
     app = validate.identifier(app, "app")
     base = base_path(app)
+    n = max(1, min(int(lines), 2000))
+    log_dir = os.path.join(base, "logs")
+    # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
+    if _instance_type(base) == "jar":
+        app_out = os.path.join(log_dir, "app.out")
+        if os.path.isfile(app_out):
+            return _tail(app_out, n)
+        return ""
     candidates = ["catalina.out"] + [
-        f for f in (os.listdir(os.path.join(base, "logs")) if os.path.isdir(os.path.join(base, "logs")) else [])
+        f for f in (os.listdir(log_dir) if os.path.isdir(log_dir) else [])
         if f.startswith("catalina") and f.endswith(".log")
     ]
     for name in candidates:
-        path = os.path.join(base, "logs", name)
+        path = os.path.join(log_dir, name)
         if os.path.isfile(path):
-            return _tail(path, max(1, min(int(lines), 2000)))
+            return _tail(path, n)
     return ""
 
 
