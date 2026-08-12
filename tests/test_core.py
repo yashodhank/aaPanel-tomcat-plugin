@@ -1133,22 +1133,20 @@ def test_aapanel_remove_site_http_succeeds(monkeypatch):
 
 
 def test_aapanel_remove_site_falls_to_class_api(monkeypatch):
-    """HTTP fails, class API succeeds."""
+    """HTTP fails, class API succeeds via panelSite.DeleteSite."""
     import sys
+    import types
     monkeypatch.setattr(proxy, "_aapanel_http_remove_site", lambda d: False)
-    monkeypatch.setattr(sys, "path", sys.path + ["/fake/panel/class"])
+    monkeypatch.setattr(proxy, "AAPANEL_PANEL_CLASS", "/fake/panel/class")
+    monkeypatch.setattr(sys, "path", list(sys.path) + ["/fake/panel/class"])
 
     class _FakeSiteObj:
         def DeleteSite(self, g):
             return {"status": True, "msg": "ok"}
 
-    class _FakeSiteMod:
-        @staticmethod
-        def site():
-            return _FakeSiteObj()
-
-    monkeypatch.setitem(sys.modules, "site", _FakeSiteMod())
-    monkeypatch.setattr(proxy, "AAPANEL_PANEL_CLASS", "/fake/panel/class")
+    fake_mod = types.ModuleType("panelSite")
+    fake_mod.panelSite = _FakeSiteObj
+    monkeypatch.setitem(sys.modules, "panelSite", fake_mod)
 
     removed = proxy.aapanel_remove_site("test.example.com")
     assert removed is True
