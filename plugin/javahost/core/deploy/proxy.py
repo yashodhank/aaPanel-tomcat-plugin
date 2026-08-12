@@ -276,17 +276,24 @@ def _try_aapanel_class_api(domain: str, port: int) -> Optional[Dict]:
             __setattr__ = dict.__setitem__
 
         g = _G()
-        g["proxyname"] = domain
+        g["proxyname"] = "javahost-" + domain.replace(".", "-")[:40]
         g["sitename"] = domain
         g["proxydir"] = "/"
         g["proxysite"] = backend
-        g["todomain"] = backend
-        g["type"] = 1
-        g["cache"] = 0
+        g["todomain"] = "$host"
+        # panelSite.CreateProxy expects string fields (int values crash/fail checks).
+        g["type"] = "1"
+        g["cache"] = "0"
         g["subfilter"] = "[]"
-        g["advanced"] = 0
-        g["cachetime"] = 0
+        g["advanced"] = "0"
+        g["cachetime"] = "1"
         g["nocheck"] = "1"
+
+        # Ensure proxy conf dir exists (CreateProxy writes here; missing => silent fail).
+        try:
+            os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+        except OSError:
+            pass
 
         # CreateProxy is the dedicated aaPanel method for reverse-proxy sites
         res = site_obj.CreateProxy(g)
@@ -317,17 +324,22 @@ def _try_legacy_panelSite_import(domain: str, port: int) -> Optional[Dict]:
             __setattr__ = dict.__setitem__
 
         g = _G()
-        g["proxyname"] = domain
+        g["proxyname"] = "javahost-" + domain.replace(".", "-")[:40]
         g["sitename"] = domain
         g["proxydir"] = "/"
         g["proxysite"] = backend
-        g["todomain"] = backend
-        g["type"] = 1
-        g["cache"] = 0
+        g["todomain"] = "$host"
+        g["type"] = "1"
+        g["cache"] = "0"
         g["subfilter"] = "[]"
-        g["advanced"] = 0
-        g["cachetime"] = 0
+        g["advanced"] = "0"
+        g["cachetime"] = "1"
         g["nocheck"] = "1"
+
+        try:
+            os.makedirs("/www/server/panel/vhost/nginx/proxy", mode=0o755, exist_ok=True)
+        except OSError:
+            pass
 
         if hasattr(site, "CreateProxy"):
             res = site.CreateProxy(g)
@@ -372,7 +384,8 @@ def _try_aapanel_http_api(domain: str, port: int) -> Optional[Dict]:
     if not panel_api.api_key_configured():
         return None
     try:
-        return panel_api.http_add_site_with_proxy(domain, port)
+        res = panel_api.http_add_site_with_proxy(domain, port)
+        return res
     except Exception:
         return None
 
@@ -405,6 +418,8 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         res = _try_aapanel_http_api(domain, port)
         tried.append("http-api")
         if res is not None:
+            # Success OR a diagnosed AddSite-ok/CreateProxy-fail — stop falling
+            # through (further paths cannot fix a half-created site cleanly).
             return res
     else:
         tried.append("http-api-skipped-no-key")
@@ -578,10 +593,13 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     domain = validate.domain(domain)
     port = validate.port(port)
 
+    # Changing domain: attach the NEW site first; only then drop the previous
+    # aaPanel site. Delete-before-create orphans the live site when add fails.
+    prev = read_domain(app)
     aap = aapanel_add_site(domain, port)
     if not aap.get("ok"):
-        tried_str = ", ".join(aap.get("tried", []))
-        detail = aap.get("detail", "unknown error")
+        tried_str = ", ".join(aap.get("tried", [])) or aap.get("path", "aapanel")
+        detail = aap.get("error") or aap.get("detail", "unknown error")
         hint = ""
         if "http-api-skipped-no-key" in aap.get("tried", []):
             hint = (" Configure aapanel_api_key in Settings to enable the "
@@ -590,6 +608,16 @@ def set_site(app: str, domain: str, port: int) -> Dict:
                "Site not created — fix the issue and try again."
                % (tried_str, detail, hint))
         return {"ok": False, "error": msg}
+
+    if prev and prev != domain:
+        try:
+            aapanel_remove_site(prev)
+        except Exception:
+            pass
+        try:
+            remove_vhost(app)
+        except Exception:
+            pass
 
     # Do not inject a competing JavaHost vhost — aaPanel owns the site conf.
     _store_domain(app, domain)
@@ -608,17 +636,48 @@ def set_site(app: str, domain: str, port: int) -> Dict:
 
 
 def remove_site(app: str) -> Dict:
-    """Remove the app's vhost, aaPanel site record, and reload nginx; clear the
-    stored domain marker. Tries aaPanel API first, then nginx orphan cleanup."""
+    """Remove the app's vhost + aaPanel site record.
+
+    Clears the domain marker only when aaPanel cleanup succeeded (or there was
+    no domain). On aaPanel failure, keeps the marker so the operator can retry
+    RemoveSite without losing the domain name.
+    """
     app = validate.identifier(app, "app")
     domain = read_domain(app)
 
-    # Try to remove from aaPanel (API + HTTP)
     aapanel_removed = False
+    aapanel_error = None
     if domain:
-        aapanel_removed = aapanel_remove_site(domain)
+        try:
+            aapanel_removed = bool(aapanel_remove_site(domain))
+        except Exception as e:
+            aapanel_error = str(e)
+        if not aapanel_removed and aapanel_error is None:
+            aapanel_error = "aaPanel site delete did not confirm removal"
 
-    remove_vhost(app)
-    reload_nginx()
+    # Always drop a plugin-owned vhost if present (idempotent).
+    try:
+        remove_vhost(app)
+        reload_nginx()
+    except Exception:
+        pass
+
+    if domain and not aapanel_removed:
+        # Keep domain/owner markers for retry; surface partial failure.
+        return {
+            "app": app,
+            "removed": False,
+            "aapanel_cleaned": False,
+            "domain": domain,
+            "error": aapanel_error or "aaPanel cleanup failed — domain marker kept for retry",
+        }
+
     _clear_domain(app)
-    return {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed}
+    # Also clear SSL marker so we don't report ssl=true with no domain.
+    try:
+        from . import ssl as sslmod
+        sslmod._mark_ssl(app, False)
+    except Exception:
+        pass
+    return {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed,
+            "domain": domain}

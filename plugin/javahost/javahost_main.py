@@ -496,6 +496,8 @@ class javahost_main(object):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
             res = proxy.remove_site(app)
+            if res.get("removed") is False:
+                return panel.err(res.get("error") or "failed to remove reverse-proxy site")
             panel.log("RemoveSite", app)
             return panel.ok(res)
         except Exception as e:

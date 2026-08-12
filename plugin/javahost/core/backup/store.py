@@ -482,13 +482,16 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     ssl_warning = None
     if dom and port:
         try:
-            proxy.write_vhost(target, dom, port, ssl=False)
-            proxy.ensure_include()
-            proxy.reload_nginx()
-            proxy._store_domain(target, dom)
+            site_res = proxy.set_site(target, dom, int(port))
+            if not site_res.get("ok"):
+                ssl_warning = "site republish failed: %s" % (
+                    site_res.get("error") or "aaPanel registration failed")
+            else:
+                # Prefer aaPanel-owned path; do not write a parallel plugin vhost.
+                pass
         except Exception as e:
             ssl_warning = "site republish failed: %s" % e
-        if manifest.get("ssl_enabled"):
+        if manifest.get("ssl_enabled") and not ssl_warning:
             try:
                 res = ssl.enable(target, dom, port)
                 ssl_state = bool(res.get("ssl"))

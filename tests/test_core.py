@@ -833,6 +833,33 @@ def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
 
 
 # ---- aaPanel add-site: false status must fall back to nginx (H1/H2) ----------
+def test_remove_site_keeps_marker_on_aapanel_failure(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "demo" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    proxy._store_domain("demo", "demo.example.com")
+    proxy._store_owner("demo", "aapanel")
+    monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: False)
+    res = proxy.remove_site("demo")
+    assert res["removed"] is False
+    assert proxy.read_domain("demo") == "demo.example.com"
+
+
+def test_remove_site_clears_marker_on_success(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "demo" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
+    monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
+    proxy._store_domain("demo", "demo.example.com")
+    monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: True)
+    res = proxy.remove_site("demo")
+    assert res["removed"] is True
+    assert proxy.read_domain("demo") is None
+
+
 def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
     """When all aaPanel API paths fail, set_site returns error — no nginx fallback."""
     vdir = str(tmp_path / "vhost")
@@ -1336,7 +1363,8 @@ def test_remove_site_reports_aapanel_cleaned(monkeypatch, tmp_path):
     assert proxy.read_domain("demo") is None
 
 
-def test_remove_site_aapanel_not_found_is_ok(monkeypatch, tmp_path):
+def test_remove_site_aapanel_not_found_keeps_marker(monkeypatch, tmp_path):
+    """When aaPanel delete fails, keep the domain marker so RemoveSite can retry."""
     from core.tomcat import instance
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
     marker_dir = str(tmp_path / "demo" / "bin")
@@ -1352,9 +1380,11 @@ def test_remove_site_aapanel_not_found_is_ok(monkeypatch, tmp_path):
     open(os.path.join(vdir, "demo.conf"), "w").write("server {}\n")
 
     res = proxy.remove_site("demo")
-    assert res["removed"] is True
+    assert res["removed"] is False
     assert res["aapanel_cleaned"] is False
-    assert proxy.read_domain("demo") is None
+    assert proxy.read_domain("demo") == "demo.example.com"
+    # Plugin vhost is still cleaned up.
+    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
 
 
 # ---- DeleteApp calls remove_site ---------------------------------------------

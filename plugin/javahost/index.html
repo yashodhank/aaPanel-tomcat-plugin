@@ -2398,6 +2398,41 @@
       refresh();                                  // pick up the new domain server-side
     });
   }
+  function removeSite(app, btn){
+    if(!confirm('Remove the reverse-proxy site for "'+app+'"? The app keeps running on its loopback port.')) return;
+    busy(btn, true);
+    call('RemoveSite', {app:app}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p), 'err', 'Remove site failed'); return; }
+      if(APPS_BY_NAME[app]){ APPS_BY_NAME[app].domain = null; APPS_BY_NAME[app].ssl = false; }
+      toast('Reverse-proxy site removed for '+app, 'ok');
+      refreshOpen(app);
+      if(DRAWER.app === app) drawerOverview();
+      refresh();
+    });
+  }
+  function changeSite(app, btn){
+    var cur = (APPS_BY_NAME[app] && APPS_BY_NAME[app].domain) || defaultDomain(app) || '';
+    openModal({
+      title: 'Change reverse-proxy domain',
+      sub: app,
+      body: '<div class="jh-form"><div class="jh-field wide"><label for="jh-change-domain">Domain</label>'+
+        '<input id="jh-change-domain" type="text" value="'+esc(cur)+'" placeholder="app.example.com" autocomplete="off"></div>'+
+        '<div class="jh-hint">The new domain is registered first; the previous aaPanel site is removed only after that succeeds.</div></div>',
+      footer: [
+        mkBtn('Cancel', 'ghost', closeModal),
+        mkBtn('Save', 'accent', function(b){
+          var dom = (($('jh-change-domain') && $('jh-change-domain').value) || '').trim().toLowerCase();
+          if(!dom || /\s/.test(dom) || dom.indexOf('.') < 0){
+            toast('Enter a valid domain (e.g. app.example.com)', 'err'); return;
+          }
+          closeModal();
+          doSetSite(app, dom, btn || b);
+        }, 'check')
+      ]
+    });
+  }
   function setupSite(app, btn){
     var def = defaultDomain(app);
     if(def){ doSetSite(app, def, btn); return; }
@@ -2815,6 +2850,13 @@
       ? '<div class="jh-kv"><span>HTTPS</span><span class="btns">'+ sslSwitchFor(x) +
           '<span class="jh-muted" id="dw-cert-mirror" style="font-size:12px">—</span></span></div>'
       : '';
+    var domainActions = hasDomain
+      ? '<div class="jh-kv"><span>Domain</span><span class="btns">'+
+          '<span class="jh-muted" style="margin-right:var(--s2)">'+esc(appDomain(x))+'</span>'+
+          '<button type="button" class="jh-btn ghost sm" data-changesite="'+ec+'" title="Change reverse-proxy domain" aria-label="Change reverse-proxy domain for '+ec+'">Change</button>'+
+          '<button type="button" class="jh-btn ghost sm" data-removesite="'+ec+'" title="Remove reverse-proxy site" aria-label="Remove reverse-proxy site for '+ec+'">'+ic('trash')+'Remove</button>'+
+        '</span></div>'
+      : '';
     // Site & SSL block (Feature B) — only when the app has a domain. Filled
     // on-demand by drawerSiteStatus() via GetSiteStatus (NOT the 5s list poll).
     var siteBlock = hasDomain
@@ -2837,6 +2879,7 @@
       kv('Enabled', x.enabled==null?null:(x.enabled?'yes':'no'))+
       '<div class="jh-kv"><span>Uptime</span><span class="jh-muted" id="dw-uptime">—</span></div>'+
       openRow+
+      domainActions+
       sslRow+
       '<div class="jh-kv"><span>Live CPU</span><span class="jh-muted" id="dw-cpu">—</span></div>'+
       '<div class="jh-kv"><span>Live memory</span><span class="jh-muted" id="dw-mem">—</span></div>'+
@@ -4283,6 +4326,8 @@
 
     // reverse-proxy setup for an app with no domain yet
     if(ds.setsite){ setupSite(ds.setsite, b); return; }
+    if(ds.removesite){ removeSite(ds.removesite, b); return; }
+    if(ds.changesite){ changeSite(ds.changesite, b); return; }
     // per-site HTTPS toggle (role=switch) — slow issuance, busy state inside
     if(ds.ssltoggle){ toggleSsl(ds.ssltoggle, b); return; }
 
@@ -4311,8 +4356,12 @@
       call('DeleteApp', {app:dApp}, function(r){
         clearPending(dApp);
         busy(b, false);
-        if(failed(r)) toast(errText(payload(r)), 'err', 'Delete '+dApp+' failed');
-        else toast('Delete '+dApp+' completed', 'ok');
+        var p = payload(r);
+        if(failed(r)) toast(errText(p), 'err', 'Delete '+dApp+' failed');
+        else {
+          toast('Delete '+dApp+' completed', 'ok');
+          if(p && p.site_warning) toast(String(p.site_warning), 'err', 'Site cleanup');
+        }
         refresh();
       });
       return;
