@@ -1992,25 +1992,40 @@ def test_find_wildcard_cert_rejects_multi_label(monkeypatch):
 
 # ---- PR4 ops polish: WS map, JAR logs/repair, wipe schedules --------------------
 def test_ensure_ws_map_idempotent(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
     conf = tmp_path / "nginx.conf"
     conf.write_text("user www;\nhttp {\n    include mime.types;\n}\nevents {}\n")
-    monkeypatch.setattr(proxy, "nginx_test", lambda: True)
-    assert proxy.ensure_ws_map(str(conf)) is True
+    monkeypatch.setattr(panel_api, "run", lambda cmd, **kw: (0, "", ""))
+    assert panel_api.ensure_ws_map(str(conf)) is True
     body = conf.read_text()
     assert "map $http_upgrade $connection_upgrade" in body
     assert "default upgrade;" in body
     # second call is a no-op success
-    assert proxy.ensure_ws_map(str(conf)) is True
+    assert panel_api.ensure_ws_map(str(conf)) is True
     assert body.count("map $http_upgrade $connection_upgrade") == 1
 
 
 def test_ensure_ws_map_rolls_back_on_nginx_t_fail(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
     conf = tmp_path / "nginx.conf"
     original = "http {\n    keepalive_timeout 65;\n}\n"
     conf.write_text(original)
-    monkeypatch.setattr(proxy, "nginx_test", lambda: False)
-    assert proxy.ensure_ws_map(str(conf)) is False
+    monkeypatch.setattr(panel_api, "run", lambda cmd, **kw: (1, "", "bad"))
+    assert panel_api.ensure_ws_map(str(conf)) is False
     assert conf.read_text() == original
+
+
+def test_set_site_calls_compat_ws_map(monkeypatch, tmp_path):
+    """proxy.set_site must route WS-map install through compat, not write nginx.conf."""
+    from core.compat import aapanel as panel_api
+    called = []
+    monkeypatch.setattr(panel_api, "ensure_ws_map", lambda: called.append("ws") or True)
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": False, "tried": ["x"], "error": "nope"})
+    monkeypatch.setattr(proxy, "read_domain", lambda a: None)
+    res = proxy.set_site("app1", "app1.example.com", 8080)
+    assert res["ok"] is False
+    assert called == ["ws"]
 
 
 def test_jar_tail_log_reads_app_out(monkeypatch, tmp_path):
@@ -2050,6 +2065,52 @@ def test_repair_jar_reinstalls_unit(monkeypatch, tmp_path):
     assert res["repaired"] is True and res["type"] == "jar"
     assert seen["java_home"] == "/opt/jdk-17" and seen["port"] == 8099
     assert seen["java_opts"] == "-Xmx512m"
+    # recovered opts are backfilled into app.env for the next missing-unit repair
+    assert 'JAVA_OPTS="-Xmx512m"' in (base / "bin" / "app.env").read_text()
+
+
+def test_repair_jar_recovers_opts_from_app_env_when_unit_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    (base / "bin" / "app.env").write_text(
+        'JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\n'
+        'JAVA_OPTS="-server -Xms256m -Xmx512m -XX:+UseG1GC"\n')
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "no-units"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "no-init"))
+    seen = {}
+
+    def _install(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(instance.service, "install_jar_unit", _install)
+    monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
+    monkeypatch.setattr(instance.service, "enable_start", lambda a: None)
+    res = instance.repair("jarapp")
+    assert res["repaired"] is True
+    assert seen["java_opts"] == "-server -Xms256m -Xmx512m -XX:+UseG1GC"
+
+
+def test_repair_jar_fails_when_opts_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "jarapp"
+    (base / "bin").mkdir(parents=True)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    (base / "bin" / "app.env").write_text(
+        "JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\n")
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "no-units"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "no-init"))
+    installed = []
+    monkeypatch.setattr(
+        instance.service, "install_jar_unit",
+        lambda *a, **k: installed.append(1) or "/unit")
+    with pytest.raises(RuntimeError, match="no JAVA_OPTS"):
+        instance.repair("jarapp")
+    assert installed == []
 
 
 def test_wipe_apps_prunes_schedules(monkeypatch, tmp_path):
