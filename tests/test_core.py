@@ -840,6 +840,87 @@ def test_setsite_errors_without_domain_or_suffix(monkeypatch):
     assert "no domain" in (res.get("msg") or "")
 
 
+def test_setsite_returns_panel_err_when_proxy_ok_false(monkeypatch):
+    """set_site {ok:False} must become panel.err with the diagnostic — not KeyError 'domain'."""
+    import javahost_main
+
+    monkeypatch.setattr(javahost_main.proxy, "default_domain", lambda app: None)
+    monkeypatch.setattr(javahost_main.instance, "detail",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(javahost_main.instance, "health",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(
+        javahost_main.proxy, "set_site",
+        lambda app, domain, port: {
+            "ok": False,
+            "error": "aaPanel site registration failed [http-api-skipped-no-key]: boom.",
+        },
+    )
+
+    class G(object):
+        app = "demo"
+        domain = "demo.example.com"
+
+    res = javahost_main.javahost_main().SetSite(G())
+    assert res.get("status") is False
+    assert "aaPanel site registration failed" in (res.get("msg") or "")
+    assert "'domain'" not in (res.get("msg") or "")
+
+
+def test_setsitessl_enable_failure_is_panel_err(monkeypatch):
+    """ssl.enable returning {ssl:False, error} must be panel.err, not panel.ok."""
+    import javahost_main
+
+    monkeypatch.setattr(javahost_main.proxy, "read_domain",
+                        lambda app: "app.example.com")
+    monkeypatch.setattr(javahost_main.proxy, "default_domain", lambda app: None)
+    monkeypatch.setattr(javahost_main.instance, "detail",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(javahost_main.instance, "health",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(
+        javahost_main.ssl, "enable",
+        lambda app, domain, port, email=None: {
+            "ssl": False, "error": "certificate issuance failed: rate limited",
+        },
+    )
+
+    class G(object):
+        app = "demo"
+        enable = "1"
+        domain = None
+        email = None
+
+    res = javahost_main.javahost_main().SetSiteSSL(G())
+    assert res.get("status") is False
+    assert "rate limited" in (res.get("msg") or "")
+
+
+def test_setsitessl_disable_ok_is_panel_ok(monkeypatch):
+    import javahost_main
+
+    monkeypatch.setattr(javahost_main.proxy, "read_domain",
+                        lambda app: "app.example.com")
+    monkeypatch.setattr(javahost_main.instance, "detail",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(javahost_main.instance, "health",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(
+        javahost_main.ssl, "disable",
+        lambda app, domain, port: {"ssl": False, "url": "http://app.example.com/"},
+    )
+
+    class G(object):
+        app = "demo"
+        enable = "0"
+        domain = None
+        email = None
+
+    res = javahost_main.javahost_main().SetSiteSSL(G())
+    assert res.get("status") is True
+    assert res.get("msg", {}).get("ssl") is False
+
+
 # ---- sitestatus.probe shape (openssl + urllib monkeypatched) ----------------
 def test_sitestatus_probe_full_shape(monkeypatch, tmp_path):
     from core.tomcat import instance as inst
