@@ -87,6 +87,7 @@ class javahost_main(object):
                 # Public-domain suffix (config "site_suffix", "" when unset) so the
                 # UI can offer "<app>.<suffix>" defaults; empty => UI must prompt.
                 "site_suffix": config.site_suffix(),
+                "plugin_version": config.plugin_version(),
             })
         except Exception as e:
             return panel.err(str(e))

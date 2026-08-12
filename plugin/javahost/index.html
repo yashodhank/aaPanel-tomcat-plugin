@@ -558,7 +558,7 @@
         <span>Tomcat &amp; Java runtime manager</span>
       </div>
       <div class="jh-bar-spacer"></div>
-      <span class="jh-pill-ver" title="Independent OSS plugin · Apache-2.0">Apache-2.0 · OSS</span>
+      <span class="jh-pill-ver" id="jh-plugin-ver" title="JavaHost plugin version">v…</span>
       <button class="jh-btn ghost sm icon" id="jh-fullscreen" type="button" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false">
         <svg aria-hidden="true" focusable="false"><use href="#i-expand"/></svg>
       </button>
@@ -3783,6 +3783,16 @@
   // =====================================================================
   // STATUS REFRESH
   // =====================================================================
+  function renderPluginVersion(ver){
+    var el = $('jh-plugin-ver');
+    if(!el) return;
+    var v = (ver != null && String(ver).trim()) ? String(ver).trim() : '';
+    el.textContent = v && v !== 'unknown' ? ('v' + v) : 'JavaHost';
+    el.title = v && v !== 'unknown'
+      ? ('JavaHost plugin v' + v + ' · Apache-2.0')
+      : 'JavaHost plugin · Apache-2.0';
+  }
+
   function refresh(btn){
     busy(btn, true);
     call('GetStatus', {}, function(r){
@@ -3790,6 +3800,7 @@
       var d = payload(r);
       if(failed(r)){ toast(errText(d), 'err', 'Status error'); return; }
       STATE = d;
+      renderPluginVersion(d.plugin_version);
       renderDashboard(d);          // dashboard tiles (cheap)
       renderRuntimes(d);           // runtimes rows (cheap)
       // The 45-row apps list + DB picker (and the GetHealthAll they fire) only

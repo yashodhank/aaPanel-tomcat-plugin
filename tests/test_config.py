@@ -22,3 +22,10 @@ def test_config_json_is_owner_only(tmp_path, monkeypatch):
     config.set("aapanel_api_key", "s3cr3t")
     mode = stat.S_IMODE(os.stat(config.CONFIG_PATH).st_mode)
     assert mode == 0o600, oct(mode)        # never widen perms on a secret-bearing file
+
+
+def test_plugin_version_reads_info_json(tmp_path, monkeypatch):
+    info = tmp_path / "info.json"
+    info.write_text('{"versions": "0.28.1"}')
+    monkeypatch.setattr(config, "_INFO_JSON", str(info))
+    assert config.plugin_version() == "0.28.1"
