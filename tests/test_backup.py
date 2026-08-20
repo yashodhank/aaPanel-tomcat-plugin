@@ -278,6 +278,70 @@ def test_restore_java_opts_prefers_app_env_before_manifest(env, monkeypatch):
     assert opts == "-server -Xmx640m -XX:+UseG1GC"
 
 
+@pytest.mark.parametrize("source", ["setenv", "app_env", "manifest"])
+def test_restore_java_opts_sanitizes_every_archive_source(env, monkeypatch,
+                                                          source):
+    """Untrusted backup options must be safe before service template render."""
+    iroot, _broot = env
+    base = os.path.join(iroot, "hostileopts")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    hostile = ('-server -Xmx128m"; /usr/bin/id; # '
+               '$(touch /tmp/javahost-owned)\n-Dsafe=yes')
+    manifest = {"memory_mb": 256}
+    monkeypatch.setattr(instance, "_read_setenv", lambda _base: {})
+    monkeypatch.setattr(instance, "_read_app_env", lambda _base: {})
+    if source == "setenv":
+        monkeypatch.setattr(instance, "_read_setenv",
+                            lambda _base: {"JAVA_OPTS": hostile})
+    elif source == "app_env":
+        monkeypatch.setattr(instance, "_read_app_env",
+                            lambda _base: {"JAVA_OPTS": hostile})
+    else:
+        manifest["java_opts"] = hostile
+
+    opts = store._restore_java_opts(base, "jar", manifest, "/opt/jdk-17")
+
+    assert opts == "-server -Dsafe=yes"
+    assert all(token not in opts for token in
+               ('"', ";", "$(", "\n", "/usr/bin/id", "javahost-owned"))
+
+
+def test_restore_hostile_jar_archive_never_renders_shell_tokens(env,
+                                                               monkeypatch):
+    """The restore-to-service boundary receives only sanitized archive opts."""
+    iroot, _broot = env
+    app = "hostilejar"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write('SERVER_PORT="8099"\nJAVA_HOME="/opt/jdk-17"\n'
+                'JAVA_OPTS="-server -Xmx128m\\"; /usr/bin/id; #"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda _app: {"type": "jar", "tomcat": None,
+                                      "java": 17, "port": 8099,
+                                      "domain": None, "ssl": False})
+    seen = {}
+
+    def capture_jar_unit(_app, _java_home, _app_dir, _port, java_opts="",
+                         user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_jar_unit", capture_jar_unit)
+
+    archive_path = store.backup_app(app)["archive"]
+    store.restore(archive_path, as_name="safeclone")
+
+    assert seen["java_opts"] == "-server"
+    assert all(token not in seen["java_opts"] for token in
+               ('"', ";", "$(", "/usr/bin/id"))
+
+
 def test_secure_restored_secrets_fails_closed(env, monkeypatch):
     iroot, _broot = env
     base = os.path.join(iroot, "secret")
