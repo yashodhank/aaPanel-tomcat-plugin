@@ -60,6 +60,7 @@ def _claimed_staged_upload(raw_path, extension):
     """
     message = "uploaded %s is not a valid staged upload" % extension
     claim_dir = None
+    claimed = None
     try:
         if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
             raise ValueError(message)
@@ -80,6 +81,9 @@ def _claimed_staged_upload(raw_path, extension):
             raise ValueError(message)
         basename = os.path.basename(normalized)
         if not basename or not basename.lower().endswith(extension):
+            raise ValueError(message)
+        initial_mode = os.lstat(normalized).st_mode
+        if stat.S_ISLNK(initial_mode) or not stat.S_ISREG(initial_mode):
             raise ValueError(message)
 
         claim_dir = tempfile.mkdtemp(prefix=".javahost-claim-", dir=root_alias)
@@ -102,13 +106,36 @@ def _claimed_staged_upload(raw_path, extension):
             raise ValueError(message)
     except (OSError, TypeError, ValueError):
         if claim_dir:
-            shutil.rmtree(claim_dir, ignore_errors=True)
+            # Never recursively delete an untrusted object moved into the claim
+            # directory.  Restore it to the original name when possible; if an
+            # attacker recreated that name, leave the random claim directory in
+            # place for safe operator recovery rather than risking data loss.
+            if claimed and os.path.lexists(claimed) and not os.path.lexists(normalized):
+                try:
+                    os.rename(claimed, normalized)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(claim_dir)
+            except OSError:
+                pass
         raise ValueError(message)
 
     try:
         yield resolved
     finally:
-        shutil.rmtree(claim_dir, ignore_errors=True)
+        # The yielded inode was validated as a regular file.  Re-check its leaf
+        # type so cleanup never follows or recursively removes a replacement.
+        try:
+            final_mode = os.lstat(claimed).st_mode
+            if stat.S_ISREG(final_mode) or stat.S_ISLNK(final_mode):
+                os.unlink(claimed)
+        except OSError:
+            pass
+        try:
+            os.rmdir(claim_dir)
+        except OSError:
+            pass
 
 
 class javahost_main(object):
