@@ -465,6 +465,17 @@ def _secure_or_discard_restore(base: str, archive_path: str, target: str) -> Non
         raise
 
 
+def _sanitize_restore_java_opts(raw: str, java_home: str) -> str:
+    """Return shell-safe JVM options recovered from an untrusted archive."""
+    if not isinstance(raw, str):
+        return ""
+    from ..runtime import java as _java, jvm_opts
+    major = (_java.probe(java_home)
+             or instance._java_major_from_home(java_home) or 17)
+    cleaned, _warns = jvm_opts.sanitize(raw.split(), int(major))
+    return " ".join(cleaned)
+
+
 def _restore_java_opts(base: str, itype: str, manifest: Dict,
                        java_home: str) -> str:
     """Rebuild JVM opts for a restored unit from setenv / manifest.
@@ -477,13 +488,11 @@ def _restore_java_opts(base: str, itype: str, manifest: Dict,
     app_env = instance._read_app_env(base)
     opts = (env.get("JAVA_OPTS") or app_env.get("JAVA_OPTS") or "").strip()
     if opts:
-        return opts
-    man_opts = (manifest.get("java_opts") or "").strip()
+        return _sanitize_restore_java_opts(opts, java_home)
+    raw_man_opts = manifest.get("java_opts") or ""
+    man_opts = raw_man_opts.strip() if isinstance(raw_man_opts, str) else ""
     if man_opts:
-        from ..runtime import java as _java, jvm_opts
-        major = _java.probe(java_home) or instance._java_major_from_home(java_home) or 17
-        cleaned, _warns = jvm_opts.sanitize(man_opts.split(), int(major))
-        return " ".join(cleaned)
+        return _sanitize_restore_java_opts(man_opts, java_home)
     mem = manifest.get("memory_mb")
     if not mem:
         return ""
@@ -491,10 +500,9 @@ def _restore_java_opts(base: str, itype: str, manifest: Dict,
         mem_i = int(mem)
     except (TypeError, ValueError):
         return ""
-    from ..runtime import java as _java, jvm_opts
-    major = _java.probe(java_home) or instance._java_major_from_home(java_home) or 17
-    cleaned, _warns = jvm_opts.sanitize(jvm_opts.default_opts(mem_i), int(major))
-    return " ".join(cleaned)
+    from ..runtime import jvm_opts
+    return _sanitize_restore_java_opts(
+        " ".join(jvm_opts.default_opts(mem_i)), java_home)
 
 
 def restore(archive_path: str, as_name: Optional[str] = None,
