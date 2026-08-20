@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import sys
 import urllib.parse
 
@@ -39,6 +40,53 @@ from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
 from core.backup import schedule as backupschedule  # noqa: E402
+
+
+_AAPANEL_STAGED_UPLOAD_ROOT = "/tmp"
+
+
+def _staged_upload_path(raw_path, extension):
+    """Return a canonical aaPanel-staged artifact or reject it fail-closed.
+
+    The UI uploads through ``/files?action=upload`` with ``f_path=/tmp``.  Treat
+    the returned path as untrusted: it must name a regular file within
+    that staging tree, without traversal or symlink indirection.
+    """
+    message = "uploaded %s is not a valid staged upload" % extension
+    try:
+        if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+            raise ValueError(message)
+        if extension not in (".war", ".jar"):
+            raise ValueError(message)
+        if not os.path.isabs(raw_path):
+            raise ValueError(message)
+
+        # Reject traversal and other non-canonical spellings before resolving.
+        # The staging root itself may be an OS symlink (macOS /tmp -> /private/tmp),
+        # so compare descendant resolution relative to the resolved root below.
+        normalized = os.path.normpath(raw_path)
+        if normalized != raw_path:
+            raise ValueError(message)
+
+        root_alias = os.path.abspath(_AAPANEL_STAGED_UPLOAD_ROOT)
+        relative = os.path.relpath(normalized, root_alias)
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+            raise ValueError(message)
+
+        root_real = os.path.realpath(root_alias)
+        resolved = os.path.realpath(normalized)
+        expected = os.path.join(root_real, relative)
+        if resolved != expected:
+            raise ValueError(message)
+        if not resolved.lower().endswith(extension):
+            raise ValueError(message)
+
+        mode = os.lstat(normalized).st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise ValueError(message)
+        return resolved
+    except (OSError, TypeError, ValueError):
+        raise ValueError(message)
 
 
 class javahost_main(object):
@@ -793,8 +841,11 @@ class javahost_main(object):
         # NOTE: the display name travels as `label`, never `name` — aaPanel's request
         # router treats a POST `name` as the plugin/module name and rejects values
         # with spaces/symbols ("module_name ... cannot contain special symbols").
+        label = panel.attr(get, "label", None)
         return dict(
-            name=panel.attr(get, "label", ""),
+            # Direct/CLI clients historically sent `name`.  Keep that fallback
+            # only when `label` is absent; HTTP clients must use router-safe label.
+            name=label if label is not None else panel.attr(get, "name", ""),
             provider=panel.attr(get, "provider", "other"),
             endpoint=panel.attr(get, "endpoint", ""),
             region=panel.attr(get, "region", "us-east-1"),
@@ -989,9 +1040,11 @@ class javahost_main(object):
     def CreateJarApp(self, get):
         """Run an executable / Spring Boot fat-JAR (staged at `jar`) as a service."""
         try:
+            jar_src = _staged_upload_path(
+                panel.attr(get, "jar") or panel.attr(get, "tmp"), ".jar")
             res = instance.create_jar(
                 app=panel.attr(get, "app"),
-                jar_src=panel.attr(get, "jar") or panel.attr(get, "tmp"),
+                jar_src=jar_src,
                 java_major=panel.attr(get, "java", 17),
                 port=panel.attr(get, "port", None),
                 memory_mb=panel.attr(get, "memory", 512),
@@ -1026,10 +1079,9 @@ class javahost_main(object):
         zip-slip-safe atomic deploy + restart flow."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            tmp = panel.attr(get, "tmp") or panel.attr(get, "war")
+            tmp = _staged_upload_path(
+                panel.attr(get, "tmp") or panel.attr(get, "war"), ".war")
             major = validate.tomcat_version(panel.attr(get, "version"))
-            if not tmp or not os.path.isfile(tmp):
-                return panel.err("uploaded WAR not found at staged path: %r" % tmp)
             target = instance.require_tomcat_war_target(app)
             warn = war.namespace_warning(tmp, registry.get_line(major).namespace)
             war.replace_root(tmp, target)
@@ -1049,9 +1101,8 @@ class javahost_main(object):
             if int(str(major).split(".")[0]) < 10:
                 return panel.err("MigrateWar requires Tomcat 10+ (got %s); "
                                  "javax→jakarta output will not run on Tomcat 9" % major)
-            src = panel.attr(get, "war") or panel.attr(get, "tmp")
-            if not src or not os.path.isfile(src):
-                return panel.err("source WAR not found: %r" % src)
+            src = _staged_upload_path(
+                panel.attr(get, "war") or panel.attr(get, "tmp"), ".war")
             target = instance.require_tomcat_war_target(app)
             java_home = installer.ensure_java(major)
             tmp = fs.mkdtemp("javahost-migrate-")
