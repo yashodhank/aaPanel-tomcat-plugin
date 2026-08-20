@@ -12,15 +12,14 @@
 #   make deploy    — rsync plugin/javahost -> VPS plugin dir + restart panel (YOUR OWN panel)
 #   make restart   — clear pycache + restart panel
 #
-# Override VPS_HOST on the command line as needed.
+# Supply VPS_HOST explicitly for every remote operation.
 
-VPS_HOST    ?= root@217.217.248.180
 PLUGIN_NAME  = javahost
 PLUGIN_DST   = /www/server/panel/plugin/$(PLUGIN_NAME)
 SRC          = plugin/$(PLUGIN_NAME)
 PY          ?= python3
 
-.PHONY: test lint hooks zip deploy restart clean release samples samples-db test-deploy matrix matrix-dry
+.PHONY: test lint hooks zip deploy restart require-vps-host clean release samples samples-db test-deploy matrix matrix-dry
 
 test:
 	find $(SRC) -name '*.py' -print0 | xargs -0 $(PY) -m py_compile
@@ -57,11 +56,14 @@ zip:
 	cd plugin && zip -r ../$(PLUGIN_NAME).zip $(PLUGIN_NAME) -x '*/__pycache__/*' -x '*.pyc'
 	@echo "Built $(PLUGIN_NAME).zip"
 
-deploy:
+require-vps-host:
+	@test -n "$(VPS_HOST)" || { echo "ERROR: VPS_HOST is required (example: make deploy VPS_HOST=root@test-host)"; exit 2; }
+
+deploy: require-vps-host
 	rsync -az --delete --exclude='__pycache__' --exclude='*.pyc' $(SRC)/ $(VPS_HOST):$(PLUGIN_DST)/
 	$(MAKE) restart
 
-restart:
+restart: require-vps-host
 	ssh $(VPS_HOST) "rm -rf $(PLUGIN_DST)/__pycache__ $(PLUGIN_DST)/core/*/__pycache__; /etc/init.d/bt restart"
 
 release:
