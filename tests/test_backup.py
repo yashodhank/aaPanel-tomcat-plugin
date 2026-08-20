@@ -4,6 +4,7 @@
 boundaries are stubbed. Focus: tar-traversal safety, round-trip restore-as-new
 (reallocated port, excluded logs, no /etc/letsencrypt), and best-effort SSL."""
 import io
+import json
 import os
 import tarfile
 
@@ -68,9 +69,22 @@ def test_pack_extract_round_trip(tmp_path):
 def env(tmp_path, monkeypatch):
     iroot = str(tmp_path / "instances")
     broot = str(tmp_path / "backups")
+    java_home = str(tmp_path / "runtimes" / "jdk-17")
+    tomcat_home = str(tmp_path / "tomcat" / "10")
+    systemd_dir = str(tmp_path / "systemd")
+    initd_dir = str(tmp_path / "initd")
     os.makedirs(iroot, exist_ok=True)
+    os.makedirs(java_home, exist_ok=True)
+    os.makedirs(tomcat_home, exist_ok=True)
+    os.makedirs(systemd_dir, exist_ok=True)
+    os.makedirs(initd_dir, exist_ok=True)
     monkeypatch.setattr(instance, "INSTANCE_ROOT", iroot)
     monkeypatch.setattr(store, "BACKUPS_ROOT", broot)
+    monkeypatch.setattr(store.java, "detect", lambda: {17: java_home})
+    monkeypatch.setattr(store.installer, "home_path", lambda major: tomcat_home)
+    monkeypatch.setattr(store.installer, "is_installed", lambda major: "10.1-test")
+    monkeypatch.setattr(store.service, "SYSTEMD_DIR", systemd_dir)
+    monkeypatch.setattr(store.service, "INITD_DIR", initd_dir)
     # allow safe_rmtree/mark under the tmp roots
     monkeypatch.setattr(fs, "MANAGED_ROOTS", tuple(fs.MANAGED_ROOTS) + (iroot, broot))
     # stub the live boundaries
@@ -96,16 +110,33 @@ def _mk_app(iroot, app, port=8080):
     for d in ("conf", os.path.join("webapps", "ROOT"), "bin", "logs", "work", "temp"):
         os.makedirs(os.path.join(base, d), exist_ok=True)
     fs.mark_managed(base)
+    parent = os.path.dirname(iroot)
+    java_home = os.path.join(parent, "runtimes", "jdk-17")
+    tomcat_home = os.path.join(parent, "tomcat", "10")
     with open(os.path.join(base, "conf", "server.xml"), "w") as f:
         f.write('<Server><Service><Connector port="%d" protocol="HTTP/1.1"/></Service></Server>' % port)
     with open(os.path.join(base, "bin", "setenv.sh"), "w") as f:
-        f.write('export JAVA_HOME="/opt/jdk-17"\nexport CATALINA_HOME="/opt/tomcat/10"\nexport JAVA_OPTS="-Xmx512m"\n')
+        f.write('export JAVA_HOME="%s"\nexport CATALINA_HOME="%s"\nexport JAVA_OPTS="-Xmx512m"\n'
+                % (java_home, tomcat_home))
     with open(os.path.join(base, "bin", "app.env"), "w") as f:
         f.write('DB_URL="jdbc:postgresql://h:5432/d"\nDB_USER="appuser"\nDB_PASSWORD="s3cret"\n')
     with open(os.path.join(base, "webapps", "ROOT", "index.jsp"), "w") as f:
         f.write("PAYLOAD-OK")
     with open(os.path.join(base, "logs", "catalina.out"), "w") as f:
         f.write("noise")
+    return base
+
+
+def _mk_jar(iroot, app, port=8080, opts="-Xms128m -Xmx512m"):
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    os.makedirs(os.path.join(base, "logs"), exist_ok=True)
+    fs.mark_managed(base)
+    java_home = os.path.join(os.path.dirname(iroot), "runtimes", "jdk-17")
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"jar-payload")
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write("SERVER_PORT=%d\nJAVA_HOME=%s\nJAVA_OPTS=%s\n" % (port, java_home, opts))
     return base
 
 
@@ -179,6 +210,181 @@ def test_restore_rejects_malicious_archive(env, tmp_path):
     with pytest.raises(UnsafeArchive):
         store.restore(bad, as_name="clone")
     assert not instance.exists("clone")          # nothing left half-created
+
+
+def test_restore_overwrite_validates_payload_before_removing_live_app(env, tmp_path, monkeypatch):
+    """A structurally incomplete archive must not disturb the running instance."""
+    import json
+
+    iroot, _ = env
+    live = _mk_app(iroot, "live", port=8090)
+    original = os.path.join(live, "webapps", "ROOT", "index.jsp")
+    man = json.dumps({"app": "live", "type": "war", "format": 1}).encode()
+    bad = str(tmp_path / "missing-base.tar.gz")
+    with tarfile.open(bad, "w:gz") as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(man)
+        tf.addfile(ti, io.BytesIO(man))
+    monkeypatch.setattr(store.service, "remove_unit",
+                        lambda app: (_ for _ in ()).throw(AssertionError("original unit removed")))
+
+    with pytest.raises(RuntimeError, match="missing base"):
+        store.restore(bad)
+
+    assert instance.exists("live")
+    assert open(original).read() == "PAYLOAD-OK"
+
+
+def test_restore_overwrite_rolls_back_live_app_when_service_rebuild_fails(env, monkeypatch):
+    """A failure after cutover must restore the original managed instance tree."""
+    iroot, _ = env
+    live = _mk_app(iroot, "live", port=8090)
+    original = os.path.join(live, "webapps", "ROOT", "index.jsp")
+    arc = store.backup_app("live")["archive"]
+    with open(original, "w") as f:
+        f.write("LIVE-NEWER-THAN-BACKUP")
+
+    calls = {"install": 0}
+
+    def fail_first_install(*args, **kwargs):
+        calls["install"] += 1
+        if calls["install"] == 1:
+            raise RuntimeError("service rebuild failed")
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_unit", fail_first_install)
+
+    with pytest.raises(RuntimeError, match="service rebuild failed"):
+        store.restore(arc)
+
+    assert instance.exists("live")
+    assert fs.is_managed(live)
+    assert open(original).read() == "LIVE-NEWER-THAN-BACKUP"
+    assert calls["install"] == 1  # rollback keeps/restores the original unit instead of re-rendering it
+    assert os.listdir(iroot) == ["live"]
+
+
+def test_restore_overwrite_replaces_live_tree_and_removes_recovery(env):
+    iroot, _ = env
+    live = _mk_app(iroot, "live", port=8090)
+    original = os.path.join(live, "webapps", "ROOT", "index.jsp")
+    arc = store.backup_app("live")["archive"]
+    with open(original, "w") as f:
+        f.write("LIVE-NEWER-THAN-BACKUP")
+
+    res = store.restore(arc)
+
+    assert res["restored"] is True and res["mode"] == "overwrite"
+    assert open(original).read() == "PAYLOAD-OK"
+    assert os.listdir(iroot) == ["live"]
+
+
+@pytest.mark.parametrize("bad_opt", [
+    '-Xmx512m;touch/tmp/pwned',
+    '-Xmx512m$(touch/tmp/pwned)',
+    '-Xmx512m`touch/tmp/pwned`',
+    '-Xmx512m"\nExecStart=/bin/sh',
+])
+def test_restore_rejects_hostile_jvm_opts_before_rendering(env, monkeypatch, bad_opt):
+    iroot, _ = env
+    base = _mk_app(iroot, "src", port=8090)
+    setenv = os.path.join(base, "bin", "setenv.sh")
+    body = open(setenv).read().replace('-Xmx512m"', bad_opt + '"')
+    with open(setenv, "w") as f:
+        f.write(body)
+    arc = store.backup_app("src")["archive"]
+    monkeypatch.setattr(store.service, "install_unit",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("unsafe config rendered")))
+    with pytest.raises(ValueError, match="archived"):
+        store.restore(arc, as_name="clone")
+    assert not instance.exists("clone")
+
+
+@pytest.mark.parametrize("field,value", [("type", "../../systemd"), ("port", "not-a-port")])
+def test_restore_rejects_invalid_manifest_contract(env, tmp_path, field, value):
+    iroot, _ = env
+    _mk_app(iroot, "src", port=8090)
+    arc = store.backup_app("src")["archive"]
+    unpacked = str(tmp_path / ("unpacked-" + field))
+    archive.safe_extract_tar(arc, unpacked)
+    manifest_path = os.path.join(unpacked, "manifest.json")
+    man = json.loads(open(manifest_path).read())
+    man[field] = value
+    with open(manifest_path, "w") as f:
+        json.dump(man, f)
+    tampered = str(tmp_path / ("tampered-%s.tar.gz" % field))
+    archive.pack([(manifest_path, "manifest.json"),
+                  (os.path.join(unpacked, "base"), "base")], tampered)
+    with pytest.raises(ValueError):
+        store.restore(tampered, as_name="clone")
+    assert not instance.exists("clone")
+
+
+def test_restore_refuses_symlink_target_even_when_marker_resolves(env):
+    iroot, _ = env
+    _mk_app(iroot, "src", port=8090)
+    arc = store.backup_app("src")["archive"]
+    os.symlink(instance.base_path("src"), instance.base_path("clone"))
+    with pytest.raises(RuntimeError, match="symlink"):
+        store.restore(arc, as_name="clone")
+
+
+def test_restore_stop_failure_leaves_live_tree_untouched(env, monkeypatch):
+    iroot, _ = env
+    live = _mk_app(iroot, "live", port=8090)
+    original = os.path.join(live, "webapps", "ROOT", "index.jsp")
+    arc = store.backup_app("live")["archive"]
+    with open(original, "w") as f:
+        f.write("LIVE-NEWER")
+    monkeypatch.setattr(store.service, "status", lambda app: "active")
+    monkeypatch.setattr(store.service, "action",
+                        lambda app, what: (_ for _ in ()).throw(RuntimeError("stop failed")))
+    with pytest.raises(RuntimeError, match="stop failed"):
+        store.restore(arc)
+    assert open(original).read() == "LIVE-NEWER"
+
+
+def test_restore_overwrite_preserves_inactive_state_and_hides_transaction(env, monkeypatch):
+    iroot, _ = env
+    _mk_app(iroot, "live", port=8090)
+    arc = store.backup_app("live")["archive"]
+    seen = []
+
+    def install(*args, **kwargs):
+        seen.append(sorted(os.listdir(iroot)))
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_unit", install)
+    monkeypatch.setattr(store.service, "enable_start",
+                        lambda app: (_ for _ in ()).throw(AssertionError("inactive app was started")))
+    store.restore(arc)
+    assert seen == [["live"]]
+
+
+def test_per_app_restore_lock_rejects_overlap(env):
+    with store._app_restore_lock("live"):
+        with pytest.raises(RuntimeError, match="already in progress"):
+            with store._app_restore_lock("live"):
+                pass
+
+
+def test_restore_jar_preserves_opts_and_rolls_back_tree(env, monkeypatch):
+    iroot, _ = env
+    live = _mk_jar(iroot, "live", port=8090, opts="-Xms128m -Xmx768m")
+    arc = store.backup_app("live")["archive"]
+    with open(os.path.join(live, "app.jar"), "wb") as f:
+        f.write(b"newer-live-jar")
+    captured = []
+
+    def fail_install(*args, **kwargs):
+        captured.append(kwargs.get("java_opts"))
+        raise RuntimeError("jar unit failed")
+
+    monkeypatch.setattr(store.service, "install_jar_unit", fail_install)
+    with pytest.raises(RuntimeError, match="jar unit failed"):
+        store.restore(arc)
+    assert captured == ["-Xms128m -Xmx768m"]
+    assert open(os.path.join(live, "app.jar"), "rb").read() == b"newer-live-jar"
 
 
 def test_delete_backup_refuses_escape(env):
