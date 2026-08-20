@@ -2,11 +2,14 @@
 """aaPanel HTTP compat helpers — AddSite must attach a real reverse-proxy upstream."""
 import json
 
+import pytest
+
 from core.compat import aapanel as panel_api
 from core import config
 
 
 def test_http_add_site_with_proxy_calls_createproxy(monkeypatch, tmp_path):
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
     config._CACHE.pop("k", None)
     config.set("aapanel_api_key", "test-sk")
@@ -40,6 +43,7 @@ def test_http_add_site_with_proxy_calls_createproxy(monkeypatch, tmp_path):
 
 def test_http_add_site_fails_without_proxy_attach(monkeypatch, tmp_path):
     """Site row alone is not success — CreateProxy + file fallback must both fail."""
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
     config._CACHE.pop("k", None)
     config.set("aapanel_api_key", "test-sk")
@@ -58,11 +62,12 @@ def test_http_add_site_fails_without_proxy_attach(monkeypatch, tmp_path):
         lambda domain, port: (False, "nginx -t failed"))
     res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
     assert isinstance(res, dict) and res.get("ok") is False
-    assert "CreateProxy failed" in res.get("error", "")
+    assert "Proxy attach failed" in res.get("error", "")
 
 
 def test_http_add_site_uses_proxy_file_fallback(monkeypatch, tmp_path):
     """When CreateProxy fails, writing aaPanel proxy include files still succeeds."""
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
     config._CACHE.pop("k", None)
     config.set("aapanel_api_key", "test-sk")
@@ -86,6 +91,7 @@ def test_http_add_site_uses_proxy_file_fallback(monkeypatch, tmp_path):
 
 
 def test_write_aapanel_proxy_files_layout(monkeypatch, tmp_path):
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     domain = "jhprobe.example.com"
     vhost = tmp_path / "vhost" / "nginx"
     proxy_root = vhost / "proxy" / domain
@@ -201,6 +207,23 @@ def test_require_nginx_ok_for_nginx(monkeypatch):
     assert panel_api.require_nginx() is None
 
 
+def test_detect_webserver_is_unknown_without_panel_or_server_tree(monkeypatch):
+    monkeypatch.setattr(panel_api, "public", None)
+    monkeypatch.setattr(panel_api.os.path, "isfile", lambda path: False)
+    monkeypatch.setattr(panel_api.os.path, "isdir", lambda path: False)
+    assert panel_api.detect_webserver() == "unknown"
+
+
+def test_detect_webserver_is_unknown_for_ambiguous_server_trees(monkeypatch):
+    monkeypatch.setattr(panel_api, "public", None)
+    monkeypatch.setattr(
+        panel_api.os.path, "isfile",
+        lambda path: path.endswith("/nginx") or path.endswith("/httpd"),
+    )
+    monkeypatch.setattr(panel_api.os.path, "isdir", lambda path: False)
+    assert panel_api.detect_webserver() == "unknown"
+
+
 def test_http_add_site_fails_closed_when_not_nginx(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
     config._CACHE.pop("k", None)
@@ -278,7 +301,62 @@ def test_http_add_site_conflict_on_foreign_exist(monkeypatch, tmp_path):
     assert "not a JavaHost site" in res.get("error", "")
 
 
-def test_http_add_site_rolls_back_orphan(monkeypatch, tmp_path):
+def test_site_marker_requires_exact_grammar_domain_and_valid_port():
+    assert panel_api._site_ps_is_javahost(
+        "JavaHost: app.example.com -> http://127.0.0.1:8085",
+        "app.example.com",
+    ) is True
+
+
+@pytest.mark.parametrize("marker", [
+    "migrated from JavaHost: app.example.com -> http://127.0.0.1:8085",
+    "not JavaHost: app.example.com -> http://127.0.0.1:8085",
+    "JavaHost: other.example.com -> http://127.0.0.1:8085",
+    "JavaHost: app.example.com -> http://127.0.0.1:0",
+    "JavaHost: app.example.com -> http://127.0.0.1:70000",
+    "JavaHost: app.example.com -> http://10.0.0.1:8085",
+])
+def test_site_marker_rejects_adversarial_or_mismatched_notes(marker):
+    assert panel_api._site_ps_is_javahost(marker, "app.example.com") is False
+
+
+def test_http_add_site_reports_failed_reuse_without_created_site_claim(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    config._CACHE.pop("k", None)
+    config.set("aapanel_api_key", "test-sk")
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
+
+    def fake_http(path, params=None, body=None, method="GET", timeout=30):
+        action = (params or {}).get("action")
+        if action == "AddSite":
+            return {"status": False, "msg": "Site already exists"}, None
+        if action == "getData":
+            return {"data": [{
+                "id": 9,
+                "name": "app.example.com",
+                "ps": "JavaHost: app.example.com -> http://127.0.0.1:8085",
+            }]}, None
+        return {"status": False, "msg": "CreateProxy crash"}, None
+
+    monkeypatch.setattr(panel_api, "http_request", fake_http)
+    monkeypatch.setattr(panel_api.os, "makedirs", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "scrub_site_inline_proxy", lambda domain: (False, ""))
+    monkeypatch.setattr(panel_api, "_restore_site_conf", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "write_aapanel_proxy_files",
+                        lambda domain, port: (False, "nginx -t failed"))
+
+    res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
+
+    assert res.get("ok") is False
+    assert res.get("reused") is True
+    assert res.get("site_may_remain") is False
+    assert res.get("rollback_refused") is False
+    assert "existing JavaHost site" in res.get("error", "")
+    assert "new aaPanel site" not in res.get("error", "")
+
+
+def test_http_add_site_never_auto_deletes_failed_created_site(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
     config._CACHE.pop("k", None)
     config.set("aapanel_api_key", "test-sk")
@@ -288,10 +366,7 @@ def test_http_add_site_rolls_back_orphan(monkeypatch, tmp_path):
     def fake_http(path, params=None, body=None, method="GET", timeout=30):
         action = (params or {}).get("action")
         if action == "AddSite":
-            return {"status": True}, None
-        if action == "getData":
-            return {"data": [{"id": 42, "name": "app.example.com",
-                             "ps": "JavaHost: app"}]}, None
+            return {"status": True, "id": 42}, None
         if action == "DeleteSite":
             deleted.append(body)
             return {"status": True}, None
@@ -308,6 +383,74 @@ def test_http_add_site_rolls_back_orphan(monkeypatch, tmp_path):
         lambda domain, port: (False, "nginx -t failed"))
     res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
     assert isinstance(res, dict) and res.get("ok") is False
-    assert res.get("rolled_back") is True
-    assert "rolled back" in res.get("error", "")
-    assert deleted and deleted[0].get("id") == "42"
+    assert res.get("site_may_remain") is True
+    assert res.get("rollback_refused") is True
+    assert res.get("site_id") == "42"
+    assert "manually" in res.get("manual_cleanup", "")
+    assert "rolled back" not in res.get("error", "")
+    assert deleted == []
+
+
+def test_http_add_site_refuses_rollback_without_stable_created_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    config._CACHE.pop("k", None)
+    config.set("aapanel_api_key", "test-sk")
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
+    deleted = []
+
+    def fake_http(path, params=None, body=None, method="GET", timeout=30):
+        action = (params or {}).get("action")
+        if action == "AddSite":
+            return {"status": True}, None
+        if action == "DeleteSite":
+            deleted.append(body)
+            return {"status": True}, None
+        return {"status": False, "msg": "CreateProxy crash"}, None
+
+    monkeypatch.setattr(panel_api, "http_request", fake_http)
+    monkeypatch.setattr(panel_api.os, "makedirs", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "scrub_site_inline_proxy", lambda domain: (False, ""))
+    monkeypatch.setattr(panel_api, "_restore_site_conf", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "write_aapanel_proxy_files",
+                        lambda domain, port: (False, "nginx -t failed"))
+
+    res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
+
+    assert res.get("ok") is False
+    assert res.get("site_may_remain") is True
+    assert res.get("rollback_refused") is True
+    assert "site_id" not in res
+    assert deleted == []
+
+
+def test_http_add_site_does_not_delete_concurrent_replacement(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    config._CACHE.pop("k", None)
+    config.set("aapanel_api_key", "test-sk")
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
+    deleted = []
+
+    def fake_http(path, params=None, body=None, method="GET", timeout=30):
+        action = (params or {}).get("action")
+        if action == "AddSite":
+            return {"status": True, "id": 42}, None
+        if action == "DeleteSite":
+            deleted.append(body)
+            return {"status": True}, None
+        return {"status": False, "msg": "CreateProxy crash"}, None
+
+    monkeypatch.setattr(panel_api, "http_request", fake_http)
+    monkeypatch.setattr(panel_api.os, "makedirs", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "scrub_site_inline_proxy", lambda domain: (False, ""))
+    monkeypatch.setattr(panel_api, "_restore_site_conf", lambda *a, **k: None)
+    monkeypatch.setattr(panel_api, "write_aapanel_proxy_files",
+                        lambda domain, port: (False, "nginx -t failed"))
+
+    res = panel_api.http_add_site_with_proxy("app.example.com", 8085)
+
+    assert res.get("ok") is False
+    assert res.get("site_may_remain") is True
+    assert res.get("rollback_refused") is True
+    assert deleted == []
