@@ -5,12 +5,12 @@
   "panel_type": "soft",
   "type": "environment",
   "ps": "Manage Java (8/11/17/21) and Apache Tomcat 9/10.1/11 with verified downloads, systemd services, reverse-proxy, and PostgreSQL/MySQL/MariaDB/MongoDB helpers. Independent OSS plugin (Apache-2.0).",
-  "versions": "0.29.0",
+  "versions": "0.29.1",
   "shell": "install.sh",
   "checks": "/www/server/javahost",
   "author": "yashodhank",
   "home": "https://github.com/yashodhank/aaPanel-tomcat-plugin",
-  "date": "2026-08-13",
+  "date": "2026-08-20",
   "default": false,
   "display": 1
 }
