@@ -589,7 +589,12 @@ class javahost_main(object):
     def AppAction(self, get):
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            what = panel.attr(get, "action")
+            # ``action`` is reserved by aaPanel's plugin router.  HTTP callers
+            # use ``operation``; retain ``action`` only for direct Python/CLI
+            # callers that bypass the router.
+            what = panel.attr(get, "operation", None)
+            if what is None:
+                what = panel.attr(get, "action")
             service.action(app, what)
             return panel.ok({"app": app, "status": service.status(app)})
         except Exception as e:
@@ -602,7 +607,10 @@ class javahost_main(object):
         the resulting status the job prints. The sync AppAction stays for CLI."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            action = str(panel.attr(get, "action") or "").strip().lower()
+            operation = panel.attr(get, "operation", None)
+            if operation is None:
+                operation = panel.attr(get, "action")
+            action = str(operation or "").strip().lower()
             if action not in ("start", "stop", "restart", "repair"):
                 return panel.err("invalid action: %r (start|stop|restart|repair)" % action)
             if action == "repair":
@@ -1112,7 +1120,12 @@ class javahost_main(object):
     def GetDoc(self, get):
         """Return a bundled doc's markdown for in-UI rendering (no 404 file links)."""
         try:
-            name = panel.attr(get, "name", "")
+            # ``name`` selects the plugin in aaPanel's router.  Browser clients
+            # use ``doc`` so the POST body cannot replace ``name=javahost``;
+            # keep the legacy field for direct Python integrations.
+            name = panel.attr(get, "doc", None)
+            if name is None:
+                name = panel.attr(get, "name", "")
             if name not in self._ALLOWED_DOCS:
                 return panel.err("unknown document: %r" % name)
             path = os.path.realpath(os.path.join(self._DOCS_DIR, name + ".md"))
