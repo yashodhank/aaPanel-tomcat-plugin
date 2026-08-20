@@ -319,6 +319,56 @@ def test_jquery_timeout_abort_and_fail_callback_settle_once(html):
     assert "timed out" in result["callbacks"][0]["msg"].lower()
 
 
+def test_fetch_rejects_json_values_without_a_panel_envelope(html):
+    helper = section(html, "var LOGIN_RE", "// {status,msg}")
+    result = run_node(
+        """
+        const window={}; const responses=[null,{},[],"ok"];
+        function sessionExpired(){throw new Error('unexpected session expiry');}
+        function setTimeout(){return 1;} function clearTimeout(){}
+        function fetch(){const value=responses.shift();return Promise.resolve({
+          redirected:false,url:'/plugin',status:200,ok:true,
+          text:()=>Promise.resolve(JSON.stringify(value))
+        });}
+        """ + helper + """
+        function run(){return new Promise(resolve=>call('GetStatus',{},resolve));}
+        Promise.all([run(),run(),run(),run()]).then(values=>
+          process.stdout.write(JSON.stringify(values)));
+        """
+    )
+    assert len(result) == 4
+    assert all(item["status"] is False for item in result)
+    assert all(item["transport_uncertain"] is True for item in result)
+    assert all("invalid response" in item["msg"].lower() for item in result)
+
+
+def test_jquery_rejects_json_values_without_a_panel_envelope(html):
+    helper = section(html, "var LOGIN_RE", "// {status,msg}")
+    result = run_node(
+        """
+        const responses=[null,{},[],"ok"];
+        function sessionExpired(){throw new Error('unexpected session expiry');}
+        function setTimeout(){return 1;} function clearTimeout(){}
+        function $(){}
+        $.post=function(_url,_data,success){
+          const value=responses.shift();
+          const request={fail:function(){return request;}};
+          setImmediate(()=>success(value,'success',{status:200,responseURL:'/plugin'}));
+          return request;
+        };
+        const window={$:$};
+        """ + helper + """
+        function run(){return new Promise(resolve=>call('GetStatus',{},resolve));}
+        Promise.all([run(),run(),run(),run()]).then(values=>
+          process.stdout.write(JSON.stringify(values)));
+        """
+    )
+    assert len(result) == 4
+    assert all(item["status"] is False for item in result)
+    assert all(item["transport_uncertain"] is True for item in result)
+    assert all("invalid response" in item["msg"].lower() for item in result)
+
+
 def test_non_json_transport_response_is_not_mislabeled_session_expiry(html):
     helper = section(html, "var LOGIN_RE", "// Panel plugin convention")
     function = section(html, "function call", "// {status,msg}")
