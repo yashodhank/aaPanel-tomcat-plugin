@@ -1236,6 +1236,8 @@ def test_ssl_read_marker_roundtrip(monkeypatch, tmp_path):
 
 
 def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     from core.tomcat import instance as inst
     from core.util import shell as shellmod
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
@@ -1264,6 +1266,8 @@ def test_ssl_enable_falls_back_to_certbot(monkeypatch, tmp_path):
 
 
 def test_ssl_enable_reports_failure_when_no_cert(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     from core.tomcat import instance as inst
     from core.util import shell as shellmod
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
@@ -1318,6 +1322,8 @@ def test_remove_site_clears_marker_on_success(tmp_path, monkeypatch):
 
 def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
     """When all aaPanel API paths fail, set_site returns error — no nginx fallback."""
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
@@ -1336,6 +1342,8 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
     from core.tomcat import instance as inst
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     (tmp_path / "demo" / "bin").mkdir(parents=True)
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
@@ -1354,6 +1362,8 @@ def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
 # ---- ssl.disable reverts to HTTP and clears the marker ----------------------
 def test_ssl_disable_reverts_to_http(tmp_path, monkeypatch):
     from core.tomcat import instance as inst
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: True)
@@ -1376,6 +1386,8 @@ def test_ssl_disable_reverts_to_http(tmp_path, monkeypatch):
 # ---- ssl.enable native-success path stores cert not_after in the marker -----
 def test_ssl_enable_marker_carries_not_after(tmp_path, monkeypatch):
     from core.tomcat import instance as inst
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "ACME_WEBROOT", str(tmp_path / "acme"))
@@ -1501,6 +1513,48 @@ def test_setsitessl_disable_ok_is_panel_ok(monkeypatch):
     res = javahost_main.javahost_main().SetSiteSSL(G())
     assert res.get("status") is True
     assert res.get("msg", {}).get("ssl") is False
+
+
+def test_setsitessl_disable_failure_is_panel_err(monkeypatch):
+    """ssl.disable leaving ssl=True / error must be panel.err, not panel.ok."""
+    import javahost_main
+
+    monkeypatch.setattr(javahost_main.proxy, "read_domain",
+                        lambda app: "app.example.com")
+    monkeypatch.setattr(javahost_main.instance, "detail",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(javahost_main.instance, "health",
+                        lambda app: {"port": 8085})
+    monkeypatch.setattr(
+        javahost_main.ssl, "disable",
+        lambda app, domain, port: {
+            "ssl": True,
+            "error": "aaPanel HTTPS disable failed — SSL marker left on",
+            "url": "https://app.example.com/",
+        },
+    )
+
+    class G(object):
+        app = "demo"
+        enable = "0"
+        domain = None
+        email = None
+
+    res = javahost_main.javahost_main().SetSiteSSL(G())
+    assert res.get("status") is False
+    assert "disable failed" in (res.get("msg") or "").lower()
+
+
+def test_set_site_fails_closed_when_not_nginx(tmp_path, monkeypatch):
+    from core.tomcat import instance as inst
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
+    (tmp_path / "demo" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "apache")
+    res = proxy.set_site("demo", "demo.example.com", 8080)
+    assert res["ok"] is False
+    assert "nginx" in res["error"].lower()
+    assert "apache" in res["error"].lower()
 
 
 # ---- sitestatus.probe shape (openssl + urllib monkeypatched) ----------------
@@ -1747,6 +1801,8 @@ def test_wipe_rejects_bad_scope():
 # ---- aaPanel HTTP API site registration -----------------------------------
 def test_aapanel_add_site_http_api_succeeds(monkeypatch):
     """HTTP API is Path 1 — succeeds."""
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(proxy, "_try_aapanel_http_api",
                         lambda d, p: {"ok": True, "path": "aapanel-http",
                                       "detail": "via HTTP AddSite"})
@@ -1759,6 +1815,8 @@ def test_aapanel_add_site_http_api_succeeds(monkeypatch):
 
 def test_aapanel_add_site_all_paths_fail(monkeypatch):
     """All 3 tiers fail — returns ok=False with tried paths."""
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(proxy, "_try_aapanel_class_api", lambda d, p: None)
     monkeypatch.setattr(proxy, "_try_legacy_panelSite_import", lambda d, p: None)
     monkeypatch.setattr(proxy, "_try_aapanel_http_api", lambda d, p: None)

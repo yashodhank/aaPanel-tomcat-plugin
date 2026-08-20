@@ -407,10 +407,14 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
       3. Legacy panelSite module (older aaPanel versions)
 
     Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str,
-            "tried": [str]}.
+            "tried": [str]}. Fail-closed when the active webserver is not nginx.
     """
     domain = validate.domain(domain)
     port = validate.port(port)
+    nginx_err = panel_api.require_nginx()
+    if nginx_err:
+        return {"ok": False, "path": "aapanel", "error": nginx_err,
+                "detail": nginx_err, "tried": ["webserver-gate"]}
     tried = []
 
     # Path 1: HTTP API (most reliable — same auth scheme proven on VPS)
@@ -437,9 +441,14 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         return res
 
     paths = ", ".join(tried)
+    hint = ""
+    if "http-api-skipped-no-key" in tried:
+        hint = (" Configure aapanel_api_key in Settings — required on aaPanel "
+                "7.x where panelSite.CreateProxy crashes (see "
+                "docs/bugs/createproxy-checklocation-bool-regex.md).")
     return {"ok": False, "path": "aapanel",
             "detail": "aaPanel site registration failed: tried [%s] — "
-                      "none succeeded" % paths,
+                      "none succeeded.%s" % (paths, hint),
             "tried": tried}
 
 
@@ -588,10 +597,15 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     Primary path: aaPanel's native panelSite.CreateProxy() or HTTP API.
     On ALL failure, returns an error — NO direct nginx modification.
     Site registration goes ONLY through aaPanel's APIs.
+    Fail-closed when the active webserver is not nginx.
     """
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
+
+    nginx_err = panel_api.require_nginx()
+    if nginx_err:
+        return {"ok": False, "error": nginx_err}
 
     # Changing domain: attach the NEW site first; only then drop the previous
     # aaPanel site. Delete-before-create orphans the live site when add fails.

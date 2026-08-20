@@ -241,6 +241,8 @@ def test_prune_keeps_newest(tmp_path, monkeypatch):
 # reverse-proxy sites (no nginx, no aaPanel)
 # --------------------------------------------------------------------------- #
 def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     vdir = str(tmp_path / "vhost")
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "aapanel_add_site",
@@ -257,6 +259,8 @@ def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
 
 
 def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
+    from core.compat import aapanel as panel_api
+    monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     monkeypatch.setattr(proxy, "aapanel_add_site",
                         lambda d, p: {"ok": True, "path": "aapanel",

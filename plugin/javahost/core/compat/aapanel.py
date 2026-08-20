@@ -25,7 +25,7 @@ import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 from .. import config
-from ..util import fs
+from ..util import fs, validate
 from ..util.shell import run
 
 try:
@@ -60,6 +60,61 @@ def log(action: str, msg: str) -> None:
 def attr(get: Any, name: str, default=None):
     """Safe attribute access on the panel `get` namespace."""
     return getattr(get, name, default)
+
+
+# --- webserver gate (nginx-only until Apache/OLS epic) -----------------------
+
+_SUPPORTED_WEBSERVER = "nginx"
+
+
+def detect_webserver() -> str:
+    """Best-effort webserver id: nginx | apache | openlitespeed | unknown.
+
+    Prefers ``public.get_webserver()`` when running inside the panel. Falls back
+    to aaPanel filesystem layout only when exactly one known server tree is
+    present. Missing or conflicting evidence reports ``unknown``; callers that
+    write nginx configuration therefore fail closed.
+    """
+    if public is not None:
+        try:
+            ws = str(public.get_webserver() or "").strip().lower()
+            if ws in ("nginx", "apache"):
+                return ws
+            if ws in ("openlitespeed", "ols", "open_litespeed", "open-litespeed"):
+                return "openlitespeed"
+            if ws:
+                return ws
+        except Exception:
+            pass
+    has_nginx = os.path.isfile("/www/server/nginx/sbin/nginx")
+    has_apache = (
+        os.path.isfile("/www/server/apache/bin/httpd")
+        or os.path.isfile("/www/server/apache/bin/apachectl")
+    )
+    has_ols = (
+        os.path.isdir("/usr/local/lsws/conf")
+        or os.path.isdir("/www/server/panel/vhost/openlitespeed")
+    )
+    detected = [
+        name for name, present in (
+            ("nginx", has_nginx),
+            ("apache", has_apache),
+            ("openlitespeed", has_ols),
+        ) if present
+    ]
+    return detected[0] if len(detected) == 1 else "unknown"
+
+
+def require_nginx() -> Optional[str]:
+    """Return a clear error when the active webserver is not nginx, else None."""
+    ws = detect_webserver()
+    if ws == _SUPPORTED_WEBSERVER:
+        return None
+    return (
+        "JavaHost reverse proxy and SSL require nginx (detected %s). "
+        "Apache and OpenLiteSpeed are not supported yet — switch the panel "
+        "webserver to nginx, or wait for a future release." % ws
+    )
 
 
 # --- loopback HTTP API -------------------------------------------------------
@@ -137,6 +192,63 @@ def http_request(path: str, *, params: Optional[Dict] = None,
         return None, str(e)
 
 
+def _lookup_site_row(domain: str) -> Optional[Dict]:
+    """Return the aaPanel sites-table row for ``domain``, or None."""
+    result, _ = http_request(
+        "/data",
+        params={"action": "getData", "table": "sites", "search": domain},
+        method="GET", timeout=15)
+    if not isinstance(result, dict):
+        return None
+    data_list = result.get("data") or result.get("msg") or []
+    if not isinstance(data_list, list):
+        return None
+    for row in data_list:
+        if isinstance(row, dict) and row.get("name") == domain:
+            return row
+    return None
+
+
+def _created_site_id(result: Dict) -> Optional[str]:
+    """Extract an explicit, stable site id from a successful AddSite result."""
+    candidates = [result]
+    for key in ("data", "msg"):
+        nested = result.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for item in candidates:
+        for key in ("id", "site_id", "siteId"):
+            value = item.get(key)
+            if isinstance(value, bool):
+                continue
+            raw = str(value or "").strip()
+            if raw.isdigit() and int(raw) > 0:
+                return raw
+    return None
+
+
+_SITE_PS_RE = re.compile(
+    r"\AJavaHost: (?P<domain>[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?) "
+    r"-> http://127\.0\.0\.1:(?P<port>[0-9]{1,5})\Z"
+)
+
+
+def _site_ps_is_javahost(ps: Any, domain: str) -> bool:
+    """Require the exact JavaHost marker grammar for the requested domain."""
+    try:
+        expected_domain = validate.domain(domain)
+    except (TypeError, ValueError):
+        return False
+    match = _SITE_PS_RE.fullmatch(str(ps or ""))
+    if not match or match.group("domain") != expected_domain:
+        return False
+    try:
+        validate.port(match.group("port"))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     """Create an aaPanel site and attach a reverse-proxy to 127.0.0.1:<port>.
 
@@ -145,7 +257,16 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     ``ok=False``/``error`` when the site was created but proxy attach failed
     (so callers do not silently fall through and leave orphans undiagnosed),
     or None when the API key is missing / AddSite itself failed.
+
+    Fail-closed on non-nginx. Reuses an existing site only when its ``ps``
+    has an exact JavaHost marker bound to this domain; otherwise returns a
+    conflict error. A failed attach never deletes the aaPanel site automatically
+    because DeleteSite has no conditional ownership precondition.
     """
+    nginx_err = require_nginx()
+    if nginx_err:
+        return {"ok": False, "path": "aapanel-http", "error": nginx_err}
+
     backend = "http://127.0.0.1:%d" % int(port)
     # CreateProxy writes under vhost/nginx/proxy/<site>/ — if the parent dir is
     # missing (fresh panels), the call fails silently / with a vague error.
@@ -157,6 +278,7 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     except OSError:
         pass
 
+    ownership_marker = "JavaHost: %s -> %s" % (domain, backend)
     add_body = {
         "webname": json.dumps({"domain": domain, "domainlist": [], "count": 0}),
         "path": "/www/wwwroot/%s" % domain,
@@ -164,7 +286,7 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         "type_id": "0",
         "version": "00",
         "port": "80",
-        "ps": "JavaHost: %s -> %s" % (domain, backend),
+        "ps": ownership_marker,
         "ftp": "false",
         "sql": "false",
         "set_ssl": "0",
@@ -175,13 +297,36 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         "/site", params={"action": "AddSite"}, body=add_body,
         method="POST", timeout=30)
     site_ok = False
+    created_by_us = False
+    created_site_id = None
+    reused_existing = False
     if isinstance(data, dict):
         if data.get("status") or data.get("siteStatus"):
             site_ok = True
+            created_by_us = True
+            created_site_id = _created_site_id(data)
         else:
             msg = str(data.get("msg") or data.get("error") or "").lower()
             if "exist" in msg or "already" in msg:
-                site_ok = True
+                row = _lookup_site_row(domain)
+                ps = (row or {}).get("ps") if isinstance(row, dict) else ""
+                if _site_ps_is_javahost(ps, domain):
+                    site_ok = True
+                    reused_existing = True
+                else:
+                    detail = (str(ps).strip() if ps else "no JavaHost marker in site notes")
+                    return {
+                        "ok": False,
+                        "path": "aapanel-http",
+                        "conflict": True,
+                        "error": (
+                            "Domain %s already exists in aaPanel and is not a "
+                            "JavaHost site (%s). Remove or rename it under "
+                            "Website, or choose another domain."
+                            % (domain, detail)
+                        ),
+                        "detail": msg or "site already exists",
+                    }
     if not site_ok:
         return None
 
@@ -213,8 +358,11 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
             "/site", params={"action": "CreateProxy"}, body=proxy_body,
             method="POST", timeout=30)
         if isinstance(pdata, dict) and (pdata.get("status") or pdata.get("siteStatus")):
-            return {"ok": True, "path": "aapanel-http",
-                    "detail": "via HTTP AddSite+CreateProxy -> %s" % backend}
+            out = {"ok": True, "path": "aapanel-http",
+                   "detail": "via HTTP AddSite+CreateProxy -> %s" % backend}
+            if reused_existing:
+                out["reused"] = True
+            return out
         last_detail = ""
         if isinstance(pdata, dict):
             last_detail = str(pdata.get("msg") or pdata.get("error") or pdata)
@@ -225,28 +373,57 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
                 "/site", params={"action": action}, body=proxy_body,
                 method="POST", timeout=30)
             if isinstance(pdata2, dict) and (pdata2.get("status") or pdata2.get("siteStatus")):
-                return {"ok": True, "path": "aapanel-http",
-                        "detail": "via HTTP AddSite+%s -> %s" % (action, backend)}
+                out = {"ok": True, "path": "aapanel-http",
+                       "detail": "via HTTP AddSite+%s -> %s" % (action, backend)}
+                if reused_existing:
+                    out["reused"] = True
+                return out
 
     # CreateProxy is flaky on some aaPanel builds (injects `location` into the
     # wrong conf context). Fall back to writing the panel's own proxy include
     # layout so the site stays aaPanel-visible and nginx -t clean.
     fb_ok, fb_err = write_aapanel_proxy_files(domain, int(port))
     if fb_ok:
-        return {"ok": True, "path": "aapanel-http-fallback",
-                "detail": "via AddSite + panel proxy files -> %s (CreateProxy was: %s)"
-                % (backend, last_detail or "failed")}
+        out = {"ok": True, "path": "aapanel-http-fallback",
+               "detail": "via AddSite + panel proxy files -> %s (CreateProxy was: %s)"
+               % (backend, last_detail or "failed")}
+        if reused_existing:
+            out["reused"] = True
+        return out
 
     # Total failure — restore pre-scrub site conf so we don't leave a blanked
     # reverse-proxy when CreateProxy/fallback both failed.
     _restore_site_conf(domain, scrub_snap)
-    return {
+    site_context = ("new aaPanel site" if created_by_us
+                    else "existing JavaHost site")
+    base_err = ("Proxy attach failed for %s %s -> %s: %s"
+                % (site_context, domain, backend,
+                   last_detail or fb_err or "no detail"))
+    orphan_hint = (
+        "; the site may remain in aaPanel. Verify Website entry %s%s and "
+        "remove it manually only if it is still the failed JavaHost site, or "
+        "fix nginx and retry SetSite"
+        % (domain, " (site id %s)" % created_site_id if created_site_id else "")
+        if created_by_us else
+        "; the existing JavaHost site was not deleted — fix nginx and retry"
+    )
+    result = {
         "ok": False,
         "path": "aapanel-http",
-        "error": ("aaPanel site created but CreateProxy failed for %s -> %s: %s"
-                  % (domain, backend, last_detail or fb_err or "no detail")),
+        "error": base_err + orphan_hint,
         "detail": last_detail or fb_err or "CreateProxy failed",
+        "site_may_remain": bool(created_by_us),
+        "rollback_refused": bool(created_by_us),
+        "reused": bool(reused_existing),
     }
+    if created_site_id:
+        result["site_id"] = created_site_id
+    if created_by_us:
+        result["manual_cleanup"] = (
+            "In aaPanel Website, verify domain %s and its JavaHost marker before "
+            "manually deleting the failed site." % domain
+        )
+    return result
 
 
 _AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
@@ -415,8 +592,12 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
       include .../proxy/<domain>/*.conf;  inside the site server{} block
       /www/server/panel/data/proxyfile.json entry (Website UI source of truth)
     Returns (ok, error_or_empty). Rolls back site conf / proxyfile / proxy
-    snippet when ``nginx -t`` fails after the write.
+    snippet when ``nginx -t`` fails after the write. Fail-closed when the
+    active webserver is not nginx.
     """
+    nginx_err = require_nginx()
+    if nginx_err:
+        return False, nginx_err
     backend = "http://127.0.0.1:%d" % int(port)
     site_conf = _AAPANEL_SITE_CONF % domain
     proxy_dir = _AAPANEL_PROXY_DIR % domain
@@ -505,19 +686,10 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
 
 def http_remove_site(domain: str) -> bool:
     """Delete a site via getData lookup + DeleteSite. Returns True on success."""
-    result, err_msg = http_request(
-        "/data",
-        params={"action": "getData", "table": "sites", "search": domain},
-        method="GET", timeout=15)
-    if not isinstance(result, dict):
+    row = _lookup_site_row(domain)
+    if not isinstance(row, dict):
         return False
-    site_id = None
-    data_list = result.get("data") or result.get("msg") or []
-    if isinstance(data_list, list):
-        for row in data_list:
-            if isinstance(row, dict) and row.get("name") == domain:
-                site_id = row.get("id")
-                break
+    site_id = row.get("id")
     if not site_id:
         return False
     data2, _ = http_request(
@@ -548,16 +720,17 @@ def http_apply_cert(domain: str) -> Optional[bool]:
 def http_enable_site_ssl(domain: str) -> bool:
     """Ask aaPanel to enable HTTPS on an existing site (panel-owned vhost).
 
-    Tries SetSSL / HttpToHttps style actions after apply_cert_api. Best-effort:
-    returns True if any call reports success.
+    Issues/installs a cert via apply_cert_api (best-effort), then requires a
+    confirmed SetSSL / HttpToHttps / set_https_mode success. Cert-on-disk or
+    apply_cert alone never counts as HTTPS enabled.
     """
     if not config.aapanel_api_key():
         return False
-    ok_any = False
-    # apply_cert_api often both issues and installs into the site's panel cert dir
-    applied = http_apply_cert(domain)
-    if applied:
-        ok_any = True
+    nginx_err = require_nginx()
+    if nginx_err:
+        return False
+    # Best-effort: place cert material first. Success here is NOT HTTPS enable.
+    http_apply_cert(domain)
     for action, body in (
         ("SetSSL", {"type": "1", "siteName": domain, "updateOf": "1"}),
         ("HttpToHttps", {"siteName": domain}),
@@ -567,8 +740,8 @@ def http_enable_site_ssl(domain: str) -> bool:
             "/site", params={"action": action}, body=body,
             method="POST", timeout=60)
         if isinstance(data, dict) and (data.get("status") or data.get("success")):
-            ok_any = True
-    return ok_any
+            return True
+    return False
 
 
 def http_disable_site_ssl(domain: str) -> bool:

@@ -25,7 +25,7 @@ def CreateProxy(self, get):
             return self.CheckLocation(get)
 ```
 
-The `CheckLocation()` call at line 4064 is **outside** the `if not nocheck:` guard block. It runs unconditionally when the webserver is nginx (which it always is on this VPS).
+The `CheckLocation()` call at line 4064 is **outside** the `if not nocheck:` guard block. It runs unconditionally when the webserver is nginx.
 
 `CheckLocation()` calls `re.findall(rep, conf)` where `conf` comes from `self.__read_config()` — which returns a **bool** instead of a string in some code paths.
 
@@ -33,15 +33,27 @@ The `CheckLocation()` call at line 4064 is **outside** the `if not nocheck:` gua
 
 ## Impact
 
-- Cannot create reverse-proxy sites via aaPanel's Python API (`panelSite.CreateProxy`)
-- The HTTP API path (`POST /site?action=AddSite`) works correctly when `api_sk` is configured
-- Plugin falls back to nginx vhost as last resort
+- Cannot create reverse-proxy sites via aaPanel's Python class API (`panelSite.CreateProxy`)
+- The HTTP API path (`POST /site?action=AddSite` + `CreateProxy`) works when `api_sk` / Settings **API key** is configured
+- JavaHost does **not** fall back to a plugin-owned nginx vhost for SetSite (aaPanel owns the site)
 
-## Workaround (implemented in JavaHost v0.28.1)
+## Workaround (JavaHost ≥ 0.28 / current)
 
-1. `_try_aapanel_class_api()` catches the TypeError and returns None
-2. Falls through to `_try_aapanel_http_api()` which calls aaPanel's HTTP API with `api_sk`
-3. If HTTP API also fails, falls back to plugin-owned nginx vhost with warning
+1. Configure **Settings → aaPanel API key** (`aapanel_api_key`) — required on aaPanel 7.x
+2. `_try_aapanel_class_api()` catches the TypeError and returns `None`
+3. HTTP path runs first when the key is set: `AddSite` + `CreateProxy` (with retries)
+4. If HTTP `CreateProxy` still fails (wrong nginx context), JavaHost writes aaPanel's own
+   `vhost/nginx/proxy/<domain>/*.conf` + `proxyfile.json` include layout (not a competing
+   JavaHost vhost), then `nginx -t` + reload
+5. If both CreateProxy and the file fallback fail after AddSite created a shell site,
+   JavaHost never calls `DeleteSite` automatically: aaPanel offers no conditional
+   ownership precondition at deletion time. It returns `panel.err`, `site_may_remain`,
+   the AddSite ID when available, and explicit manual verification/cleanup guidance
+6. Non-nginx webservers (Apache / OpenLiteSpeed) fail closed with a clear error — no
+   silent “success” with dead traffic
+
+Without an API key, SetSite tries class/legacy APIs only and typically fails on 7.x;
+configure the key rather than expecting a plugin nginx fallback.
 
 ## To fix in aaPanel
 
