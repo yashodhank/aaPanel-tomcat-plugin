@@ -1658,6 +1658,98 @@ def test_start_app_action_returns_job_id(monkeypatch):
     assert captured["kind"] == "app-restart" and captured["target"] == "demo"
 
 
+def test_start_app_action_accepts_router_safe_operation(monkeypatch):
+    """HTTP clients use ``operation`` because aaPanel reserves ``action``."""
+    import javahost_main
+    captured = {}
+
+    def fake_start(kind, target, argv):
+        captured["kind"] = kind
+        return "app-restart-router-safe"
+
+    monkeypatch.setattr(javahost_main.jobs, "start", fake_start)
+
+    class G(object):
+        app = "demo"
+        action = "a"
+        operation = "restart"
+
+    res = javahost_main.javahost_main().StartAppAction(G())
+    assert res["status"] is True
+    assert res["msg"]["action"] == "restart"
+    assert captured["kind"] == "app-restart"
+
+
+def test_sync_app_action_accepts_router_safe_operation(monkeypatch):
+    import javahost_main
+    captured = {}
+
+    monkeypatch.setattr(
+        javahost_main.service,
+        "action",
+        lambda app, operation: captured.update(app=app, operation=operation),
+    )
+    monkeypatch.setattr(
+        javahost_main.service,
+        "status",
+        lambda app: "active",
+    )
+
+    class G(object):
+        app = "demo"
+        action = "a"
+        operation = "restart"
+
+    res = javahost_main.javahost_main().AppAction(G())
+    assert res["status"] is True
+    assert captured == {"app": "demo", "operation": "restart"}
+
+
+def test_sync_app_action_keeps_legacy_action_for_direct_python(monkeypatch):
+    import javahost_main
+    captured = {}
+
+    monkeypatch.setattr(
+        javahost_main.service,
+        "action",
+        lambda app, operation: captured.update(app=app, operation=operation),
+    )
+    monkeypatch.setattr(javahost_main.service, "status", lambda app: "inactive")
+
+    class G(object):
+        app = "demo"
+        action = "stop"
+
+    res = javahost_main.javahost_main().AppAction(G())
+    assert res["status"] is True
+    assert captured == {"app": "demo", "operation": "stop"}
+
+
+def test_get_doc_accepts_router_safe_doc_parameter():
+    """HTTP Help requests use ``doc`` because aaPanel reserves ``name``."""
+    import javahost_main
+
+    class G(object):
+        name = "javahost"
+        doc = "user-guide"
+
+    res = javahost_main.javahost_main().GetDoc(G())
+    assert res["status"] is True
+    assert res["msg"]["name"] == "user-guide"
+    assert res["msg"]["content"]
+
+
+def test_get_doc_keeps_legacy_name_parameter_for_direct_python_clients():
+    import javahost_main
+
+    class G(object):
+        name = "user-guide"
+
+    res = javahost_main.javahost_main().GetDoc(G())
+    assert res["status"] is True
+    assert res["msg"]["name"] == "user-guide"
+
+
 def test_start_app_action_rejects_bad_action(monkeypatch):
     import javahost_main
     monkeypatch.setattr(javahost_main.jobs, "start",
