@@ -13,16 +13,49 @@ resolved by which unit/script actually exists, so a fallback stays consistent.
 from __future__ import annotations
 
 import os
+import pwd
+import re
 import tempfile
 import time
 from typing import Dict, List, Optional
 
 from . import templating
-from ..util import shell, fs, immutable
+from ..util import shell, fs, immutable, validate
 from .. import config
 
 SYSTEMD_DIR = "/etc/systemd/system"
 INITD_DIR = "/etc/init.d"
+_SERVICE_PATH = re.compile(r"^/[A-Za-z0-9._/+@:-]+$")
+
+
+def validate_service_user(user: str) -> str:
+    """Return an existing non-root account name suitable for a service unit."""
+    if not isinstance(user, str) or not user or any(c in user for c in "\r\n\x00"):
+        raise ValueError("invalid service user")
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError:
+        raise ValueError("service user does not exist: %s" % user)
+    if account.pw_uid == 0:
+        raise ValueError("service user must be non-root: %s" % user)
+    return account.pw_name
+
+
+def _validate_service_path(value: str, field: str) -> str:
+    value = str(value or "")
+    if not _SERVICE_PATH.match(value) or os.path.normpath(value) != value:
+        raise ValueError("unsafe service %s: %r" % (field, value))
+    return value
+
+
+def _validate_java_opts(value: str) -> str:
+    value = str(value or "")
+    # The init.d template embeds this inside a root-evaluated double-quoted
+    # assignment. Reject expansion/quoting characters even if an upstream
+    # caller forgot to route restored values through jvm_opts.sanitize().
+    if any(c in value for c in '\r\n\x00"\\$`'):
+        raise ValueError("unsafe service java_opts")
+    return value
 
 
 def _manage() -> bool:
@@ -102,6 +135,11 @@ def _ctx(app, java_home, catalina_home, catalina_base, user="www") -> Dict[str, 
 def install_unit(app: str, java_home: str, catalina_home: str, catalina_base: str,
                  user: str = "www") -> str:
     """Render + install the service unit (systemd preferred, init.d fallback)."""
+    app = validate.identifier(app, "app")
+    user = validate_service_user(user)
+    java_home = _validate_service_path(java_home, "java_home")
+    catalina_home = _validate_service_path(catalina_home, "catalina_home")
+    catalina_base = _validate_service_path(catalina_base, "catalina_base")
     ctx = _ctx(app, java_home, catalina_home, catalina_base, user)
     if have_systemd() and can_manage(SYSTEMD_DIR):
         path = _unit_path(app)
@@ -119,6 +157,12 @@ def install_jar_unit(app: str, java_home: str, app_dir: str, port: int,
                      java_opts: str = "", user: str = "www") -> str:
     """Install a service that runs an executable JAR (`java -jar`). Same locked-dir
     resilience and per-app backend model as install_unit()."""
+    app = validate.identifier(app, "app")
+    user = validate_service_user(user)
+    java_home = _validate_service_path(java_home, "java_home")
+    app_dir = _validate_service_path(app_dir, "app_dir")
+    port = validate.port(port)
+    java_opts = _validate_java_opts(java_opts)
     ctx = {"app": app, "user": user, "group": user, "java_home": java_home,
            "app_dir": app_dir, "port": str(port), "java_opts": java_opts}
     if have_systemd() and can_manage(SYSTEMD_DIR):
