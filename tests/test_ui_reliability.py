@@ -40,14 +40,14 @@ def run_node(source):
 
 
 def test_stage_upload_requires_an_explicit_success_path(html):
-    source = section(html, "function stageUpload", "MODAL: CREATE APP")
+    source = section(html, "var UPLOAD_TIMEOUT", "MODAL: CREATE APP")
     assert "('/tmp/' + f.name)" not in source
     assert "failed(r)" in source
     assert "r.path" in source or "r.msg.path" in source
 
 
 def test_stage_upload_behavior_rejects_failed_and_pathless_responses(html):
-    function = section(html, "function stageUpload", "MODAL: CREATE APP")
+    function = section(html, "var UPLOAD_TIMEOUT", "MODAL: CREATE APP")
     result = run_node(
         """
         const responses = [
@@ -119,8 +119,8 @@ def test_lifecycle_polling_is_single_flight_and_bounded(html):
 
 def test_runtime_jobs_keep_resource_controls_locked(html):
     source = section(html, "function startJob", "function trackJob")
-    assert "runtimeResourceKey" in source
-    assert "setRuntimePending" in source
+    assert "jobResourceKey" in source
+    assert "setJobPending" in source
     assert "trackJob(jid, label, btn, resourceKey)" in source
 
     render = section(html, "function renderRuntimes", "function renderCompat")
@@ -151,7 +151,7 @@ def test_generic_job_poll_behavior_unlocks_only_on_terminal_state(html):
         function jobStateBadge(s){return {cls:s==='failed'?'danger':'ok'};}
         function errText(x){return String(x||'');}
         function busy(b,on){busyEvents.push(on);}
-        function setRuntimePending(k,on){pendingEvents.push(on);}
+        function setJobPending(k,on){pendingEvents.push(on);}
         function syncRuntimePendingControls(){} function toast(m){messages.push(m);}
         function refresh(){} function checkRuntimeUpdates(){} function refreshBackups(){}
         function refreshSchedules(){} function drawerBackups(){} function refreshTasks(){}
@@ -186,9 +186,9 @@ def test_unknown_job_status_retains_runtime_and_app_locks(html):
         function failed(r){return !r||r.status===false;}
         function jobIsRunning(){return false;} function jobIsTerminal(){return false;}
         function jobStateBadge(){return {cls:'ok'};} function errText(x){return String(x||'');}
-        function busy(){} function setRuntimePending(k,on){pendingEvents.push(on);}
+        function busy(){} function setJobPending(k,on){pendingEvents.push(on);}
         function syncRuntimePendingControls(){} function toast(m){messages.push(m);}
-        function clearPending(app){clearedApps.push(app);} function syncAppPendingControls(){}
+        function releaseAppPending(app){clearedApps.push(app);} function syncAppPendingControls(){}
         function lifecycleLabel(a,app){return a+' '+app;}
         function refresh(){} function checkRuntimeUpdates(){} function refreshBackups(){}
         function refreshSchedules(){} function drawerBackups(){} function refreshTasks(){}
@@ -371,13 +371,13 @@ def test_ambiguous_runtime_start_and_sync_results_keep_resource_lock(html):
     function = section(html, "function startJob", "function trackJob")
     result = run_node(
         """
-        const callbacks=[], pending=[], messages=[]; var RUNTIME_PENDING={};
+        const callbacks=[], pending=[], messages=[]; var JOB_PENDING={};
         const activeSection='runtimes';
-        function runtimeResourceKey(m,d){return 'java:'+d.version;}
+        function jobResourceKey(m,d){return 'java:'+d.version;}
         function call(m,d,cb){callbacks.push(cb);}
         function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
         function errText(x){return String(x||'');} function busy(){}
-        function setRuntimePending(k,on){pending.push(on); if(on)RUNTIME_PENDING[k]=true;else delete RUNTIME_PENDING[k];}
+        function setJobPending(k,on){pending.push(on); if(on)JOB_PENDING[k]=true;else delete JOB_PENDING[k];}
         function syncRuntimePendingControls(){} function toast(m){messages.push(m);}
         function done(){return function(){};} function refresh(){} function refreshTasks(){}
         function trackJob(){}
@@ -388,7 +388,7 @@ def test_ambiguous_runtime_start_and_sync_results_keep_resource_lock(html):
         callbacks.shift()({status:false,msg:'unknown method'});
         callbacks.shift()({status:false,msg:'timed out',transport_uncertain:true});
         startJob('InstallJava',{version:17},'Install Java 17',{});
-        process.stdout.write(JSON.stringify({pending,messages,locked17:!!RUNTIME_PENDING['java:17'],locked21:!!RUNTIME_PENDING['java:21']}));
+        process.stdout.write(JSON.stringify({pending,messages,locked17:!!JOB_PENDING['java:17'],locked21:!!JOB_PENDING['java:21']}));
         """
     )
     assert result["pending"] == [True, True]
@@ -405,7 +405,7 @@ def test_ambiguous_app_start_and_sync_results_keep_app_lock(html):
         const callbacks=[], cleared=[], messages=[];
         function call(m,d,cb){callbacks.push(cb);} function payload(r){return r.msg||r;}
         function failed(r){return !r||r.status===false;} function errText(x){return String(x||'');}
-        function clearPending(app){cleared.push(app);} function markPending(){} function busy(){}
+        function releaseAppPending(app){cleared.push(app);} function acquireAppPending(app,kind){return kind+':1';} function busy(){}
         function syncAppPendingControls(){}
         function toast(m){messages.push(m);} function refresh(){} function refreshTasks(){}
         function lifecycleLabel(a,app){return a+' '+app;} function pollAppJob(){}
@@ -429,21 +429,21 @@ def test_definitive_backend_rejections_release_runtime_and_app_locks(html):
     start_app = section(html, "function syncAppAction", "function pollAppJob")
     result = run_node(
         """
-        const callbacks=[], pending=[], cleared=[]; var RUNTIME_PENDING={};
+        const callbacks=[], pending=[], cleared=[]; var JOB_PENDING={};
         const activeSection='apps';
-        function runtimeResourceKey(m,d){return 'java:'+d.version;} function call(m,d,cb){callbacks.push(cb);}
+        function jobResourceKey(m,d){return 'java:'+d.version;} function call(m,d,cb){callbacks.push(cb);}
         function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
         function errText(x){return String(x||'');} function busy(){} function syncRuntimePendingControls(){}
-        function setRuntimePending(k,on){pending.push(on);if(on)RUNTIME_PENDING[k]=true;else delete RUNTIME_PENDING[k];}
+        function setJobPending(k,on){pending.push(on);if(on)JOB_PENDING[k]=true;else delete JOB_PENDING[k];}
         function toast(){} function done(){return function(){};} function refresh(){} function refreshTasks(){}
-        function trackJob(){} function lifecycleLabel(a,app){return a+' '+app;} function markPending(){}
-        function clearPending(app){cleared.push(app);} function syncAppPendingControls(){} function pollAppJob(){}
+        function trackJob(){} function lifecycleLabel(a,app){return a+' '+app;} function acquireAppPending(app,kind){return kind+':1';}
+        function releaseAppPending(app){cleared.push(app);} function syncAppPendingControls(){} function pollAppJob(){}
         """ + helper + "\n" + start_runtime + "\n" + start_app + """
         startJob('InstallJava',{version:17},'Install Java 17',{});
         callbacks.shift()({status:false,msg:'version is invalid'});
         startAppLifecycle('portal','restart',{});
         callbacks.shift()({status:false,msg:'app is invalid'});
-        process.stdout.write(JSON.stringify({pending,cleared,locked:!!RUNTIME_PENDING['java:17']}));
+        process.stdout.write(JSON.stringify({pending,cleared,locked:!!JOB_PENDING['java:17']}));
         """
     )
     assert result == {"pending": [True, False], "cleared": ["portal"], "locked": False}
@@ -463,7 +463,7 @@ def test_stopping_polls_finishes_lifecycle_records_before_inflight_callback(html
         function failed(){return false;} function jobIsRunning(s){return s==='running';}
         function jobIsTerminal(){return false;} function busy(){} function syncAppPendingControls(){}
         function toast(m){messages.push(m);} function lifecycleLabel(a,app){return a+' '+app;}
-        function clearPending(){} function jobStateBadge(){return {cls:'ok'};} function errText(){return '';}
+        function releaseAppPending(){} function jobStateBadge(){return {cls:'ok'};} function errText(){return '';}
         function refreshHealthAll(){} function refresh(){} function refreshTasks(){}
         """ + stop + "\n" + lifecycle + """
         pollAppJob('j1','portal','restart',{});
@@ -488,8 +488,8 @@ def test_cancelled_jobs_are_announced_neutrally_not_as_success(html):
         function failed(){return false;} function jobIsRunning(){return false;}
         function jobIsTerminal(){return true;} function jobIsCancelled(s){return s==='cancelled';}
         function jobStateBadge(){return {cls:'neutral'};} function errText(){return '';}
-        function busy(){} function setRuntimePending(){} function syncRuntimePendingControls(){}
-        function clearPending(){} function syncAppPendingControls(){} function toast(m,k,t){messages.push({m,k:k||'',t:t||''});}
+        function busy(){} function setJobPending(){} function syncRuntimePendingControls(){}
+        function releaseAppPending(){} function syncAppPendingControls(){} function toast(m,k,t){messages.push({m,k:k||'',t:t||''});}
         function refresh(){} function checkRuntimeUpdates(){} function refreshBackups(){}
         function refreshSchedules(){} function drawerBackups(){} function refreshTasks(){}
         function refreshHealthAll(){} function lifecycleLabel(a,app){return a+' '+app;}
@@ -506,7 +506,7 @@ def test_cancelled_jobs_are_announced_neutrally_not_as_success(html):
 
 def test_stage_upload_classifies_login_and_non_json_without_raw_errors(html):
     helper = section(html, "var LOGIN_RE", "// Panel plugin convention")
-    function = section(html, "function stageUpload", "MODAL: CREATE APP")
+    function = section(html, "var UPLOAD_TIMEOUT", "MODAL: CREATE APP")
     result = run_node(
         """
         const responses=[
@@ -528,3 +528,211 @@ def test_stage_upload_classifies_login_and_non_json_without_raw_errors(html):
     assert result["values"][1]["error"] == "The panel returned an invalid upload response. Try again."
     assert result["values"][2]["error"] == "Session expired. Reload the panel and upload again."
     assert all("SyntaxError" not in value["error"] for value in result["values"])
+
+
+def test_app_operation_lock_is_owned_and_cannot_be_released_by_another_operation(html):
+    lock_source = section(html, "var APP_PENDING", "// map raw service status")
+    result = run_node(
+        """
+        const controls=[];
+        function $(id){return id==='jh-apps-body'?{
+          querySelectorAll:()=>controls
+        }:null;}
+        """ + lock_source + """
+        const lifecycle=acquireAppPending('portal','lifecycle:restart');
+        const ssl=acquireAppPending('portal','ssl');
+        const wrongRelease=releaseAppPending('portal','delete:other');
+        const lockedAfterWrong=appPending('portal');
+        const ownerRelease=releaseAppPending('portal',lifecycle);
+        process.stdout.write(JSON.stringify({
+          lifecycle:!!lifecycle,ssl,wrongRelease,lockedAfterWrong,ownerRelease,
+          lockedAtEnd:appPending('portal')
+        }));
+        """
+    )
+    assert result == {
+        "lifecycle": True,
+        "ssl": None,
+        "wrongRelease": False,
+        "lockedAfterWrong": True,
+        "ownerRelease": True,
+        "lockedAtEnd": False,
+    }
+
+
+def test_ssl_and_delete_retain_owned_app_lock_on_uncertain_result(html):
+    assert "acquireAppPending(app, 'ssl')" in html
+    assert "resultIsUncertain(r)" in section(html, "function toggleSsl", "FEATURE A")
+    delete_source = section(html, "function deleteApp", "EVENT WIRING")
+    assert "acquireAppPending(app, 'delete')" in delete_source
+    assert "resultIsUncertain(r)" in delete_source
+    assert "releaseAppPending(app, owner)" in delete_source
+
+
+def test_lifecycle_lock_blocks_ssl_and_uncertain_ssl_keeps_owner(html):
+    lock_source = section(html, "var APP_PENDING", "// map raw service status")
+    ssl_source = section(html, "function toggleSsl", "FEATURE A")
+    result = run_node(
+        """
+        const callbacks=[], messages=[];
+        const sw={
+          dataset:{ssltoggle:'portal'}, disabled:false, isConnected:true,
+          attrs:{'aria-checked':'false'},
+          classList:{add(){},remove(){}},
+          getAttribute(k){return this.attrs[k];},
+          setAttribute(k,v){this.attrs[k]=String(v);},
+          removeAttribute(k){delete this.attrs[k];}
+        };
+        function $(id){return id==='jh-apps-body'?{querySelectorAll:()=>[sw]}:null;}
+        const document={querySelector:()=>sw}; const window={CSS:null};
+        const APPS_BY_NAME={portal:{ssl:false}};
+        function call(m,d,cb){callbacks.push(cb);}
+        function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
+        function resultIsUncertain(r){return !!(r&&r.transport_uncertain);}
+        function toast(m){messages.push(m);} function errText(x){return String(x||'');}
+        function refreshOpen(){} const DRAWER={}; function drawerOverview(){}
+        """ + lock_source + "\n" + ssl_source + """
+        const lifecycle=acquireAppPending('portal','lifecycle:restart');
+        toggleSsl('portal',sw);
+        const blockedCalls=callbacks.length;
+        releaseAppPending('portal',lifecycle);
+        toggleSsl('portal',sw);
+        callbacks.shift()({status:false,msg:'timeout',transport_uncertain:true});
+        toggleSsl('portal',sw);
+        process.stdout.write(JSON.stringify({
+          blockedCalls,totalCalls:callbacks.length,locked:appPending('portal'),
+          disabled:sw.disabled,ariaBusy:sw.attrs['aria-busy'],
+          unknown:messages.some(m=>m.indexOf('unknown')!==-1)
+        }));
+        """
+    )
+    assert result == {
+        "blockedCalls": 0,
+        "totalCalls": 0,
+        "locked": True,
+        "disabled": True,
+        "ariaBusy": "true",
+        "unknown": True,
+    }
+
+
+def test_uncertain_delete_keeps_owner_and_blocks_second_delete(html):
+    lock_source = section(html, "var APP_PENDING", "// map raw service status")
+    delete_source = section(html, "function deleteApp", "EVENT WIRING")
+    result = run_node(
+        """
+        const callbacks=[], messages=[];
+        const btn={dataset:{delete:'portal'},disabled:false,classList:{add(){},remove(){}},
+          setAttribute(){},removeAttribute(){}};
+        function $(id){return id==='jh-apps-body'?{querySelectorAll:()=>[btn]}:null;}
+        function confirm(){return true;} function call(m,d,cb){callbacks.push(cb);}
+        function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
+        function resultIsUncertain(r){return !!(r&&r.transport_uncertain);}
+        function busy(b,on){b.disabled=on;} function toast(m){messages.push(m);}
+        function errText(x){return String(x||'');} function refresh(){}
+        """ + lock_source + "\n" + delete_source + """
+        deleteApp('portal',btn);
+        callbacks.shift()({status:false,msg:'timeout',transport_uncertain:true});
+        deleteApp('portal',btn);
+        process.stdout.write(JSON.stringify({
+          remainingCallbacks:callbacks.length,locked:appPending('portal'),
+          disabled:btn.disabled,unknown:messages.some(m=>m.indexOf('unknown')!==-1)
+        }));
+        """
+    )
+    assert result == {
+        "remainingCallbacks": 0,
+        "locked": True,
+        "disabled": True,
+        "unknown": True,
+    }
+
+
+def test_job_resource_keys_cover_runtime_backup_restore_and_restore_upload(html):
+    source = section(html, "function jobResourceKey", "function runtimeButtonKey")
+    result = run_node(
+        source + """
+        process.stdout.write(JSON.stringify([
+          jobResourceKey('InstallJava',{version:17}),
+          jobResourceKey('UpdateTomcat',{version:11}),
+          jobResourceKey('Backup',{app:'portal'}),
+          jobResourceKey('Restore',{archive:'portal-1.tar.gz'}),
+          jobResourceKey('Restore',{archive:'a.tar.gz',as_name:'portal-copy'}),
+          jobResourceKey('RestoreUpload',{tmp:'/tmp/upload.tar.gz',as_name:'from-upload'})
+        ]));
+        """
+    )
+    assert result == [
+        "java:17",
+        "tomcat:11",
+        "backup:portal",
+        "restore:portal-1.tar.gz",
+        "restore:portal-copy",
+        "restore:from-upload",
+    ]
+
+
+def test_backup_restore_ambiguity_keeps_resource_lock_and_blocks_retry(html):
+    helpers = section(html, "function resultIsUncertain", "// Panel plugin convention")
+    pending = section(html, "var JOB_PENDING", "function jobIsTerminal")
+    start = section(html, "function startJob", "function trackJob")
+    result = run_node(
+        """
+        const callbacks=[], messages=[]; const activeSection='backups';
+        function call(m,d,cb){callbacks.push(cb);}
+        function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
+        function errText(x){return String(x||'');} function busy(){}
+        function toast(m){messages.push(m);} function done(){return function(){};}
+        function refresh(){} function refreshTasks(){} function trackJob(){}
+        function $(id){return null;}
+        """ + helpers + "\n" + pending + "\n" + start + """
+        startJob('Backup',{app:'portal'},'Backup portal',{});
+        callbacks.shift()({status:false,msg:'timed out',transport_uncertain:true});
+        startJob('Backup',{app:'portal'},'Backup portal',{});
+        startJob('Restore',{archive:'portal-1.tar.gz'},'Restore portal',{});
+        callbacks.shift()({status:false,msg:'timed out',transport_uncertain:true});
+        startJob('Restore',{archive:'portal-1.tar.gz'},'Restore portal',{});
+        process.stdout.write(JSON.stringify({
+          callbackCount:callbacks.length,
+          backup:!!JOB_PENDING['backup:portal'],
+          restore:!!JOB_PENDING['restore:portal-1.tar.gz'],
+          blocked:messages.filter(m=>m.indexOf('already active')!==-1).length
+        }));
+        """
+    )
+    assert result == {"callbackCount": 0, "backup": True, "restore": True, "blocked": 2}
+
+
+def test_restore_upload_runs_through_owned_generic_job_controller(html):
+    source = section(html, "function openRestoreUploadModal", "var BK_SCHEDULES")
+    assert "startJob('RestoreUpload', data" in source
+    assert "call('StartRestoreUpload'" not in source
+
+
+def test_stage_upload_timeout_settles_once_and_ignores_late_response(html):
+    source = section(html, "var UPLOAD_TIMEOUT", "MODAL: CREATE APP")
+    result = run_node(
+        """
+        let deadline=null, resolveFetch=null, callbacks=[], aborts=0;
+        class FormData {append(){}}
+        class AbortController {
+          constructor(){this.signal={};}
+          abort(){aborts++;}
+        }
+        function setTimeout(fn){deadline=fn;return 1;} function clearTimeout(){}
+        function fetch(){return new Promise(resolve=>{resolveFetch=resolve;});}
+        function looksLikeLoginHtml(){return false;} function sessionExpired(){}
+        function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
+        function errText(p){return typeof p==='string'?p:'';}
+        """ + source + """
+        stageUpload({files:[{name:'demo.war',size:10}]},(path,error)=>callbacks.push({path,error}));
+        deadline();
+        resolveFetch({
+          status:200,ok:true,url:'/files?action=upload',
+          text:()=>Promise.resolve(JSON.stringify({status:true,msg:{path:'/tmp/demo.war'}}))
+        });
+        setImmediate(()=>setImmediate(()=>process.stdout.write(JSON.stringify({callbacks,aborts}))));
+        """
+    )
+    assert result["aborts"] == 1
+    assert result["callbacks"] == [{"path": None, "error": "Upload timed out. Check the panel connection and try again."}]
