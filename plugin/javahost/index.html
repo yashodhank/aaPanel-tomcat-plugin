@@ -850,21 +850,39 @@
   // CORE HELPERS — AJAX, envelope unwrap, escaping, DOM
   // =====================================================================
 
-  // A non-JSON / login-redirect response means the panel session expired:
-  // a 302 to the login page returns the login HTML (not the JSON envelope).
-  // Heuristics: HTML body (starts with '<' after trim), or a fetch that was
-  // redirected / whose final URL points at the login/entrance path.
+  // A login redirect means the panel session expired: a 302 to the login page
+  // returns login HTML instead of the JSON envelope. Other malformed/non-JSON
+  // responses are transport errors and must not be mislabeled as auth expiry.
   var LOGIN_RE = /\/login(\b|\/|\?|$)/i;
-  function looksLikeLoginHtml(text){
+  var REQUEST_TIMEOUT = 30000;
+  function looksLikeLoginHtml(text, responseUrl, httpStatus){
+    // A server-side 5xx page is never proof that authentication expired. A
+    // lifecycle POST may already have taken effect before that page arrived.
+    if(Number(httpStatus) >= 500) return false;
+    if(LOGIN_RE.test(String(responseUrl || ''))) return true;
     if(typeof text !== 'string') return false;
     var t = text.replace(/^﻿/, '').trim();
     if(t.charAt(0) !== '<') return false;                  // not HTML at all
-    // rely on real login-page heuristics — never blanket-trip on any HTML
-    return /<!doctype|<html|name=["']?username|id=["']?username|<form/i.test(t);
+    // Require login-specific controls. Generic HTML/forms are commonly proxy
+    // and framework error pages and must remain transport failures.
+    var hasUser = /(?:name|id)=["']?(?:username|user|account|email)\b/i.test(t);
+    var hasPassword = /(?:name|id|type)=["']?password\b/i.test(t);
+    return hasUser && hasPassword && /<form\b/i.test(t);
   }
 
-  // aaPanel merges query and POST params before dispatch. These names select
-  // the plugin route and must never appear in a request body.
+  function transportFailure(message){
+    return {status:false, msg:message, transport_uncertain:true};
+  }
+  function resultIsUncertain(r){
+    return !!(r && r.transport_uncertain === true);
+  }
+  function isPanelEnvelope(value){
+    return !!(value && typeof value === 'object' && !Array.isArray(value) &&
+      typeof value.status === 'boolean');
+  }
+
+  // aaPanel merges query and POST parameters before dispatch. These names
+  // select the plugin route and must never appear in a request body.
   var RESERVED_BODY_KEYS = {action:true, name:true, s:true};
   function reservedBodyKey(data){
     if(!data || typeof data !== 'object') return '';
@@ -882,38 +900,78 @@
       cb({status:false, msg:'Request blocked: "'+reserved+'" is reserved by aaPanel routing.'});
       return;
     }
+    var settled = false, request = null;
+    function finish(result){
+      if(settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      cb(result);
+    }
+    function expireSession(){
+      if(settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      sessionExpired();
+    }
+    function invalidResponse(){
+      finish(transportFailure('The panel returned an invalid response.'));
+    }
+    var deadline = setTimeout(function(){
+      if(settled) return;
+      var abortable = request;
+      // Settle first: jQuery abort() may synchronously invoke .fail(), which
+      // must not replace the intended timeout result or invoke cb twice.
+      finish(transportFailure('Request timed out. Check the panel connection and try again.'));
+      if(abortable && typeof abortable.abort === 'function'){
+        try { abortable.abort(); } catch(_){}
+      }
+    }, REQUEST_TIMEOUT);
     if (window.$ && $.post){
-      $.post(url, data || {}, function(r){
+      request = $.post(url, data || {}, function(r, _textStatus, xhr){
         if(typeof r === 'string'){
           var s = r.replace(/^﻿/, '');
-          if(looksLikeLoginHtml(s)){ sessionExpired(); return; }
+          if(looksLikeLoginHtml(s, xhr && xhr.responseURL, xhr && xhr.status)){ expireSession(); return; }
           var parsed;
           try { parsed = JSON.parse(s); }
-          catch(_){ sessionExpired(); return; }            // non-JSON => session gone
-          cb(parsed); return;
+          catch(_){ invalidResponse(); return; }
+          if(!isPanelEnvelope(parsed)){ invalidResponse(); return; }
+          finish(parsed); return;
         }
-        cb(r);
+        if(!isPanelEnvelope(r)){ invalidResponse(); return; }
+        finish(r);
       }).fail(function(e){
+        if(settled) return;
         // a 302 -> login page surfaces here in some setups (parsererror w/ HTML)
         var body = e && (e.responseText != null ? e.responseText : '');
-        if(looksLikeLoginHtml(body)){ sessionExpired(); return; }
-        cb({status:false, msg:String(e && e.statusText || e)});
+        if(looksLikeLoginHtml(body, e && e.responseURL, e && e.status)){ expireSession(); return; }
+        if(e && e.responseJSON && typeof e.responseJSON === 'object' &&
+            e.responseJSON.status === false){
+          finish(e.responseJSON); return;
+        }
+        finish(transportFailure('The panel connection failed. Check Activity or reload before retrying.'));
       });
     } else {
-      fetch(url, {method:'POST',
+      request = fetch(url, {method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},
         body:new URLSearchParams(data || {})})
         .then(function(x){
           // followed a redirect to the login/entrance page => session expired
-          if(x.redirected && LOGIN_RE.test(x.url || '')){ sessionExpired(); return null; }
+          if(Number(x.status) < 500 && x.redirected && LOGIN_RE.test(x.url || '')){ expireSession(); return null; }
           return x.text().then(function(text){
-            if(looksLikeLoginHtml(text)){ sessionExpired(); return null; }
-            try { return JSON.parse(text.replace(/^﻿/, '')); }
-            catch(_){ sessionExpired(); return null; }      // non-JSON => session gone
+            if(looksLikeLoginHtml(text, x.url, x.status)){ expireSession(); return null; }
+            try {
+              var parsed = JSON.parse(text.replace(/^﻿/, ''));
+              if(!isPanelEnvelope(parsed)){ invalidResponse(); return null; }
+              if(x.ok === false && (!parsed || parsed.status !== false)){
+                return transportFailure('The panel connection failed. Check Activity or reload before retrying.');
+              }
+              return parsed;
+            }
+            catch(_){ invalidResponse(); return null; }
           });
         })
-        .then(function(r){ if(r !== null) cb(r); })
-        .catch(function(e){ cb({status:false, msg:String(e)}); });
+        .then(function(r){ if(r !== null) finish(r); })
+        .catch(function(){ finish(transportFailure('The panel connection failed. Check Activity or reload before retrying.')); });
     }
   }
   // {status,msg} envelope: data lives in msg, else r itself.
@@ -1002,8 +1060,25 @@
     }
     if(typeof METRICS === 'object' && METRICS && METRICS.timer){ clearInterval(METRICS.timer); METRICS.timer = null; }
     if(typeof LIFECYCLE_TIMERS === 'object' && LIFECYCLE_TIMERS){
-      for(var jk in LIFECYCLE_TIMERS){ clearInterval(LIFECYCLE_TIMERS[jk]); }
+      for(var jk in LIFECYCLE_TIMERS){
+        var lifecycleRec = LIFECYCLE_TIMERS[jk];
+        if(lifecycleRec && typeof lifecycleRec === 'object'){
+          lifecycleRec.finished = true;
+          if(lifecycleRec.timer) clearTimeout(lifecycleRec.timer);
+          lifecycleRec.timer = null;
+        } else if(lifecycleRec){
+          // Compatibility with a record created by an older in-page build.
+          clearTimeout(lifecycleRec);
+        }
+      }
       LIFECYCLE_TIMERS = {};
+    }
+    if(typeof trackedJobs === 'object' && trackedJobs){
+      for(var tj in trackedJobs){
+        if(trackedJobs[tj].timer) clearTimeout(trackedJobs[tj].timer);
+        trackedJobs[tj].finished = true;
+        trackedJobs[tj].timer = null;
+      }
     }
   }
   function sessionExpired(){
@@ -1039,10 +1114,65 @@
   //   We POST Start* endpoints which return {job_id}; the work runs server-
   //   side and we poll GetJobs/GetJobLog instead of blocking on a long AJAX
   //   that would otherwise time out. Each tracked job is polled every ~2s
-  //   until state!=running; on completion we toast + refresh runtimes.
+  //   until an explicit terminal state; on completion we toast + refresh.
   // =====================================================================
   var JOB_POLL = 2000;
-  var trackedJobs = {};   // job_id -> {label, timer}
+  var JOB_POLL_FAILURE_LIMIT = 5;
+  var JOB_POLL_MAX_MS = 15 * 60 * 1000;
+  var trackedJobs = {};   // job_id -> polling record
+  // Resource-owned job locks survive modal teardown and ambiguous transport
+  // outcomes. Runtime controls render the matching keys; backup/restore keys
+  // prevent a second operation from being queued after an unknown result.
+  var JOB_PENDING = Object.create(null);
+
+  function jobResourceKey(method, data){
+    if(!data) return null;
+    var m = String(method || '').toLowerCase();
+    if(data.version != null && m.indexOf('tomcat') !== -1) return 'tomcat:' + String(data.version);
+    if(data.version != null && (m.indexOf('java') !== -1 || m.indexOf('jdk') !== -1))
+      return 'java:' + String(data.version);
+    if(m === 'backup' && data.app) return 'backup:' + String(data.app);
+    if(m === 'restore' || m === 'restoreupload'){
+      var target = data.as_name || data.archive || data.tmp;
+      return target ? 'restore:' + String(target) : null;
+    }
+    return null;
+  }
+  function runtimeButtonKey(btn){
+    if(!btn || !btn.dataset) return null;
+    var ds = btn.dataset;
+    var j = ds.jdk || ds.jdkReinstall || ds.jdkUpdate || ds.jdkUninstall;
+    if(j != null && j !== '') return 'java:' + String(j);
+    var t = ds.tcInstall || ds.tcUpdate || ds.tcUninstall;
+    if(t != null && t !== '') return 'tomcat:' + String(t);
+    return null;
+  }
+  function syncRuntimePendingControls(){
+    var root = $('page-runtimes');
+    if(!root) return;
+    var buttons = root.querySelectorAll('button[data-jdk],button[data-jdk-reinstall],button[data-jdk-update],button[data-jdk-uninstall],button[data-tc-install],button[data-tc-update],button[data-tc-uninstall]');
+    for(var i=0; i<buttons.length; i++){
+      var locked = !!JOB_PENDING[runtimeButtonKey(buttons[i])];
+      buttons[i].disabled = locked;
+      if(locked) buttons[i].setAttribute('aria-busy', 'true');
+      else buttons[i].removeAttribute('aria-busy');
+    }
+  }
+  function setJobPending(key, on){
+    if(!key) return;
+    if(on) JOB_PENDING[key] = true;
+    else delete JOB_PENDING[key];
+    syncRuntimePendingControls();
+  }
+  function jobIsTerminal(state){
+    var s = (state == null ? '' : String(state)).toLowerCase();
+    return s === 'done' || s === 'success' || s === 'completed' ||
+      s === 'failed' || s === 'error' || s === 'cancelled' || s === 'canceled';
+  }
+  function jobIsCancelled(state){
+    var s = (state == null ? '' : String(state)).toLowerCase();
+    return s === 'cancelled' || s === 'canceled';
+  }
 
   // elapsed time between two epoch-ish values (server may send seconds or ms
   // or ISO strings); tolerate absence and render a friendly duration.
@@ -1093,45 +1223,110 @@
   // Start an async operation: try Start<Method> first; if the backend doesn't
   // know it (older build) fall back to the blocking sync call via done().
   // method: 'InstallJava' | 'InstallTomcat' | 'UpdateTomcat' | 'UninstallTomcat'
-  function startJob(method, data, label, btn){
+  function startJob(method, data, label, btn, resourceOverride){
     var startName = 'Start' + method;   // e.g. StartInstallJava
+    var resourceKey = resourceOverride || jobResourceKey(method, data);
+    if(resourceKey && JOB_PENDING[resourceKey]){
+      busy(btn, false);
+      syncRuntimePendingControls();
+      toast('Another operation is already active for this resource.', 'err', label + ' not started');
+      return;
+    }
+    setJobPending(resourceKey, true);
     call(startName, data, function(r){
       var p = payload(r);
       var jid = p && (p.job_id || p.id);
+      if(failed(r) && resultIsUncertain(r)){
+        // The POST may have reached the panel. Keep the resource lock until an
+        // operator confirms the outcome, otherwise retry can enqueue a duplicate.
+        busy(btn, false);
+        syncRuntimePendingControls();
+        toast(label + ' result is unknown. Check Activity or reload before retrying.', 'err', label);
+        return;
+      }
       // Treat "unknown method"/missing-endpoint style failures as "fall back".
       if(failed(r) && !jid){
         var em = errText(p).toLowerCase();
         var notImpl = em.indexOf('unknown') !== -1 || em.indexOf('not found') !== -1 ||
           em.indexOf('no such') !== -1 || em.indexOf('not implemented') !== -1 ||
           em.indexOf('attribute') !== -1 || em === '' || em.indexOf('404') !== -1;
-        if(notImpl){ call(method, data, done(label, btn)); return; }
+        if(notImpl){
+          call(method, data, function(syncResult){
+            if(failed(syncResult) && resultIsUncertain(syncResult)){
+              busy(btn, false);
+              syncRuntimePendingControls();
+              toast(label + ' result is unknown. Check Activity or reload before retrying.', 'err', label);
+              return;
+            }
+            setJobPending(resourceKey, false);
+            done(label, btn)(syncResult);
+          });
+          return;
+        }
+        setJobPending(resourceKey, false);
         busy(btn, false); toast(errText(p), 'err', label + ' failed'); return;
       }
-      busy(btn, false);
       if(!jid){
         // success envelope but no job id — behave like a completed sync call
+        setJobPending(resourceKey, false);
+        busy(btn, false);
         toast(label + ' started', 'ok'); refresh(); refreshTasks(); return;
       }
       toast('Started ' + label, 'ok');
-      trackJob(jid, label);
+      trackJob(jid, label, btn, resourceKey);
       if(activeSection === 'activity') refreshTasks();
     });
   }
   // Poll one job id until it stops running, then toast + refresh.
-  function trackJob(jid, label){
+  function trackJob(jid, label, btn, resourceKey){
     if(trackedJobs[jid]) return;        // already tracking
-    var rec = { label: label, timer: null };
+    var rec = { label: label, timer: null, inflight: false, failures: 0,
+      startedAt: Date.now(), finished: false };
     trackedJobs[jid] = rec;
+    function stopUnknown(){
+      if(rec.finished) return;
+      rec.finished = true;
+      if(rec.timer){ clearTimeout(rec.timer); rec.timer = null; }
+      delete trackedJobs[jid];
+      busy(btn, false);
+      syncRuntimePendingControls(); // deliberately retain the resource lock
+      toast(label + ' status is unknown. Check Activity or reload before retrying.', 'err', label);
+      if(activeSection === 'activity') refreshTasks();
+    }
+    function schedule(){
+      if(!rec.finished) rec.timer = setTimeout(poll, JOB_POLL);
+    }
     function poll(){
+      if(rec.finished || rec.inflight) return;
+      if(Date.now() - rec.startedAt >= JOB_POLL_MAX_MS){ stopUnknown(); return; }
+      rec.inflight = true;
       call('GetJobLog', {job_id: jid, lines: 1}, function(r){
+        rec.inflight = false;
+        if(rec.finished) return;
         var p = payload(r);
-        if(failed(r)) return;            // transient; keep polling
-        if(jobIsRunning(p.state)) return;
+        if(failed(r)){
+          rec.failures++;
+          if(rec.failures >= JOB_POLL_FAILURE_LIMIT) stopUnknown();
+          else schedule();
+          return;
+        }
+        if(jobIsRunning(p && p.state)){ rec.failures = 0; schedule(); return; }
+        if(!jobIsTerminal(p && p.state)){
+          rec.failures++;
+          if(rec.failures >= JOB_POLL_FAILURE_LIMIT) stopUnknown();
+          else schedule();
+          return;
+        }
+        rec.failures = 0;
         // terminal
-        if(rec.timer){ clearInterval(rec.timer); rec.timer = null; }
+        rec.finished = true;
+        if(rec.timer){ clearTimeout(rec.timer); rec.timer = null; }
         delete trackedJobs[jid];
+        setJobPending(resourceKey, false);
+        busy(btn, false);
         var b = jobStateBadge(p.state);
         if(b.cls === 'danger') toast(errText(p.message || p.log) || (label+' failed'), 'err', label + ' failed');
+        else if(jobIsCancelled(p.state)) toast(label + ' cancelled', '', label + ' cancelled');
         else toast(label + ' completed', 'ok');
         refresh();                       // re-run the runtimes/status refresh
         // a runtime install/update/uninstall changes upstream-update status — the
@@ -1143,7 +1338,6 @@
         if(activeSection === 'activity') refreshTasks();
       });
     }
-    rec.timer = setInterval(poll, JOB_POLL);
     poll();
   }
 
@@ -1738,7 +1932,7 @@
     var hb = $('jh-harden');
     if(d.service_dirs_locked){
       hb.style.display = '';
-      hb.innerHTML = '<div class="jh-alert danger">'+ic('warn')+
+      hb.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+
         '<div style="flex:1"><b>System hardening is active.</b> '+
         esc(d.hardening_hint || 'Service directories are immutable; JavaHost cannot register services until hardening is lifted.')+
         ' See <code>docs/system-hardening.md</code>.'+
@@ -2062,7 +2256,8 @@
             var as = $('rs-name').value.trim(), dom = $('rs-domain').value.trim();
             var data = {archive:name}; if(as) data.as_name = as; if(dom) data.domain = dom; if(profile) data.profile = profile;
             closeModal();
-            startJob('Restore', data, 'Restore '+(as||app||name), bb);
+            startJob('Restore', data, 'Restore '+(as||app||name), bb,
+              'restore:'+(as||app||name));
           }, 'refresh'); b.id='rs-go'; b.disabled=true; return b; })() ]
     });
   }
@@ -2098,13 +2293,9 @@
           stageUpload(fi, function(tmp, err){
             if(err || !tmp){ busy(b, false); toast(err || 'Upload failed', 'err'); return; }
             var data = {tmp:tmp}; if(as) data.as_name = as; if(dom) data.domain = dom;
-            call('StartRestoreUpload', data, function(r){
-              busy(b, false);
-              var p = payload(r); var jid = p && (p.job_id || p.id);
-              if(failed(r) && !jid){ toast(errText(p), 'err', 'Restore failed'); return; }
-              toast('Restore started', 'ok'); closeModal();
-              if(jid) trackJob(jid, 'Restore '+(as||'upload'));
-            });
+            closeModal();
+            startJob('RestoreUpload', data, 'Restore '+(as||'upload'), b,
+              'restore:'+(as||fi.files[0].name));
           });
         }, 'upload') ]
     });
@@ -2318,6 +2509,7 @@
           '<div class="jh-path">'+esc(meta)+'</div>'+needHint+'</div>'+
         '<span class="btns">'+tcBtns+'</span></div>';
     }).join('');
+    syncRuntimePendingControls();
   }
   // Beginner compatibility card: recommended pairing + a Tomcat↔Java matrix that
   // shows, per line, what Java it needs and whether this server already has it.
@@ -2356,10 +2548,36 @@
   // apps with a pending lifecycle/SSL/delete action. While non-empty the 5s
   // appsTick re-render is suppressed so in-flight busy controls aren't wiped,
   // and a repeat click for an already-pending app is ignored (no double-act).
-  var APP_PENDING = Object.create(null);
+  var APP_PENDING = Object.create(null); // app -> owner token
+  var APP_PENDING_SEQ = 0;
   function appPending(app){ return !!APP_PENDING[app]; }
-  function markPending(app){ if(app!=null) APP_PENDING[app] = true; }
-  function clearPending(app){ if(app!=null) delete APP_PENDING[app]; }
+  function syncAppPendingControls(app){
+    var body = $('jh-apps-body'); if(!body || app == null) return;
+    var buttons = body.querySelectorAll(
+      'button[data-app],button[data-ssltoggle],button[data-repair],button[data-delete]');
+    for(var i=0; i<buttons.length; i++){
+      var data = buttons[i].dataset || {};
+      var target = data.app || data.ssltoggle || data.repair || data.delete;
+      if(target !== String(app)) continue;
+      var locked = appPending(app);
+      buttons[i].disabled = locked;
+      if(locked) buttons[i].setAttribute('aria-busy', 'true');
+      else buttons[i].removeAttribute('aria-busy');
+    }
+  }
+  function acquireAppPending(app, kind){
+    if(app == null || APP_PENDING[app]) return null;
+    var owner = String(kind || 'operation') + ':' + (++APP_PENDING_SEQ);
+    APP_PENDING[app] = owner;
+    syncAppPendingControls(app);
+    return owner;
+  }
+  function releaseAppPending(app, owner){
+    if(app == null || !owner || APP_PENDING[app] !== owner) return false;
+    delete APP_PENDING[app];
+    syncAppPendingControls(app);
+    return true;
+  }
   function anyPending(){ for(var k in APP_PENDING){ return true; } return false; }
 
   // map raw service status -> {cls, label} per the agreed taxonomy
@@ -2551,19 +2769,31 @@
   // session-expiry handling. Tolerates a missing/partial response payload.
   function toggleSsl(app, sw){
     if(!sw || sw.disabled) return;
+    var owner = acquireAppPending(app, 'ssl');
+    if(!owner){ toast('Another operation is already active for '+app+'.', 'err', 'SSL not started'); return; }
     var want = sw.getAttribute('aria-checked') !== 'true';   // target state
     // optimistic UI: show intended state, lock + spin while provisioning.
     // mark in-flight so the 5s tick re-render won't wipe this control.
-    markPending(app);
     sw.classList.add('busy'); sw.disabled = true;
     sw.setAttribute('aria-checked', want ? 'true' : 'false');
     toast((want ? 'Provisioning SSL for ' : 'Disabling SSL for ') + app + '…');
     call('SetSiteSSL', {app:app, enable: want ? 1 : 0}, function(r){
-      clearPending(app);
       var p = payload(r);
       // resolve to the live switch node (the row/drawer may have re-rendered)
       var live = (sw && sw.isConnected) ? sw
         : document.querySelector('[data-ssltoggle="'+(window.CSS&&CSS.escape?CSS.escape(app):app)+'"]');
+      if(failed(r) && resultIsUncertain(r)){
+        if(live){
+          live.classList.remove('busy');
+          live.setAttribute('aria-checked',
+            (APPS_BY_NAME[app] && APPS_BY_NAME[app].ssl) ? 'true' : 'false');
+        }
+        syncAppPendingControls(app); // retain owner lock until reload/reconciliation
+        toast('SSL result is unknown. Check the app and Activity, or reload before retrying.',
+          'err', 'SSL status unknown');
+        return;
+      }
+      releaseAppPending(app, owner);
       if(failed(r)){
         if(live){ live.classList.remove('busy'); live.disabled = false;
           live.setAttribute('aria-checked', (APPS_BY_NAME[app] && APPS_BY_NAME[app].ssl) ? 'true' : 'false'); }
@@ -2600,13 +2830,19 @@
   // toast + refresh. If StartAppAction is absent on an older backend, fall back
   // to the blocking sync AppAction. Routed through call() (session-expiry).
   var APPACTION_POLL = 1500;
-  var LIFECYCLE_TIMERS = {};   // job_id -> interval id (for async lifecycle polls)
+  var LIFECYCLE_TIMERS = {};   // job_id -> polling record (timer + finished guard)
   function lifecycleLabel(operation, app){ return operation + ' ' + app; }
   // sync fallback: blocking AppAction (or RepairApp for 'repair').
-  function syncAppAction(app, operation, btn){
+  function syncAppAction(app, operation, btn, owner){
     var label = lifecycleLabel(operation, app);
     function fin(r){
-      clearPending(app); busy(btn, false);
+      if(failed(r) && resultIsUncertain(r)){
+        busy(btn, false);
+        syncAppPendingControls(app);
+        toast(label + ' result is unknown. Check Activity or reload before retrying.', 'err', label);
+        return;
+      }
+      releaseAppPending(app, owner); busy(btn, false);
       if(failed(r)) toast(errText(payload(r)), 'err', label + ' failed');
       else toast(label + ' completed', 'ok');
       refresh();
@@ -2615,46 +2851,90 @@
     else call('AppAction', {app:app, operation:operation}, fin);
   }
   function startAppLifecycle(app, operation, btn){
-    markPending(app); busy(btn, true);
+    var owner = acquireAppPending(app, 'lifecycle:'+operation);
+    if(!owner) return;
+    busy(btn, true);
     var label = lifecycleLabel(operation, app);
     if(operation !== 'repair') toast(label.charAt(0).toUpperCase()+label.slice(1)+'…');
     else toast('Repairing '+app+'…');
     call('StartAppAction', {app:app, operation:operation}, function(r){
       var p = payload(r);
       var jid = p && (p.job_id || p.id);
+      if(failed(r) && resultIsUncertain(r)){
+        busy(btn, false);
+        syncAppPendingControls(app);
+        toast(label + ' result is unknown. Check Activity or reload before retrying.', 'err', label);
+        return;
+      }
       if(failed(r) && !jid){
         // unknown method / missing endpoint -> fall back to the sync call
         var em = errText(p).toLowerCase();
         var notImpl = em.indexOf('unknown') !== -1 || em.indexOf('not found') !== -1 ||
           em.indexOf('no such') !== -1 || em.indexOf('not implemented') !== -1 ||
           em.indexOf('attribute') !== -1 || em === '' || em.indexOf('404') !== -1;
-        if(notImpl){ syncAppAction(app, operation, btn); return; }
-        clearPending(app); busy(btn, false);
+        if(notImpl){ syncAppAction(app, operation, btn, owner); return; }
+        releaseAppPending(app, owner); busy(btn, false);
         toast(errText(p), 'err', label + ' failed'); return;
       }
       if(!jid){
         // success envelope but no job id — treat as a completed sync call
-        clearPending(app); busy(btn, false);
+        releaseAppPending(app, owner); busy(btn, false);
         toast(label + ' completed', 'ok'); refresh(); return;
       }
       // surface the job in the Tasks section, then poll its log to completion
       if(activeSection === 'activity') refreshTasks();
-      pollAppJob(jid, app, operation, btn);
+      pollAppJob(jid, app, operation, btn, owner);
     });
   }
-  function pollAppJob(jid, app, operation, btn){
+  function pollAppJob(jid, app, operation, btn, owner){
     var label = lifecycleLabel(operation, app);
-    var timer = setInterval(tick, APPACTION_POLL);
-    LIFECYCLE_TIMERS[jid] = timer;            // so stopAllPolls() can clear it
+    var rec = {timer:null, inflight:false, failures:0, startedAt:Date.now(), finished:false};
+    LIFECYCLE_TIMERS[jid] = rec;
+    function stopUnknown(){
+      if(rec.finished) return;
+      rec.finished = true;
+      if(rec.timer) clearTimeout(rec.timer);
+      delete LIFECYCLE_TIMERS[jid];
+      busy(btn, false);
+      syncAppPendingControls(app);
+      // Keep APP_PENDING set: without a terminal server state, retrying could
+      // enqueue a duplicate lifecycle operation.
+      toast(label + ' status is unknown. Check Activity or reload before retrying.', 'err', label);
+      if(activeSection === 'activity') refreshTasks();
+    }
+    function schedule(){
+      if(rec.finished) return;
+      rec.timer = setTimeout(tick, APPACTION_POLL);
+    }
     function tick(){
+      if(rec.finished || rec.inflight) return;
+      if(Date.now() - rec.startedAt >= JOB_POLL_MAX_MS){ stopUnknown(); return; }
+      rec.inflight = true;
       call('GetJobLog', {job_id: jid, lines: 50}, function(r){
+        rec.inflight = false;
+        if(rec.finished) return;
         var p = payload(r);
-        if(failed(r)) return;                 // transient; keep polling
-        if(jobIsRunning(p && p.state)) return;
-        clearInterval(timer); delete LIFECYCLE_TIMERS[jid];
-        clearPending(app); busy(btn, false);
+        if(failed(r)){
+          rec.failures++;
+          if(rec.failures >= JOB_POLL_FAILURE_LIMIT) stopUnknown();
+          else schedule();
+          return;
+        }
+        if(jobIsRunning(p && p.state)){ rec.failures = 0; schedule(); return; }
+        if(!jobIsTerminal(p && p.state)){
+          rec.failures++;
+          if(rec.failures >= JOB_POLL_FAILURE_LIMIT) stopUnknown();
+          else schedule();
+          return;
+        }
+        rec.failures = 0;
+        rec.finished = true;
+        if(rec.timer) clearTimeout(rec.timer);
+        delete LIFECYCLE_TIMERS[jid];
+        releaseAppPending(app, owner); busy(btn, false);
         var b = jobStateBadge(p && p.state);
         if(b.cls === 'danger') toast(errText((p && (p.message || p.log)) || '') || (label+' failed'), 'err', label + ' failed');
+        else if(jobIsCancelled(p && p.state)) toast(label + ' cancelled', '', label + ' cancelled');
         else toast(label + ' completed', 'ok');
         refreshHealthAll(STATE.apps);         // live health for the (un)started app
         refresh();                            // re-pull status / list
@@ -2679,12 +2959,12 @@
           '<button type="button" class="jh-btn ghost" id="jh-empty-jar">'+ic('server')+'Deploy Spring Boot JAR</button>'+
         '</div>'+
         '</div>';
-      var ec = $('jh-empty-create'); if(ec) ec.addEventListener('click', openCreate);
-      var ej = $('jh-empty-jar'); if(ej) ej.addEventListener('click', openJar);
       return;
     }
     var rows = apps.map(function(x){
       var name = x.app;
+      var pending = appPending(name);
+      var lifecycleLock = pending ? ' disabled aria-busy="true"' : '';
       APPS_BY_NAME[name] = x;
       appMajor[name] = (x.tomcat != null ? x.tomcat : (x.version != null ? x.version : ''));
       var ec = esc(name), cid = cssId(name);
@@ -2707,9 +2987,9 @@
         '</div>'+
         '<div class="jh-approw-act" data-stop="1">'+
           '<div class="jh-seg" role="group" aria-label="Lifecycle for '+ec+'">'+
-            '<button type="button" data-act="start" data-app="'+ec+'" title="Start" aria-label="Start '+ec+'">'+ic('play')+'</button>'+
-            '<button type="button" data-act="stop" data-app="'+ec+'" title="Stop" aria-label="Stop '+ec+'">'+ic('stop')+'</button>'+
-            '<button type="button" data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'">'+ic('refresh')+'</button>'+
+            '<button type="button" data-act="start" data-app="'+ec+'" title="Start" aria-label="Start '+ec+'"'+lifecycleLock+'>'+ic('play')+'</button>'+
+            '<button type="button" data-act="stop" data-app="'+ec+'" title="Stop" aria-label="Stop '+ec+'"'+lifecycleLock+'>'+ic('stop')+'</button>'+
+            '<button type="button" data-act="restart" data-app="'+ec+'" title="Restart" aria-label="Restart '+ec+'"'+lifecycleLock+'>'+ic('refresh')+'</button>'+
           '</div>'+
           '<div class="jh-menu">'+
             '<button type="button" class="jh-iconbtn" data-menu="'+cid+'" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for '+ec+'">'+ic('dots')+'</button>'+
@@ -3114,7 +3394,7 @@
         if(DRAWER.app !== app) return;
         var box = $('dpanel-metrics'); if(!box) return;
         var m = payload(r);
-        if(failed(r)){ box.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(m))+'</div></div>'; return; }
+        if(failed(r)){ box.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(m))+'</div></div>'; return; }
         if(!m.up || m.pid==null){
           box.innerHTML = '<div class="jh-empty" style="padding:var(--s4)">'+ic('stop')+'<b>Not running</b><div>No live process to report metrics for.</div></div>';
           return;
@@ -3270,22 +3550,70 @@
   // =====================================================================
   // UPLOAD STAGING — stage a File via panel file API, return server path
   // =====================================================================
+  var UPLOAD_TIMEOUT = 2 * 60 * 1000;
   function stageUpload(fileInput, cb){
     var f = fileInput && fileInput.files && fileInput.files[0];
     if(!f){ cb(null, 'Select a file to deploy'); return; }
+    var settled = false;
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    function finish(path, error){
+      if(settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      cb(path, error);
+    }
+    var deadline = setTimeout(function(){
+      if(settled) return;
+      finish(null, 'Upload timed out. Check the panel connection and try again.');
+      if(controller){ try { controller.abort(); } catch(_){} }
+    }, UPLOAD_TIMEOUT);
     var fd = new FormData();
     fd.append('f_path', '/tmp');
     fd.append('f_name', f.name);
     fd.append('f_size', f.size);
     fd.append('f_start', 0);
     fd.append('blob', f, f.name);
-    fetch('/files?action=upload', {method:'POST', body:fd})
-      .then(function(x){ return x.json(); })
-      .then(function(r){
-        var p = (r && (r.path || (r.msg && r.msg.path))) || ('/tmp/' + f.name);
-        cb(p, null);
+    var options = {method:'POST', body:fd};
+    if(controller) options.signal = controller.signal;
+    fetch('/files?action=upload', options)
+      .then(function(x){
+        return x.text().then(function(text){
+          if(looksLikeLoginHtml(text, x.url, x.status)){
+            sessionExpired();
+            finish(null, 'Session expired. Reload the panel and upload again.');
+            return null;
+          }
+          var r = null;
+          try { r = JSON.parse(String(text || '').replace(/^﻿/, '')); }
+          catch(_){
+            finish(null, x.ok === false ?
+              'The panel could not accept the upload. Try again.' :
+              'The panel returned an invalid upload response. Try again.');
+            return null;
+          }
+          if(x.ok === false && !failed(r)){
+            finish(null, 'The panel could not accept the upload. Try again.');
+            return null;
+          }
+          return r;
+        });
       })
-      .catch(function(e){ cb(null, String(e)); });
+      .then(function(r){
+        if(r === null) return;
+        var p = payload(r);
+        if(failed(r)){
+          finish(null, errText(p) || 'The panel rejected the upload.');
+          return;
+        }
+        var path = (p && typeof p === 'object' && p.path) ||
+          (r && typeof r === 'object' && r.path);
+        if(typeof path !== 'string' || path.trim() === '' || path.charAt(0) !== '/'){
+          finish(null, 'The panel did not return a valid staged file path.');
+          return;
+        }
+        finish(path, null);
+      })
+      .catch(function(){ finish(null, 'The panel connection failed during upload. Try again.'); });
   }
 
   // =====================================================================
@@ -3413,7 +3741,7 @@
         busy(btn, false);
         var p = payload(r);
         if(failed(r)){
-          res.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
+          res.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
           return;
         }
         var msg = (migrate ? 'Migrated &amp; deployed' : 'Deployed') + ' to ' + esc(p.app || app) +
@@ -3544,7 +3872,7 @@
       var p = payload(r);
       if(failed(r)){
         stopMetricsTimer();
-        box2.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
+        box2.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
         return;
       }
       var up = !!p.up, pid = p.pid;
@@ -3723,6 +4051,14 @@
   function loadDbSupport(after){
     call('GetDbSupport', {}, function(r){
       var p = payload(r);
+      if(failed(r)){
+        var tb = $('db-matrix');
+        if(tb) tb.innerHTML = '<tr><td colspan="5"><div class="jh-alert danger" role="alert">'+
+          ic('warn')+'<div>Could not load database support: '+esc(errText(p) || 'request failed')+
+          '</div></div></td></tr>';
+        if(after) after();
+        return;
+      }
       DB_ENGINES = (p && p.engines) || [];
       renderDbMatrix();
       if(after) after();
@@ -3839,7 +4175,7 @@
   function loadProxyHint(){
     call('GetProxyHint', {}, function(r){
       var p = payload(r), box = $('help-proxy');
-      if(failed(r)){ box.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
+      if(failed(r)){ box.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
       var html = '';
       if(p.include){
         html += '<pre class="jh-pre">'+esc(p.include)+'</pre>';
@@ -3917,7 +4253,7 @@
       var p = payload(r), b = document.querySelector('#jh-modal-body .jh-doc-body');
       if(!b) return;
       b.className = 'jh-doc-body';
-      if(failed(r)){ b.innerHTML = '<div class="jh-alert danger">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
+      if(failed(r)){ b.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>'; return; }
       var content = (p && p.content != null) ? String(p.content) : '';
       b.innerHTML = content.trim()
         ? mdToHtml(content)
@@ -4287,6 +4623,32 @@
   function startLogsAuto(){ stopLogsAuto(); LOGS.timer = setInterval(logsAutoTick, JOB_POLL); }
   function stopLogsAuto(){ if(LOGS && LOGS.timer){ clearInterval(LOGS.timer); LOGS.timer = null; } }
 
+  function deleteApp(app, btn){
+    if(appPending(app)) return;
+    if(!confirm('Delete app "'+app+'"? This removes its Tomcat instance and files.')) return;
+    var owner = acquireAppPending(app, 'delete');
+    if(!owner) return;
+    busy(btn, true);
+    call('DeleteApp', {app:app}, function(r){
+      var p = payload(r);
+      if(failed(r) && resultIsUncertain(r)){
+        busy(btn, false);
+        syncAppPendingControls(app); // retain owner lock until reload/reconciliation
+        toast('Delete result is unknown. Check the app and Activity, or reload before retrying.',
+          'err', 'Delete status unknown');
+        return;
+      }
+      releaseAppPending(app, owner);
+      busy(btn, false);
+      if(failed(r)) toast(errText(p), 'err', 'Delete '+app+' failed');
+      else {
+        toast('Delete '+app+' completed', 'ok');
+        if(p && p.site_warning) toast(String(p.site_warning), 'err', 'Site cleanup');
+      }
+      refresh();
+    });
+  }
+
   // =====================================================================
   // EVENT WIRING — one delegated handler for the whole UI
   // =====================================================================
@@ -4323,7 +4685,7 @@
     if(b.id === 'jh-fullscreen'){ toggleFullscreen(); return; }
     if(b.id === 'jh-refresh'){ refresh(b); toast('Refreshing…'); return; }
     if(b.id === 'jh-open-create' || b.id === 'jh-empty-create'){ openCreate(); return; }
-    if(b.id === 'jh-open-jar'){ openJar(); return; }
+    if(b.id === 'jh-open-jar' || b.id === 'jh-empty-jar'){ openJar(); return; }
     if(b.id === 'jh-open-war'){ openWar(null); return; }
     // backups
     if(b.id === 'jh-open-backup'){ openBackupModal(); return; }
@@ -4424,23 +4786,7 @@
       startAppLifecycle(ds.repair, 'repair', b); return;
     }
     if(ds.delete){
-      if(appPending(ds.delete)) return;              // a delete is already running
-      if(!confirm('Delete app "'+ds.delete+'"? This removes its Tomcat instance and files.')) return;
-      var dApp = ds.delete;
-      markPending(dApp);                             // block double-delete + tick wipe
-      busy(b, true);
-      call('DeleteApp', {app:dApp}, function(r){
-        clearPending(dApp);
-        busy(b, false);
-        var p = payload(r);
-        if(failed(r)) toast(errText(p), 'err', 'Delete '+dApp+' failed');
-        else {
-          toast('Delete '+dApp+' completed', 'ok');
-          if(p && p.site_warning) toast(String(p.site_warning), 'err', 'Site cleanup');
-        }
-        refresh();
-      });
-      return;
+      deleteApp(ds.delete, b); return;
     }
     if(ds.logs){ openLogs(ds.logs); return; }
     if(ds.metrics){ openMetrics(ds.metrics); return; }

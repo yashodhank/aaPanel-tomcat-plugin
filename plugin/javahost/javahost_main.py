@@ -14,9 +14,12 @@ All real logic lives in `core/`; this file is thin glue so it stays auditable.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import shutil
+import stat
 import sys
+import tempfile
 import urllib.parse
 
 # Make `core` importable regardless of how the panel loads the plugin.
@@ -39,6 +42,95 @@ from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
 from core.backup import schedule as backupschedule  # noqa: E402
+
+
+_AAPANEL_STAGED_UPLOAD_ROOT = "/tmp"
+
+
+@contextmanager
+def _claimed_staged_upload(raw_path, extension):
+    """Atomically claim and yield an aaPanel-staged artifact fail-closed.
+
+    The UI uploads through ``/files?action=upload`` with ``f_path=/tmp``.  Treat
+    the returned path as untrusted.  aaPanel creates uploads directly under the
+    requested directory, so reject nested paths, atomically rename the leaf into
+    a fresh 0700 directory on the same filesystem, then validate the claimed
+    inode.  A rename/symlink swap before the claim is therefore either rejected
+    after the move or safely contained; consumers never reopen the public path.
+    """
+    message = "uploaded %s is not a valid staged upload" % extension
+    claim_dir = None
+    claimed = None
+    try:
+        if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+            raise ValueError(message)
+        if extension not in (".war", ".jar"):
+            raise ValueError(message)
+        if not os.path.isabs(raw_path):
+            raise ValueError(message)
+
+        # Reject traversal, nested paths, and other non-canonical spellings.  A
+        # direct child matches aaPanel's f_path=/tmp upload contract and removes
+        # all attacker-controlled ancestor components from the atomic rename.
+        normalized = os.path.normpath(raw_path)
+        if normalized != raw_path:
+            raise ValueError(message)
+
+        root_alias = os.path.abspath(_AAPANEL_STAGED_UPLOAD_ROOT)
+        if os.path.dirname(normalized) != root_alias:
+            raise ValueError(message)
+        basename = os.path.basename(normalized)
+        if not basename or not basename.lower().endswith(extension):
+            raise ValueError(message)
+        initial_mode = os.lstat(normalized).st_mode
+        if stat.S_ISLNK(initial_mode) or not stat.S_ISREG(initial_mode):
+            raise ValueError(message)
+
+        claim_dir = tempfile.mkdtemp(prefix=".javahost-claim-", dir=root_alias)
+        os.chmod(claim_dir, 0o700)
+        claimed = os.path.join(claim_dir, basename)
+        os.rename(normalized, claimed)
+
+        # Validate after the atomic claim.  If the public leaf was swapped just
+        # before rename, the moved symlink/directory is rejected here and cannot
+        # redirect any downstream consumer outside the private claim directory.
+        root_real = os.path.realpath(root_alias)
+        claim_real = os.path.join(root_real, os.path.basename(claim_dir))
+        resolved = os.path.realpath(claimed)
+        expected = os.path.join(claim_real, basename)
+        if resolved != expected:
+            raise ValueError(message)
+
+        mode = os.lstat(claimed).st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise ValueError(message)
+    except (OSError, TypeError, ValueError):
+        if claim_dir:
+            # Never recursively delete an untrusted object moved into the claim
+            # directory, and never rename it over the public upload name: POSIX
+            # rename would replace a concurrent new upload.  Leave invalid moved
+            # objects quarantined under the random directory for safe recovery.
+            try:
+                os.rmdir(claim_dir)
+            except OSError:
+                pass
+        raise ValueError(message)
+
+    try:
+        yield resolved
+    finally:
+        # The yielded inode was validated as a regular file.  Re-check its leaf
+        # type so cleanup never follows or recursively removes a replacement.
+        try:
+            final_mode = os.lstat(claimed).st_mode
+            if stat.S_ISREG(final_mode) or stat.S_ISLNK(final_mode):
+                os.unlink(claimed)
+        except OSError:
+            pass
+        try:
+            os.rmdir(claim_dir)
+        except OSError:
+            pass
 
 
 class javahost_main(object):
@@ -793,8 +885,11 @@ class javahost_main(object):
         # NOTE: the display name travels as `label`, never `name` — aaPanel's request
         # router treats a POST `name` as the plugin/module name and rejects values
         # with spaces/symbols ("module_name ... cannot contain special symbols").
+        label = panel.attr(get, "label", None)
         return dict(
-            name=panel.attr(get, "label", ""),
+            # Direct/CLI clients historically sent `name`.  Keep that fallback
+            # only when `label` is absent; HTTP clients must use router-safe label.
+            name=label if label is not None else panel.attr(get, "name", ""),
             provider=panel.attr(get, "provider", "other"),
             endpoint=panel.attr(get, "endpoint", ""),
             region=panel.attr(get, "region", "us-east-1"),
@@ -989,14 +1084,16 @@ class javahost_main(object):
     def CreateJarApp(self, get):
         """Run an executable / Spring Boot fat-JAR (staged at `jar`) as a service."""
         try:
-            res = instance.create_jar(
-                app=panel.attr(get, "app"),
-                jar_src=panel.attr(get, "jar") or panel.attr(get, "tmp"),
-                java_major=panel.attr(get, "java", 17),
-                port=panel.attr(get, "port", None),
-                memory_mb=panel.attr(get, "memory", 512),
-                profiles=panel.attr(get, "profiles", ""),
-            )
+            with _claimed_staged_upload(
+                    panel.attr(get, "jar") or panel.attr(get, "tmp"), ".jar") as jar_src:
+                res = instance.create_jar(
+                    app=panel.attr(get, "app"),
+                    jar_src=jar_src,
+                    java_major=panel.attr(get, "java", 17),
+                    port=panel.attr(get, "port", None),
+                    memory_mb=panel.attr(get, "memory", 512),
+                    profiles=panel.attr(get, "profiles", ""),
+                )
             panel.log("CreateJarApp", "%(app)s jar port=%(port)s springboot=%(springboot)s" % res)
             return panel.ok(res)
         except Exception as e:
@@ -1026,13 +1123,12 @@ class javahost_main(object):
         zip-slip-safe atomic deploy + restart flow."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            tmp = panel.attr(get, "tmp") or panel.attr(get, "war")
             major = validate.tomcat_version(panel.attr(get, "version"))
-            if not tmp or not os.path.isfile(tmp):
-                return panel.err("uploaded WAR not found at staged path: %r" % tmp)
-            target = instance.require_tomcat_war_target(app)
-            warn = war.namespace_warning(tmp, registry.get_line(major).namespace)
-            war.replace_root(tmp, target)
+            with _claimed_staged_upload(
+                    panel.attr(get, "tmp") or panel.attr(get, "war"), ".war") as tmp:
+                target = instance.require_tomcat_war_target(app)
+                warn = war.namespace_warning(tmp, registry.get_line(major).namespace)
+                war.replace_root(tmp, target)
             service.action(app, "restart")
             panel.log("UploadWar", "%s <- %s" % (app, os.path.basename(str(tmp))))
             return panel.ok({"app": app, "deployed": True, "restarted": True,
@@ -1049,22 +1145,21 @@ class javahost_main(object):
             if int(str(major).split(".")[0]) < 10:
                 return panel.err("MigrateWar requires Tomcat 10+ (got %s); "
                                  "javax→jakarta output will not run on Tomcat 9" % major)
-            src = panel.attr(get, "war") or panel.attr(get, "tmp")
-            if not src or not os.path.isfile(src):
-                return panel.err("source WAR not found: %r" % src)
-            target = instance.require_tomcat_war_target(app)
-            java_home = installer.ensure_java(major)
-            tmp = fs.mkdtemp("javahost-migrate-")
-            try:
-                out = os.path.join(tmp, "migrated.war")
-                war.migrate(src, out, java_home)
-                war.replace_root(out, target)
-            finally:
-                # mkdtemp lives under /tmp — outside MANAGED_ROOTS; use shutil.
+            with _claimed_staged_upload(
+                    panel.attr(get, "war") or panel.attr(get, "tmp"), ".war") as src:
+                target = instance.require_tomcat_war_target(app)
+                java_home = installer.ensure_java(major)
+                tmp = fs.mkdtemp("javahost-migrate-")
                 try:
-                    shutil.rmtree(tmp)
-                except OSError:
-                    pass
+                    out = os.path.join(tmp, "migrated.war")
+                    war.migrate(src, out, java_home)
+                    war.replace_root(out, target)
+                finally:
+                    # mkdtemp lives under /tmp — outside MANAGED_ROOTS; use shutil.
+                    try:
+                        shutil.rmtree(tmp)
+                    except OSError:
+                        pass
             service.action(app, "restart")
             panel.log("MigrateWar", "%s migrated+deployed" % app)
             return panel.ok({"app": app, "migrated": True, "deployed": True,

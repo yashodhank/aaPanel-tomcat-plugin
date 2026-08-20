@@ -55,7 +55,7 @@ def test_call_guard_blocks_reserved_keys_before_transport_and_allows_safe_data()
 
     html = _ui_source()
     match = re.search(
-        r"(var RESERVED_BODY_KEYS = .*?\n  function call\(method, data, cb\)\{.*?\n  \})"
+        r"(var LOGIN_RE = .*?\n  function call\(method, data, cb\)\{.*?\n  \})"
         r"\n  // \{status,msg\} envelope",
         html,
         flags=re.DOTALL,
@@ -65,8 +65,6 @@ def test_call_guard_blocks_reserved_keys_before_transport_and_allows_safe_data()
     harness = r"""
 var networkCalls = 0;
 var window = {$: null};
-var LOGIN_RE = /never-match/;
-function looksLikeLoginHtml(){ return false; }
 function sessionExpired(){ throw new Error('unexpected session expiry'); }
 function fetch(url, options){
   networkCalls += 1;

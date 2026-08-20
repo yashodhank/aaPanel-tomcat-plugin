@@ -207,6 +207,7 @@ def test_uploadwar_restarts_after_atomic_deploy(tmp_path, monkeypatch):
     z = _make_zip([("index.jsp", "fresh")])
     war_path = tmp_path / "up.war"
     war_path.write_bytes(z.read())
+    monkeypatch.setattr(javahost_main, "_AAPANEL_STAGED_UPLOAD_ROOT", str(tmp_path))
 
     actions = []
     monkeypatch.setattr(javahost_main.instance, "require_tomcat_war_target",
