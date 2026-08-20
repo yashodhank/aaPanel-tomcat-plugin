@@ -67,8 +67,8 @@ def test_listobjects_pagination_follows_continuation(monkeypatch):
             self.status = 200
             self._data = data
 
-        def read(self):
-            return self._data
+        def read(self, amount=None):
+            return self._data if amount is None else self._data[:amount]
 
     class _Conn:
         def request(self, method, path, headers=None):
