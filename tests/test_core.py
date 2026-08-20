@@ -2,6 +2,7 @@
 """Offline unit tests for JavaHost pure-logic modules. No network, no panel."""
 import io
 import os
+import stat
 import zipfile
 
 import pytest
@@ -533,6 +534,15 @@ def test_read_port_jar_app(monkeypatch, tmp_path):
     assert instance._read_port(str(tmp_path / "japp")) == 8090
 
 
+def test_read_port_jar_quoted_server_port(monkeypatch, tmp_path):
+    """SetDbEnv merge quotes SERVER_PORT — health/list must still see the port."""
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "japp" / "bin"
+    base.mkdir(parents=True)
+    (base / "app.env").write_text('SERVER_PORT="8090"\nJAVA_HOME=/opt/jdk\n')
+    assert instance._read_port(str(tmp_path / "japp")) == 8090
+
+
 def test_health_no_port(monkeypatch, tmp_path):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
     (tmp_path / "dead").mkdir()
@@ -725,6 +735,452 @@ def test_engine_default_port_used():
     # port omitted -> engine default
     m = mysql.MYSQL.render_env(host="h", port=None, db="d", user="u", password="x")
     assert ":3306/" in m["DB_URL"]
+
+
+def _managed_env_base(tmp_path, monkeypatch, name="jarapp"):
+    from core.util import fs as fsmod
+
+    managed_root = tmp_path / "managed"
+    base = managed_root / name
+    (base / "bin").mkdir(parents=True)
+    fsmod.mark_managed(str(base))
+    monkeypatch.setattr(fsmod, "MANAGED_ROOTS", (str(managed_root),))
+    return base
+
+
+def _write_secure_env(path, content):
+    path.write_text(content)
+    path.chmod(0o640)
+
+
+def test_write_app_env_preserves_jar_loopback_keys(tmp_path, monkeypatch):
+    """SetDbEnv must merge DB_* into app.env — never wipe JAR bind/JAVA_HOME."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    # create_jar writes unquoted KEY=val lines
+    _write_secure_env(base / "bin" / "app.env",
+        "SERVER_PORT=8090\n"
+        "SERVER_ADDRESS=127.0.0.1\n"
+        "SERVER_HOST=127.0.0.1\n"
+        "JAVA_HOME=/opt/jdk-17\n"
+        "SPRING_PROFILES_ACTIVE=prod\n",
+    )
+    mapping = pg.render_env(
+        host="127.0.0.1", port=5432, db="appdb", user="app",
+        password="s3cr3t-pass", version="16", ssl=False, java_major=17,
+    )
+    path = dbengines.write_app_env(str(base), mapping)
+    assert path.endswith("bin/app.env")
+    assert oct(os.stat(path).st_mode & 0o777) == "0o640"
+
+    env = dbbase.read_app_env(str(base))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["SERVER_HOST"] == "127.0.0.1"
+    assert env["SERVER_PORT"] == "8090"
+    assert env["JAVA_HOME"] == "/opt/jdk-17"
+    assert env["SPRING_PROFILES_ACTIVE"] == "prod"
+    assert env["DB_USER"] == "app"
+    assert env["DB_PASSWORD"] == "s3cr3t-pass"
+    assert env["DB_URL"].startswith("jdbc:postgresql://")
+    # password must not appear in the JDBC URL
+    assert "s3cr3t-pass" not in env["DB_URL"]
+    # Quoted SERVER_PORT after merge must still be visible to health/list.
+    assert instance._read_port(str(base)) == 8090
+
+
+def test_read_app_env_rejects_symlink_without_replacing_it(tmp_path, monkeypatch):
+    """Compromised www must not redirect SetDbEnv's privileged read via symlink."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    target = tmp_path / "foreign.env"
+    target.write_text('LEAKED="secret"\nSERVER_PORT=1\n')
+    envp = base / "bin" / "app.env"
+    envp.symlink_to(target)
+    with pytest.raises(RuntimeError, match="unsafe app.env"):
+        dbbase.read_app_env(str(base))
+    mapping = pg.render_env(
+        host="127.0.0.1", port=5432, db="appdb", user="app",
+        password="x", version="16", ssl=False, java_major=17,
+    )
+    with pytest.raises(RuntimeError, match="unsafe app.env"):
+        dbengines.write_app_env(str(base), mapping)
+    assert envp.is_symlink()
+    assert target.read_text() == 'LEAKED="secret"\nSERVER_PORT=1\n'
+
+
+def test_setdbenv_reports_unsafe_env_without_secret_or_rewrite(tmp_path, monkeypatch):
+    """The endpoint fails safely and never exposes submitted DB credentials."""
+    import javahost_main
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    target = tmp_path / "foreign.env"
+    target.write_text('LEAKED="foreign-secret"\n')
+    envp = base / "bin" / "app.env"
+    envp.symlink_to(target)
+    monkeypatch.setattr(javahost_main.instance, "base_path", lambda app: str(base))
+
+    class G(object):
+        app = "demo"
+        db_engine = "postgresql"
+        db_host = "127.0.0.1"
+        db_port = "5432"
+        db_name = "appdb"
+        db_user = "app"
+        db_password = "submitted-secret"
+        db_version = "16"
+        db_ssl = "0"
+
+    res = javahost_main.javahost_main().SetDbEnv(G())
+
+    assert res.get("status") is False
+    assert "unsafe app.env" in str(res)
+    assert "submitted-secret" not in str(res)
+    assert "foreign-secret" not in str(res)
+    assert envp.is_symlink()
+    assert target.read_text() == 'LEAKED="foreign-secret"\n'
+
+
+def test_read_app_env_prevents_path_swap_after_metadata_check(tmp_path, monkeypatch):
+    """The validated file must be the same descriptor that supplies env data."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    envp = base / "bin" / "app.env"
+    _write_secure_env(envp, 'SERVER_PORT="8090"\n')
+    target = tmp_path / "foreign.env"
+    target.write_text('LEAKED="secret"\n')
+
+    real_lstat = os.lstat
+    real_fstat = os.fstat
+    swapped = False
+
+    def swap_path():
+        nonlocal swapped
+        if not swapped:
+            envp.unlink()
+            envp.symlink_to(target)
+            swapped = True
+
+    def swap_after_lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if os.fspath(path) == os.fspath(envp):
+            swap_path()
+        return result
+
+    def swap_after_fstat(fd):
+        result = real_fstat(fd)
+        if stat.S_ISREG(result.st_mode) and stat.S_IMODE(result.st_mode) == 0o640:
+            swap_path()
+        return result
+
+    # Old code swaps after lstat and then follows the new symlink during open.
+    # Descriptor-bound code swaps after fstat but continues reading the file it
+    # already opened, making the regression deterministic without race timing.
+    monkeypatch.setattr(os, "lstat", swap_after_lstat)
+    monkeypatch.setattr(os, "fstat", swap_after_fstat)
+    env = dbbase.read_app_env(str(base))
+
+    assert swapped is True
+    assert "LEAKED" not in env
+    assert env == {"SERVER_PORT": "8090"}
+
+
+@pytest.mark.parametrize("mode", [0o660, 0o646])
+def test_read_app_env_rejects_group_or_other_writable_file(tmp_path, monkeypatch, mode):
+    """Privileged reads fail closed when a less-trusted user can alter app.env."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    envp = base / "bin" / "app.env"
+    envp.write_text('LEAKED="secret"\n')
+    envp.chmod(mode)
+
+    with pytest.raises(RuntimeError, match="unsafe app.env"):
+        dbbase.read_app_env(str(base))
+
+
+def test_write_app_env_creates_missing_file_with_exact_mode(tmp_path, monkeypatch):
+    """A missing app.env remains the one safe empty-base/create case."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    mapping = {"DB_USER": "app", "DB_PASSWORD": "secret"}
+
+    assert dbbase.read_app_env(str(base)) == {}
+    path = dbbase.write_app_env(str(base), mapping)
+
+    assert path == str(base / "bin" / "app.env")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+    assert dbbase.read_app_env(str(base)) == mapping
+
+
+@pytest.mark.parametrize("symlink_part", ["instance", "bin"])
+def test_app_env_rejects_symlinked_parent_directory(
+        tmp_path, monkeypatch, symlink_part):
+    """Neither the managed instance nor its bin directory may be redirected."""
+    from core.db import _base as dbbase
+    from core.util import fs as fsmod
+
+    managed_root = tmp_path / "managed"
+    managed_root.mkdir()
+    foreign = tmp_path / "foreign"
+    (foreign / "bin").mkdir(parents=True)
+    fsmod.mark_managed(str(foreign))
+    _write_secure_env(foreign / "bin" / "app.env", 'LEAKED="secret"\n')
+    monkeypatch.setattr(fsmod, "MANAGED_ROOTS", (str(managed_root),))
+
+    base = managed_root / "demo"
+    if symlink_part == "instance":
+        base.symlink_to(foreign, target_is_directory=True)
+    else:
+        base.mkdir()
+        fsmod.mark_managed(str(base))
+        (base / "bin").symlink_to(foreign / "bin", target_is_directory=True)
+
+    mapping = {"DB_USER": "app", "DB_PASSWORD": "new-secret"}
+    with pytest.raises(RuntimeError, match="unsafe app.env location"):
+        dbbase.read_app_env(str(base))
+    with pytest.raises(RuntimeError, match="unsafe app.env location"):
+        dbbase.write_app_env(str(base), mapping)
+    assert (foreign / "bin" / "app.env").read_text() == 'LEAKED="secret"\n'
+
+
+def test_read_app_env_stays_on_opened_bin_during_directory_swap(tmp_path, monkeypatch):
+    """Replacing bin after it opens cannot redirect the descriptor-bound read."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    bin_path = base / "bin"
+    _write_secure_env(bin_path / "app.env", 'SERVER_PORT="8090"\n')
+    foreign_bin = tmp_path / "foreign-bin"
+    foreign_bin.mkdir()
+    _write_secure_env(foreign_bin / "app.env", 'LEAKED="secret"\n')
+    opened_bin = base / "bin-opened"
+    real_open = os.open
+    swapped = False
+
+    def swap_after_bin_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        fd = real_open(path, flags, *args, **kwargs)
+        if path == "bin" and kwargs.get("dir_fd") is not None and not swapped:
+            bin_path.rename(opened_bin)
+            bin_path.symlink_to(foreign_bin, target_is_directory=True)
+            swapped = True
+        return fd
+
+    monkeypatch.setattr(os, "open", swap_after_bin_open)
+    env = dbbase.read_app_env(str(base))
+
+    assert swapped is True
+    assert env == {"SERVER_PORT": "8090"}
+    assert bin_path.is_symlink()
+
+
+def test_write_app_env_stays_on_opened_bin_during_directory_swap(tmp_path, monkeypatch):
+    """Atomic replacement is relative to the verified bin descriptor."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    bin_path = base / "bin"
+    _write_secure_env(bin_path / "app.env", 'SERVER_PORT="8090"\n')
+    foreign_bin = tmp_path / "foreign-bin"
+    foreign_bin.mkdir()
+    _write_secure_env(foreign_bin / "app.env", 'LEAKED="secret"\n')
+    opened_bin = base / "bin-opened"
+    real_open = os.open
+    swapped = False
+
+    def swap_after_bin_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        fd = real_open(path, flags, *args, **kwargs)
+        if path == "bin" and kwargs.get("dir_fd") is not None and not swapped:
+            bin_path.rename(opened_bin)
+            bin_path.symlink_to(foreign_bin, target_is_directory=True)
+            swapped = True
+        return fd
+
+    monkeypatch.setattr(os, "open", swap_after_bin_open)
+    dbbase.write_app_env(str(base), {"DB_USER": "app"})
+
+    assert swapped is True
+    assert bin_path.is_symlink()
+    assert (foreign_bin / "app.env").read_text() == 'LEAKED="secret"\n'
+    updated = (opened_bin / "app.env").read_text()
+    assert 'SERVER_PORT="8090"' in updated
+    assert 'DB_USER="app"' in updated
+    assert stat.S_IMODE(os.stat(opened_bin / "app.env").st_mode) == 0o640
+
+
+def test_read_app_env_opens_fifo_nonblocking_then_rejects_it(tmp_path, monkeypatch):
+    """A malicious FIFO must be rejected without waiting for a writer."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    envp = base / "bin" / "app.env"
+    os.mkfifo(envp, 0o640)
+    real_open = os.open
+    opened_flags = []
+
+    def record_open(path, flags, *args, **kwargs):
+        if path == "app.env":
+            opened_flags.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", record_open)
+    with pytest.raises(RuntimeError, match="unsafe app.env"):
+        dbbase.read_app_env(str(base))
+    assert opened_flags and opened_flags[0] & os.O_NONBLOCK
+
+
+def test_write_app_env_replaces_stale_db_keys_on_engine_switch(tmp_path, monkeypatch):
+    """Switching engines drops prior DB_* (e.g. mongo DB_AUTH_SOURCE)."""
+    from core.db import _base as dbbase
+
+    base = _managed_env_base(tmp_path, monkeypatch)
+    _write_secure_env(base / "bin" / "app.env",
+        'SERVER_ADDRESS="127.0.0.1"\n'
+        'DB_URL="mongodb://h:27017/old"\n'
+        'DB_AUTH_SOURCE="admin"\n'
+        'DB_PASSWORD="oldpass"\n',
+    )
+    mapping = mysql.MYSQL.render_env(
+        host="db", port=3306, db="appdb", user="u", password="newpass", ssl=False,
+    )
+    dbengines.write_app_env(str(base), mapping)
+    env = dbbase.read_app_env(str(base))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["DB_PASSWORD"] == "newpass"
+    assert "DB_AUTH_SOURCE" not in env
+    assert env["DB_URL"].startswith("jdbc:mysql://")
+
+
+def test_setdbenv_preserves_jar_loopback_keys(tmp_path, monkeypatch):
+    """Endpoint path: SetDbEnv must keep SERVER_ADDRESS=127.0.0.1 (C1)."""
+    import javahost_main
+    from core.db import _base as dbbase
+
+    app_dir = _managed_env_base(tmp_path, monkeypatch, name="demo")
+    _write_secure_env(app_dir / "bin" / "app.env",
+        "SERVER_PORT=9080\n"
+        "SERVER_ADDRESS=127.0.0.1\n"
+        "SERVER_HOST=127.0.0.1\n"
+        "JAVA_HOME=/www/server/javahost/jdk/17\n",
+    )
+    monkeypatch.setattr(javahost_main.instance, "base_path",
+                        lambda app: str(app_dir))
+
+    class G(object):
+        app = "demo"
+        db_engine = "postgresql"
+        db_host = "127.0.0.1"
+        db_port = "5432"
+        db_name = "appdb"
+        db_user = "app"
+        db_password = "never-echo-me"
+        db_version = "16"
+        db_ssl = "0"
+
+    res = javahost_main.javahost_main().SetDbEnv(G())
+    assert res.get("status") is True
+    body = res["msg"]
+    assert body["env"] == "written (secrets not echoed)"
+    assert "never-echo-me" not in str(res)
+    assert "DB_PASSWORD" not in str(res)
+
+    env = dbbase.read_app_env(str(app_dir))
+    assert env["SERVER_ADDRESS"] == "127.0.0.1"
+    assert env["SERVER_HOST"] == "127.0.0.1"
+    assert env["SERVER_PORT"] == "9080"
+    assert env["JAVA_HOME"] == "/www/server/javahost/jdk/17"
+    assert env["DB_USER"] == "app"
+    assert env["DB_PASSWORD"] == "never-echo-me"
+    assert oct(os.stat(app_dir / "bin" / "app.env").st_mode & 0o777) == "0o640"
+
+
+@pytest.mark.parametrize("db_url,secrets", [
+    (
+        "jdbc:postgresql://alice:userinfo-secret@db.internal:5432/appdb"
+        "?ssl=true&password=query-secret&pwd=second-query-secret",
+        ("userinfo-secret", "query-secret", "second-query-secret"),
+    ),
+    (
+        "mongodb://alice:mongo-userinfo-secret@mongo.internal:27017/appdb"
+        "?authSource=admin&PASSWORD=mongo-query-secret",
+        ("mongo-userinfo-secret", "mongo-query-secret"),
+    ),
+])
+def test_getdbenv_redacts_url_credentials_and_sensitive_query_values(
+        tmp_path, monkeypatch, db_url, secrets):
+    """GetDbEnv may describe a URL but must never echo credentials in it."""
+    import javahost_main
+
+    base = _managed_env_base(tmp_path, monkeypatch, name="demo")
+    _write_secure_env(
+        base / "bin" / "app.env",
+        'DB_URL="%s"\nDB_USER="alice"\nDB_PASSWORD="env-secret"\n' % db_url,
+    )
+    monkeypatch.setattr(javahost_main.instance, "base_path", lambda app: str(base))
+
+    class G(object):
+        app = "demo"
+
+    res = javahost_main.javahost_main().GetDbEnv(G())
+
+    assert res.get("status") is True
+    assert res["msg"]["configured"] is True
+    assert res["msg"]["has_password"] is True
+    assert res["msg"]["url"] is not None
+    assert "REDACTED" in res["msg"]["url"]
+    rendered = repr(res)
+    for secret in secrets + ("env-secret",):
+        assert secret not in rendered
+
+
+@pytest.mark.parametrize("symlink_part", ["app.env", "instance", "bin"])
+def test_getdbenv_rejects_unsafe_env_paths_with_generic_secret_safe_error(
+        tmp_path, monkeypatch, symlink_part):
+    """Unsafe app.env paths fail without exposing paths or foreign contents."""
+    import javahost_main
+    from core.util import fs as fsmod
+
+    managed_root = tmp_path / "managed"
+    managed_root.mkdir()
+    foreign = tmp_path / "foreign-path-secret"
+    (foreign / "bin").mkdir(parents=True)
+    fsmod.mark_managed(str(foreign))
+    _write_secure_env(
+        foreign / "bin" / "app.env",
+        'DB_URL="mongodb://u:foreign-secret@db/app"\nDB_PASSWORD="foreign-secret"\n',
+    )
+    monkeypatch.setattr(fsmod, "MANAGED_ROOTS", (str(managed_root),))
+
+    base = managed_root / "demo"
+    if symlink_part == "instance":
+        base.symlink_to(foreign, target_is_directory=True)
+    else:
+        (base / "bin").mkdir(parents=True)
+        fsmod.mark_managed(str(base))
+        if symlink_part == "bin":
+            (base / "bin").rmdir()
+            (base / "bin").symlink_to(foreign / "bin", target_is_directory=True)
+        else:
+            (base / "bin" / "app.env").symlink_to(foreign / "bin" / "app.env")
+    monkeypatch.setattr(javahost_main.instance, "base_path", lambda app: str(base))
+
+    class G(object):
+        app = "demo"
+
+    res = javahost_main.javahost_main().GetDbEnv(G())
+
+    assert res == {
+        "status": False,
+        "msg": "Unable to read database configuration safely.",
+    }
+    rendered = repr(res)
+    assert "foreign-secret" not in rendered
+    assert "foreign-path-secret" not in rendered
 
 
 def test_namespace_warning(tmp_path):
