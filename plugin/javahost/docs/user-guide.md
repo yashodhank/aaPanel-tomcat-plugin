@@ -151,7 +151,7 @@ prominently:
   [section 6](#6-reverse-proxy--per-site-https).
 
 The Start/Stop/Restart actions are **async**: they call `StartAppAction{app,
-action}`, which runs the lifecycle change as a background job so a slow systemd
+operation}`, which runs the lifecycle change as a background job so a slow systemd
 transition can't time out the panel (watch it in [Tasks](#9-tasks--logs)). The
 list and health auto-refresh (~5s) while the section is visible.
 
@@ -273,11 +273,11 @@ URLs, and packaging checklists, see
 Each row has an inline **Start / Stop / Restart** control and a **More actions**
 menu:
 
-- **Start / Stop / Restart** → `StartAppAction{app, action}` — runs as an **async
+- **Start / Stop / Restart** → `StartAppAction{app, operation}` — runs as an **async
   background job** (non-blocking; pollable in [Tasks](#9-tasks--logs)). The
   synchronous `AppAction` is kept for CLI / back-compat.
 - **Repair** → `RepairApp` (re-renders the service/config; also the recovery step
-  after authorizing hardening). Available async via `StartAppAction{action:
+  after authorizing hardening). Available async via `StartAppAction{operation:
   repair}`.
 - **Delete app** → `DeleteApp` (removes the instance and its files; confirms
   first).

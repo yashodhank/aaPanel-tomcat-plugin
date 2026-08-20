@@ -863,9 +863,25 @@
     return /<!doctype|<html|name=["']?username|id=["']?username|<form/i.test(t);
   }
 
+  // aaPanel merges query and POST params before dispatch. These names select
+  // the plugin route and must never appear in a request body.
+  var RESERVED_BODY_KEYS = {action:true, name:true, s:true};
+  function reservedBodyKey(data){
+    if(!data || typeof data !== 'object') return '';
+    for(var key in RESERVED_BODY_KEYS){
+      if(Object.prototype.hasOwnProperty.call(data, key)) return key;
+    }
+    return '';
+  }
+
   // Panel plugin convention. jQuery $.post if available, else Fetch.
   function call(method, data, cb){
     var url = '/plugin?action=a&name=javahost&s=' + method;
+    var reserved = reservedBodyKey(data);
+    if(reserved){
+      cb({status:false, msg:'Request blocked: "'+reserved+'" is reserved by aaPanel routing.'});
+      return;
+    }
     if (window.$ && $.post){
       $.post(url, data || {}, function(r){
         if(typeof r === 'string'){
@@ -2578,32 +2594,32 @@
 
   // ---- FEATURE A: async app lifecycle ----------------------------------
   // start/stop/restart/repair run as background jobs server-side. We POST
-  // StartAppAction{app,action} -> {job_id,app,action}; mark the app in-flight
+  // StartAppAction{app,operation} -> {job_id,app,action}; mark the app in-flight
   // (so the 5s tick won't wipe the busy control and repeat clicks are ignored),
   // poll GetJobLog{job_id,lines:50} (~1.5s) until state ∈ {done,failed}, then
   // toast + refresh. If StartAppAction is absent on an older backend, fall back
   // to the blocking sync AppAction. Routed through call() (session-expiry).
   var APPACTION_POLL = 1500;
   var LIFECYCLE_TIMERS = {};   // job_id -> interval id (for async lifecycle polls)
-  function lifecycleLabel(action, app){ return action + ' ' + app; }
+  function lifecycleLabel(operation, app){ return operation + ' ' + app; }
   // sync fallback: blocking AppAction (or RepairApp for 'repair').
-  function syncAppAction(app, action, btn){
-    var label = lifecycleLabel(action, app);
+  function syncAppAction(app, operation, btn){
+    var label = lifecycleLabel(operation, app);
     function fin(r){
       clearPending(app); busy(btn, false);
       if(failed(r)) toast(errText(payload(r)), 'err', label + ' failed');
       else toast(label + ' completed', 'ok');
       refresh();
     }
-    if(action === 'repair') call('RepairApp', {app:app}, fin);
-    else call('AppAction', {app:app, action:action}, fin);
+    if(operation === 'repair') call('RepairApp', {app:app}, fin);
+    else call('AppAction', {app:app, operation:operation}, fin);
   }
-  function startAppLifecycle(app, action, btn){
+  function startAppLifecycle(app, operation, btn){
     markPending(app); busy(btn, true);
-    var label = lifecycleLabel(action, app);
-    if(action !== 'repair') toast(label.charAt(0).toUpperCase()+label.slice(1)+'…');
+    var label = lifecycleLabel(operation, app);
+    if(operation !== 'repair') toast(label.charAt(0).toUpperCase()+label.slice(1)+'…');
     else toast('Repairing '+app+'…');
-    call('StartAppAction', {app:app, action:action}, function(r){
+    call('StartAppAction', {app:app, operation:operation}, function(r){
       var p = payload(r);
       var jid = p && (p.job_id || p.id);
       if(failed(r) && !jid){
@@ -2612,7 +2628,7 @@
         var notImpl = em.indexOf('unknown') !== -1 || em.indexOf('not found') !== -1 ||
           em.indexOf('no such') !== -1 || em.indexOf('not implemented') !== -1 ||
           em.indexOf('attribute') !== -1 || em === '' || em.indexOf('404') !== -1;
-        if(notImpl){ syncAppAction(app, action, btn); return; }
+        if(notImpl){ syncAppAction(app, operation, btn); return; }
         clearPending(app); busy(btn, false);
         toast(errText(p), 'err', label + ' failed'); return;
       }
@@ -2623,11 +2639,11 @@
       }
       // surface the job in the Tasks section, then poll its log to completion
       if(activeSection === 'activity') refreshTasks();
-      pollAppJob(jid, app, action, btn);
+      pollAppJob(jid, app, operation, btn);
     });
   }
-  function pollAppJob(jid, app, action, btn){
-    var label = lifecycleLabel(action, app);
+  function pollAppJob(jid, app, operation, btn){
+    var label = lifecycleLabel(operation, app);
     var timer = setInterval(tick, APPACTION_POLL);
     LIFECYCLE_TIMERS[jid] = timer;            // so stopAllPolls() can clear it
     function tick(){
@@ -3682,7 +3698,7 @@
               // env is read at process start: the app must be restarted to use it
               if(confirm('DB env written. Restart "'+app+'" now so it picks up the new database settings?')){
                 toast('Restarting '+app+'…');
-                call('AppAction', {app:app, action:'restart'}, function(rr){
+                call('AppAction', {app:app, operation:'restart'}, function(rr){
                   var pp = payload(rr);
                   if(failed(rr)) toast(errText(pp), 'err', 'Restart failed');
                   else { toast('Restarted '+app, 'ok'); refresh(); }
@@ -3893,11 +3909,11 @@
     closeList();
     return out.join('\n');
   }
-  function viewDoc(name, title){
+  function viewDoc(doc, title){
     openModal({ title: title || 'Document', large: true,
       body: '<div class="jh-doc-body jh-muted">Loading…</div>',
       footer: [ mkBtn('Close', 'ghost', closeModal) ] });
-    call('GetDoc', { name: name }, function(r){
+    call('GetDoc', {doc:doc}, function(r){
       var p = payload(r), b = document.querySelector('#jh-modal-body .jh-doc-body');
       if(!b) return;
       b.className = 'jh-doc-body';

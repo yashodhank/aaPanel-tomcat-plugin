@@ -3,7 +3,10 @@
 Every method the panel can dispatch to JavaHost. The panel imports
 `plugin/javahost/javahost_main.py`, instantiates the `javahost_main` class, and
 calls `instance.<Method>(get)` where `get` is an attribute namespace of request
-params (UI convention: `POST /plugin?action=a&name=javahost&s=<Method>`). Every
+params (UI convention: `POST /plugin?action=a&name=javahost&s=<Method>`). The
+query keys `action`, `name`, and `s` are reserved by aaPanel routing and must not
+appear in the POST body; endpoints use router-safe field names such as
+`operation`, `doc`, and `label`. Every
 method validates its inputs and returns the panel's standard envelope:
 `panel.ok(data)` → `{status: True, msg: data}`, `panel.err(msg)` →
 `{status: False, msg: msg}`. Secrets (DB passwords) are never echoed back.
@@ -62,8 +65,8 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 |--------|--------|-----------------|
 | `CreateApp` | `app`, `version`, `port?` (8080), `memory?` (512), `java?` (JDK pin) | Provision a per-app `CATALINA_BASE`; `java` pins the JDK (else the Tomcat line baseline). |
 | `CreateJarApp` | `app`, `jar`/`tmp`, `java?` (17), `port?`, `memory?`, `profiles?` | Run an executable / Spring Boot fat-JAR as a service (`SERVER_PORT`, loopback bind). |
-| `AppAction` | `app`, `action` | **Sync** start/stop/restart → `{app, status}` (kept for CLI). |
-| `StartAppAction` | `app`, `action` (start\|stop\|restart\|repair) | **Async** lifecycle as a detached job → `{job_id, app, action}`. |
+| `AppAction` | `app`, `operation` | **Sync** start/stop/restart → `{app, status}`. Direct Python/CLI clients may still pass legacy `action`; HTTP clients must not. |
+| `StartAppAction` | `app`, `operation` (start\|stop\|restart\|repair) | **Async** lifecycle as a detached job → `{job_id, app, action}`. Direct Python/CLI clients may still pass legacy `action`; HTTP clients must not. |
 | `RepairApp` | `app` | Re-render + reinstall the service/config. |
 | `DeleteApp` | `app` | Remove the instance, its files, and the service (marker-gated). |
 | `GetAppDetail` | `app` | Per-app detail (`instance.detail`). |
@@ -125,7 +128,7 @@ See [Reverse proxy & per-site HTTPS](../plugin/javahost/docs/user-guide.md#6-rev
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `GetDoc` | `name` (allowlisted: `user-guide`, `system-hardening`, `single-vs-multi-mode`, `databases-java-apps`, `backup-restore`, `troubleshooting`) | Returns a bundled doc's markdown for in-UI rendering (path-traversal-guarded). |
+| `GetDoc` | `doc` (allowlisted: `user-guide`, `system-hardening`, `single-vs-multi-mode`, `databases-java-apps`, `backup-restore`, `troubleshooting`, `war-packaging-and-deploy`) | Returns a bundled doc's markdown for in-UI rendering (path-traversal-guarded). Direct Python clients may still pass legacy `name`; HTTP clients must not. |
 
 ## Dashboard aggregates
 
