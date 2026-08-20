@@ -89,6 +89,7 @@ function fetch(url, options){
   });
   if(networkCalls !== 1) throw new Error('safe request did not reach transport once');
   if(!safeResult || safeResult.status !== true) throw new Error('safe response was not delivered');
+  process.exit(0);
 })().catch(function(error){
   console.error(error && error.message || error);
   process.exit(1);
