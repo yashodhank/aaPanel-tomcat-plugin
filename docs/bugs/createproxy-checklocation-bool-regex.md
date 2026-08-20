@@ -46,7 +46,9 @@ The `CheckLocation()` call at line 4064 is **outside** the `if not nocheck:` gua
    `vhost/nginx/proxy/<domain>/*.conf` + `proxyfile.json` include layout (not a competing
    JavaHost vhost), then `nginx -t` + reload
 5. If both CreateProxy and the file fallback fail after AddSite created a shell site,
-   JavaHost attempts `DeleteSite` rollback and returns `panel.err` with an orphan hint
+   JavaHost never calls `DeleteSite` automatically: aaPanel offers no conditional
+   ownership precondition at deletion time. It returns `panel.err`, `site_may_remain`,
+   the AddSite ID when available, and explicit manual verification/cleanup guidance
 6. Non-nginx webservers (Apache / OpenLiteSpeed) fail closed with a clear error — no
    silent “success” with dead traffic
 
