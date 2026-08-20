@@ -62,6 +62,7 @@ def test_staged_upload_rejects_untrusted_paths(case, tmp_path, monkeypatch):
     elif case == "directory":
         candidate = staged / "directory.war"
         candidate.mkdir()
+        (candidate / "keep.txt").write_text("must survive rejection")
     elif case == "wrong_extension":
         candidate = staged / "app.jar"
         candidate.write_bytes(b"PK\x03\x04")
@@ -73,6 +74,8 @@ def test_staged_upload_rejects_untrusted_paths(case, tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="valid staged upload"):
         with javahost_main._claimed_staged_upload(str(candidate), ".war"):
             pass
+    if case == "directory":
+        assert (candidate / "keep.txt").read_text() == "must survive rejection"
 
 
 def test_create_jar_app_passes_only_validated_staged_path(tmp_path, monkeypatch):
