@@ -34,8 +34,8 @@ def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
     return _base.write_app_env(catalina_base, mapping)
 
 
-def read_app_env(catalina_base: str) -> Dict[str, str]:
-    return _base.read_app_env(catalina_base)
+def update_app_env(catalina_base: str, updates: Dict[str, str]) -> str:
+    return _base.update_app_env(catalina_base, updates)
 
 
 def support_matrix() -> List[dict]:

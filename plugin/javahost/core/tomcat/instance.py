@@ -775,18 +775,10 @@ def _persist_jar_java_opts(base: str, java_opts: str) -> None:
         return
     from ..db import engines as dbengines
     port_before = _read_port(base)
-    env = dbengines.read_app_env(base)
-    if (env.get("JAVA_OPTS") or "").strip() == java_opts:
-        return
-    env["JAVA_OPTS"] = java_opts
-    # Reuse the one canonical app.env serializer used by database credentials.
-    # Reconstructing lines here previously corrupted quotes and backslashes in
-    # unrelated values such as DB_PASSWORD.
-    normalized = {
-        key: str(value).replace("\r", "").replace("\n", "")
-        for key, value in env.items()
-    }
-    dbengines.write_app_env(base, normalized)
+    # Merge only JAVA_OPTS into the latest descriptor-verified environment.
+    # The shared lock prevents a concurrent SetDbEnv from being overwritten by
+    # a stale repair snapshot.
+    dbengines.update_app_env(base, {"JAVA_OPTS": java_opts})
     if _read_port(base) != port_before:
         raise RuntimeError("app.env persistence changed SERVER_PORT")
 

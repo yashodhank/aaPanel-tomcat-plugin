@@ -13,6 +13,8 @@ mysql.py (MySQL + MariaDB), and mongo.py.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import fcntl
 import os
 import errno
 import re
@@ -170,30 +172,41 @@ def read_app_env(catalina_base: str) -> Dict[str, str]:
         os.close(bin_fd)
 
 
-def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
-    """Merge mapping into CATALINA_BASE/bin/app.env (0640).
+@contextmanager
+def _app_env_lock(bin_fd: int):
+    """Serialize app.env read/merge/replace on the verified bin descriptor."""
+    flags = (os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        lock_fd = os.open(".app.env.lock", flags, 0o600, dir_fd=bin_fd)
+    except OSError:
+        raise _unsafe_file()
+    try:
+        lock_st = os.fstat(lock_fd)
+        bin_st = os.fstat(bin_fd)
+        if (not stat.S_ISREG(lock_st.st_mode)
+                or stat.S_IMODE(lock_st.st_mode) != 0o600
+                or lock_st.st_uid not in (os.geteuid(), bin_st.st_uid)):
+            raise _unsafe_file()
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
 
-    Preserves non-DB_* keys already on disk (JAR loopback bind, SERVER_PORT,
-    JAVA_HOME, Spring profiles). Existing DB_* keys are dropped and replaced by
-    ``mapping`` so engine switches do not leave stale credentials. Values are
-    shell-escaped. Secret-safe — never log the mapping (may contain DB_PASSWORD).
-    """
-    path = os.path.join(catalina_base, "bin", "app.env")
-    bin_fd = _open_managed_bin(catalina_base)
+
+def _replace_app_env_fd(bin_fd: int, mapping: Dict[str, str]) -> None:
+    """Atomically replace app.env relative to a verified, locked bin fd."""
+    lines = []
+    for k, v in mapping.items():
+        safe = (str(v).replace("\r", "").replace("\n", "")
+                .replace("\\", "\\\\").replace('"', '\\"'))
+        lines.append('%s="%s"' % (k, safe))
+    body = "\n".join(lines) + "\n"
     tmp_name = ".app.env.tmp-%s" % secrets.token_hex(16)
     try:
-        existing = _read_app_env_fd(bin_fd)
-        merged: Dict[str, str] = {
-            k: v for k, v in existing.items() if not str(k).startswith("DB_")
-        }
-        merged.update(mapping)
-        lines = []
-        for k, v in merged.items():
-            safe = (str(v).replace("\r", "").replace("\n", "")
-                    .replace("\\", "\\\\").replace('"', '\\"'))
-            lines.append('%s="%s"' % (k, safe))
-        body = "\n".join(lines) + "\n"
-
         flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
                  | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
         tmp_fd = os.open(tmp_name, flags, 0o600, dir_fd=bin_fd)
@@ -209,14 +222,48 @@ def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
                 os.close(tmp_fd)
         os.replace(tmp_name, "app.env", src_dir_fd=bin_fd, dst_dir_fd=bin_fd)
         os.fsync(bin_fd)
-        return path
     finally:
         try:
             os.unlink(tmp_name, dir_fd=bin_fd)
         except FileNotFoundError:
             pass
-        finally:
-            os.close(bin_fd)
+
+
+def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
+    """Merge mapping into CATALINA_BASE/bin/app.env (0640).
+
+    Preserves non-DB_* keys already on disk (JAR loopback bind, SERVER_PORT,
+    JAVA_HOME, Spring profiles). Existing DB_* keys are dropped and replaced by
+    ``mapping`` so engine switches do not leave stale credentials. Values are
+    shell-escaped. Secret-safe — never log the mapping (may contain DB_PASSWORD).
+    """
+    path = os.path.join(catalina_base, "bin", "app.env")
+    bin_fd = _open_managed_bin(catalina_base)
+    try:
+        with _app_env_lock(bin_fd):
+            existing = _read_app_env_fd(bin_fd)
+            merged: Dict[str, str] = {
+                k: v for k, v in existing.items() if not str(k).startswith("DB_")
+            }
+            merged.update(mapping)
+            _replace_app_env_fd(bin_fd, merged)
+        return path
+    finally:
+        os.close(bin_fd)
+
+
+def update_app_env(catalina_base: str, updates: Dict[str, str]) -> str:
+    """Merge only ``updates`` into the latest app.env under the shared lock."""
+    path = os.path.join(catalina_base, "bin", "app.env")
+    bin_fd = _open_managed_bin(catalina_base)
+    try:
+        with _app_env_lock(bin_fd):
+            merged = _read_app_env_fd(bin_fd)
+            merged.update(updates)
+            _replace_app_env_fd(bin_fd, merged)
+        return path
+    finally:
+        os.close(bin_fd)
 
 class Engine(object):
     """Base connection-helper engine. Subclasses set class attributes and may
