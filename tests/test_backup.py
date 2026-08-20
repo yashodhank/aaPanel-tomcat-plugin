@@ -182,11 +182,17 @@ def test_restore_rejects_malicious_archive(env, tmp_path):
     assert not instance.exists("clone")          # nothing left half-created
 
 
-def test_restore_forces_secret_modes(env):
+def test_restore_forces_secret_modes(env, monkeypatch):
     """After extract, archive must be 0600 and bin/app.env 0640."""
     iroot, broot = env
     base = _mk_app(iroot, "sec", port=8090)
     envp = os.path.join(base, "bin", "app.env")
+    # Build the manifest while the source satisfies the privileged app.env
+    # reader, then loosen only the archived payload to model an old/untrusted
+    # backup carrying permissive member modes.
+    manifest = store._build_manifest("sec", base)
+    monkeypatch.setattr(store, "_build_manifest",
+                        lambda app, app_base: manifest)
     os.chmod(envp, 0o666)  # deliberately loose before backup
     arc = store.backup_app("sec")["archive"]
     # loosen archive mode to simulate a bad upload umask
@@ -207,6 +213,7 @@ def test_restore_jar_passes_java_opts_from_manifest(env, monkeypatch):
     with open(os.path.join(base, "bin", "app.env"), "w") as f:
         f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
                 "SERVER_ADDRESS=127.0.0.1\nSERVER_HOST=127.0.0.1\n")
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
     with open(os.path.join(base, "app.jar"), "wb") as f:
         f.write(b"PK\x05\x06" + b"\0" * 18)  # minimal zip EOCD
     # stub _app_info so manifest builds as jar with memory
@@ -240,6 +247,7 @@ def test_backup_jar_prefers_app_env_java_opts_over_unit(env, monkeypatch):
     with open(os.path.join(base, "bin", "app.env"), "w") as f:
         f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
                 'JAVA_OPTS="-server -Xmx768m -XX:+UseG1GC"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
     with open(os.path.join(base, "app.jar"), "wb") as f:
         f.write(b"PK\x05\x06" + b"\0" * 18)
     monkeypatch.setattr(instance, "_app_info",
@@ -258,8 +266,10 @@ def test_restore_java_opts_prefers_app_env_before_manifest(env, monkeypatch):
     iroot, _broot = env
     base = os.path.join(iroot, "jaropts")
     os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
     with open(os.path.join(base, "bin", "app.env"), "w") as f:
         f.write('JAVA_OPTS="-server -Xmx640m -XX:+UseG1GC"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
 
     opts = store._restore_java_opts(
         base, "jar", {"java_opts": "-Xmx128m", "memory_mb": 256},
