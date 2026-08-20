@@ -3,6 +3,36 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.29.1] — 2026-08-20
+
+### Security
+- Hardened managed `app.env` reads and writes against symlink, directory-swap,
+  permission, and concurrent-update attacks; sensitive database URLs are redacted.
+- Restore preflight now enforces archive size/member budgets, descriptor-stable
+  extraction, non-root service users, safe init scripts, secret modes, and
+  sanitized JVM options.
+- Uploaded WAR/JAR artifacts are atomically claimed from the aaPanel staging area,
+  revalidated, consumed from a private directory, and quarantined safely on races.
+- Job cancellation verifies process identity, handles stubborn workers and zombie
+  groups, and never prunes active or uncertain jobs.
+
+### Fixed
+- Lifecycle, database-restart, and Help requests no longer collide with aaPanel's
+  reserved router parameters, fixing the “Specific parameters are invalid” error.
+- UI operations use owned locks, bounded single-flight polling, once-only transport
+  callbacks, strict response envelopes, and retained locks after uncertain results.
+- JDK install/update/uninstall and Tomcat removal are serialized and transactional;
+  failed probes, service stops, secret restoration, or cleanup fail closed.
+- Reverse-proxy detection and ownership checks are fail closed; unsafe automatic
+  site rollback was removed and WebSocket-map mutation is serialized.
+- S3 listings are bounded and fail closed on malformed or dishonest pagination.
+
+### Changed
+- Remote deploy and restart commands require an explicit `VPS_HOST`; the repository
+  no longer contains a default server destination.
+- Backup/restore and upload flows provide clearer uncertainty, cancellation, and
+  invalid-response feedback with accessible alerts.
+
 ## [0.29.0] — 2026-08-12
 
 ### Added
