@@ -14,10 +14,13 @@ deploy/ssl do not re-implement panel coupling.
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import fcntl
 import json
 import os
 import re
 import ssl as _sslmod
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -448,6 +451,27 @@ _WS_MAP = """map $http_upgrade $connection_upgrade {
 _WS_MAP_NEEDLE = "map $http_upgrade $connection_upgrade"
 
 
+@contextlib.contextmanager
+def _exclusive_config_lock(config_path: str):
+    """Serialize JavaHost mutations without locking a replaceable config inode."""
+    lock_path = config_path + ".javahost.lock"
+    flags = os.O_RDWR | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("nginx config lock is not a regular file")
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     """Idempotently install the WebSocket upgrade map into nginx's http{} block.
 
@@ -459,33 +483,46 @@ def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     Panel coupling stays here — callers outside compat must use this helper
     rather than writing nginx.conf themselves.
     """
-    if not os.path.isfile(nginx_conf):
-        return False
-    with open(nginx_conf, encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    if _WS_MAP_NEEDLE in content:
-        return True
-    m = re.search(r"\bhttp\s*\{", content)
-    if not m:
-        return False
-    brace = content.index("{", m.start())
-    map_block = "\n".join(
-        ("    " + ln) if ln.strip() else ln
-        for ln in _WS_MAP.strip().splitlines()
-    )
-    injected = (content[: brace + 1]
-                + "\n" + map_block + "\n"
-                + content[brace + 1:])
-    fs.atomic_write(nginx_conf, injected, mode=0o644)
-    nginx = _AAPANEL_NGINX_BIN if os.path.isfile(_AAPANEL_NGINX_BIN) else "nginx"
     try:
-        rc, _, _ = run([nginx, "-t"], check=False, timeout=15)
-    except Exception:
-        rc = 1
-    if rc != 0:
-        fs.atomic_write(nginx_conf, content, mode=0o644)
+        lock = _exclusive_config_lock(nginx_conf)
+        with lock:
+            if not os.path.isfile(nginx_conf):
+                return False
+            with open(nginx_conf, encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            if _WS_MAP_NEEDLE in content:
+                return True
+            m = re.search(r"\bhttp\s*\{", content)
+            if not m:
+                return False
+            brace = content.index("{", m.start())
+            map_block = "\n".join(
+                ("    " + ln) if ln.strip() else ln
+                for ln in _WS_MAP.strip().splitlines()
+            )
+            injected = (content[: brace + 1]
+                        + "\n" + map_block + "\n"
+                        + content[brace + 1:])
+            fs.atomic_write(nginx_conf, injected, mode=0o644)
+            nginx = _AAPANEL_NGINX_BIN if os.path.isfile(_AAPANEL_NGINX_BIN) else "nginx"
+            try:
+                rc, _, _ = run([nginx, "-t"], check=False, timeout=15)
+            except Exception:
+                rc = 1
+            if rc != 0:
+                # A panel process is not required to honor our advisory lock.
+                # Restore only when the file is still precisely our write.
+                try:
+                    with open(nginx_conf, encoding="utf-8", errors="replace") as f:
+                        current = f.read()
+                except OSError:
+                    current = None
+                if current == injected:
+                    fs.atomic_write(nginx_conf, content, mode=0o644)
+                return False
+            return True
+    except OSError:
         return False
-    return True
 
 
 def scrub_site_inline_proxy(domain: str) -> Tuple[bool, str]:

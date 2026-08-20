@@ -34,6 +34,10 @@ def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
     return _base.write_app_env(catalina_base, mapping)
 
 
+def read_app_env(catalina_base: str) -> Dict[str, str]:
+    return _base.read_app_env(catalina_base)
+
+
 def support_matrix() -> List[dict]:
     """UI-friendly summary of every engine, its versions and driver."""
     seen = {}

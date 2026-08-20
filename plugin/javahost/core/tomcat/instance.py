@@ -768,35 +768,27 @@ def _read_jar_java_opts(app: str, base: str) -> str:
 
 def _persist_jar_java_opts(base: str, java_opts: str) -> None:
     """Ensure bin/app.env carries JAVA_OPTS so a later missing-unit repair works."""
-    java_opts = (java_opts or "").strip()
+    # app.env is line-oriented.  Never allow a recovered unit value to inject a
+    # second variable (or leave a stray CR for a different parser to interpret).
+    java_opts = (java_opts or "").replace("\r", "").replace("\n", "").strip()
     if not java_opts:
         return
-    path = os.path.join(base, "bin", "app.env")
-    env = _read_app_env(base)
+    from ..db import engines as dbengines
+    port_before = _read_port(base)
+    env = dbengines.read_app_env(base)
     if (env.get("JAVA_OPTS") or "").strip() == java_opts:
         return
     env["JAVA_OPTS"] = java_opts
-    # Preserve known key order; append any extras.
-    preferred = ("SERVER_PORT", "SERVER_ADDRESS", "SERVER_HOST", "JAVA_HOME",
-                 "SPRING_PROFILES_ACTIVE", "JAVA_OPTS")
-    lines = []
-    seen = set()
-    for key in preferred:
-        if key in env:
-            val = env[key]
-            if key == "JAVA_OPTS" or (" " in val and not (val.startswith('"') and val.endswith('"'))):
-                lines.append('%s="%s"' % (key, val))
-            else:
-                lines.append("%s=%s" % (key, val))
-            seen.add(key)
-    for key, val in env.items():
-        if key in seen:
-            continue
-        if " " in val and not (val.startswith('"') and val.endswith('"')):
-            lines.append('%s="%s"' % (key, val))
-        else:
-            lines.append("%s=%s" % (key, val))
-    fs.atomic_write(path, "\n".join(lines) + "\n", mode=0o640)
+    # Reuse the one canonical app.env serializer used by database credentials.
+    # Reconstructing lines here previously corrupted quotes and backslashes in
+    # unrelated values such as DB_PASSWORD.
+    normalized = {
+        key: str(value).replace("\r", "").replace("\n", "")
+        for key, value in env.items()
+    }
+    dbengines.write_app_env(base, normalized)
+    if _read_port(base) != port_before:
+        raise RuntimeError("app.env persistence changed SERVER_PORT")
 
 
 def repair(app: str) -> Dict:
@@ -911,15 +903,8 @@ def _read_setenv(base: str) -> Dict[str, str]:
 
 def _read_app_env(base: str) -> Dict[str, str]:
     """Parse bin/app.env (KEY=val / KEY="val") — the JAR EnvironmentFile."""
-    env: Dict[str, str] = {}
-    path = os.path.join(base, "bin", "app.env")
-    if os.path.isfile(path):
-        with open(path, errors="replace") as f:
-            for line in f:
-                m = re.match(r'\s*(\w+)="?(.*?)"?\s*$', line)
-                if m:
-                    env[m.group(1)] = m.group(2)
-    return env
+    from ..db import engines as dbengines
+    return dbengines.read_app_env(base)
 
 
 def _read_port(base: str) -> Optional[int]:
@@ -934,10 +919,9 @@ def _read_port(base: str) -> Optional[int]:
     # write_app_env / SetDbEnv merge always quotes values).
     env = os.path.join(base, "bin", "app.env")
     if os.path.isfile(env):
-        with open(env, errors="replace") as f:
-            m = re.search(r'^SERVER_PORT=["\']?(\d+)["\']?', f.read(), re.M)
-            if m:
-                return int(m.group(1))
+        raw_port = _read_app_env(base).get("SERVER_PORT", "")
+        if str(raw_port).isdigit():
+            return int(raw_port)
     return None
 
 

@@ -113,7 +113,7 @@ def _read_app_env_fd(bin_fd: int) -> Dict[str, str]:
         with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as f:
             fd = -1
             for line in f:
-                line = line.rstrip("\n")
+                line = line.rstrip("\r\n")
                 if not line.strip() or line.lstrip().startswith("#"):
                     continue
                 m = _ENV_LINE.match(line)
@@ -121,7 +121,18 @@ def _read_app_env_fd(bin_fd: int) -> Dict[str, str]:
                     continue
                 key, raw = m.group(1), m.group(2).strip()
                 if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
-                    raw = raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+                    decoded = []
+                    inner = raw[1:-1]
+                    index = 0
+                    while index < len(inner):
+                        if (inner[index] == "\\" and index + 1 < len(inner)
+                                and inner[index + 1] in ('\\', '"')):
+                            decoded.append(inner[index + 1])
+                            index += 2
+                        else:
+                            decoded.append(inner[index])
+                            index += 1
+                    raw = "".join(decoded)
                 elif len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
                     raw = raw[1:-1]
                 env[key] = raw
@@ -178,7 +189,8 @@ def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
         merged.update(mapping)
         lines = []
         for k, v in merged.items():
-            safe = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "")
+            safe = (str(v).replace("\r", "").replace("\n", "")
+                    .replace("\\", "\\\\").replace('"', '\\"'))
             lines.append('%s="%s"' % (k, safe))
         body = "\n".join(lines) + "\n"
 
@@ -205,7 +217,6 @@ def write_app_env(catalina_base: str, mapping: Dict[str, str]) -> str:
             pass
         finally:
             os.close(bin_fd)
-
 
 class Engine(object):
     """Base connection-helper engine. Subclasses set class attributes and may

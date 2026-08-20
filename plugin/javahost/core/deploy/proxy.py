@@ -593,9 +593,19 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     # Ensure $connection_upgrade exists before aaPanel/proxy snippets reference it.
     # Writes to panel nginx.conf only via compat/aapanel (panel-coupling boundary).
     try:
-        panel_api.ensure_ws_map()
-    except Exception:
-        pass
+        ws_map_ready = panel_api.ensure_ws_map()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": ("WebSocket proxy prerequisite failed: could not install "
+                      "or validate the nginx upgrade map: %s" % exc),
+        }
+    if not ws_map_ready:
+        return {
+            "ok": False,
+            "error": ("WebSocket proxy prerequisite failed: aaPanel nginx.conf "
+                      "is unavailable or nginx rejected the upgrade map."),
+        }
 
     # Changing domain: attach the NEW site first; only then drop the previous
     # aaPanel site. Delete-before-create orphans the live site when add fails.
