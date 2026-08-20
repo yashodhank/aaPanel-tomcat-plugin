@@ -116,11 +116,82 @@ def install(major: str, *, patch: Optional[str] = None, prefer_java: Optional[in
     return {"major": major, "patch": art.patch, "home": dest, "java_home": java_home}
 
 
-def uninstall(major: str) -> None:
+def usage(major: str) -> list:
+    """App names whose CATALINA_HOME resolves to Tomcat `major`.
+
+    Scans every instance's setenv.sh for CATALINA_HOME and compares the
+    path's major line (…/tomcat/<major>). Defensive: a malformed instance
+    never raises here. Mirrors java.usage() for the uninstall gate.
+    """
+    from . import instance as _inst
+
+    major = str(registry.get_line(major).major)
+    want = os.path.realpath(home_path(major))
+    out = []
+    root = _inst.INSTANCE_ROOT
+    if not os.path.isdir(root):
+        return out
+    for name in sorted(os.listdir(root)):
+        base = os.path.join(root, name)
+        if not os.path.isdir(base):
+            continue
+        try:
+            if _inst._instance_type(base) == "jar":
+                continue
+            env = _inst._read_setenv(base)
+            home = (env.get("CATALINA_HOME") or "").strip()
+            if not home:
+                continue
+            # Match by realpath when the shared home exists; otherwise by
+            # path-basename major (so a removed-but-referenced home still gates).
+            if os.path.isdir(home):
+                if os.path.realpath(home) == want:
+                    out.append(name)
+            elif str(_inst._tomcat_major(home)) == major:
+                out.append(name)
+        except Exception:
+            continue
+    return out
+
+
+def uninstall(major: str, force: bool = False) -> dict:
+    """Remove a managed Tomcat major line.
+
+    Refuses when any app still pins that CATALINA_HOME unless `force=True`
+    (mirrors java.uninstall). With force, stops dependents first so they go
+    cleanly DOWN instead of lingering on a deleted shared home.
+    """
     major = registry.get_line(major).major
     dest = home_path(major)
+    in_use = usage(major)
+    if in_use and not force:
+        raise RuntimeError(
+            "Tomcat %s is in use by: %s (pass force to remove anyway)"
+            % (major, ", ".join(in_use)))
+    if in_use and force:
+        from . import service as _svc
+        for app in in_use:
+            try:
+                _svc.action(app, "stop")
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to stop dependent app %s: %s" % (app, exc)) from exc
+            try:
+                state = _svc.status(app)
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to verify dependent app %s stopped: %s" %
+                    (app, exc)) from exc
+            if state != "inactive":
+                raise RuntimeError(
+                    "dependent app %s did not stop (status: %s); "
+                    "Tomcat %s was not removed" % (app, state, major))
+    removed = False
     if os.path.isdir(dest):
         fs.safe_rmtree(dest, require_marker=True)  # refuses unmanaged (F14)
+        removed = True
+    return {"major": major, "removed": removed,
+            "in_use_by": in_use, "forced": bool(force)}
 
 
 def _keyring(major: str, keys_url: str) -> Optional[str]:

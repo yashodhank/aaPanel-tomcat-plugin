@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import re
+import fcntl
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from ..util import shell, download, fs
@@ -169,8 +171,45 @@ def version_newer(latest: str, installed: str) -> bool:
     return bool(a) and bool(b) and a > b
 
 
+@contextmanager
+def _jdk_major_lock(major: int):
+    """Fail-fast cross-process lock for one managed JDK major."""
+    fs.ensure_dir(JDK_ROOT)
+    path = os.path.join(JDK_ROOT, ".jdk-%d.lock" % int(major))
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            raise RuntimeError(
+                "JDK %s operation already in progress" % major) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
-    """Download + verify + extract Temurin JDK <major>. Returns JAVA_HOME."""
+    """Serialize a complete staged install/update for one JDK major."""
+    if major not in (17, 21, 11, 8):
+        raise ValueError("unsupported JDK major to install: %s" % major)
+    with _jdk_major_lock(major):
+        return _install_temurin_locked(major, arch=arch, os_name=os_name)
+
+
+def _install_temurin_locked(major: int, *, arch: str = "x64",
+                            os_name: str = "linux") -> str:
+    """Download + verify + staged-extract Temurin JDK <major>. Returns JAVA_HOME.
+
+    Extract lands in ``jdk-<major>.staging`` and is atomically renamed into
+    place (same pattern as Tomcat installer). Dependents are stopped only after
+    staging succeeds and immediately before the swap — a failed download or
+    verify must not take apps down. Replacing an in-use tree stops only apps
+    whose JAVA_HOME resolves to this plugin path.
+    """
     if major not in (17, 21, 11, 8):
         raise ValueError("unsupported JDK major to install: %s" % major)
 
@@ -184,31 +223,151 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
     else:
         sha_url = None
 
+    dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
+    staging = dest + ".staging"
     tmp = fs.mkdtemp("javahost-jdk-")
+    rollback = dest + ".old"
+    stopped: List[str] = []
+    restarted: List[str] = []
+    had_live = False
+    swapped = False
+    rollback_created = False
+    committed = False
+    svc = None
     try:
         # Adoptium publishes SHA-256; verify_sha512 expects sha512, so verify sha256 here.
         tgz = _fetch_with_sha256(url, tmp, sha, sha_url)
-        dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
         fs.ensure_dir(JDK_ROOT)
         fs.require_free(JDK_ROOT, 400 * (1 << 20))
-        if os.path.isdir(dest):
-            fs.safe_rmtree(dest, require_marker=False)
-        fs.ensure_dir(dest)
-        shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", dest])
-        fs.mark_managed(dest)
+        if os.path.isdir(staging):
+            fs.safe_rmtree(staging, require_marker=False)
+        fs.ensure_dir(staging)
+        shell.run(["tar", "-xzf", tgz, "--strip-components=1", "-C", staging])
+        fs.mark_managed(staging)
         if semver:
             try:
-                fs.atomic_write(_version_marker(dest), semver + "\n", 0o644)
+                fs.atomic_write(_version_marker(staging), semver + "\n", 0o644)
             except OSError:
                 pass
+        staged_major = probe(staging)
+        if staged_major != major:
+            raise RuntimeError(
+                "staged JDK reports major %s, expected %s" %
+                (staged_major, major))
+
+        had_live = os.path.isdir(dest)
+        # Stop dependents only once staging is ready — a failed download/verify
+        # must not take apps down while the old tree is still intact.
+        if had_live:
+            if os.path.exists(rollback):
+                raise RuntimeError(
+                    "refusing JDK update while rollback tree exists: %s" % rollback)
+            in_use = usage(major, home=dest)
+            if in_use:
+                from ..tomcat import service as _svc
+                svc = _svc
+                for app in in_use:
+                    state = _svc.status(app)
+                    if state not in ("active", "activating", "reloading"):
+                        continue
+                    _svc.action(app, "stop")
+                    stopped.append(app)
+        # Atomic swap: existing tree → .old, staging → dest, then drop .old.
+        if had_live:
+            os.rename(dest, rollback)
+            rollback_created = True
+            os.rename(staging, dest)
+        else:
+            os.rename(staging, dest)
+        swapped = True
+
+        # Prove the tree survived the swap before the rollback copy is touched.
+        got = probe(dest)
+        if got != major:
+            raise RuntimeError(
+                "installed JDK reports major %s, expected %s" % (got, major))
+
+        # Restore only services that were running before the update. A stopped
+        # dependent must remain stopped; a start failure rolls the JDK back.
+        if svc is not None:
+            for app in stopped:
+                svc.action(app, "start")
+                restarted.append(app)
+
+        # Runtime + dependent restarts are now proven. Only now may rollback go.
+        committed = True
+        if had_live:
+            try:
+                fs.safe_rmtree(rollback, require_marker=False)
+            except Exception as exc:
+                raise RuntimeError(
+                    "JDK update committed; rollback tree cleanup failed and "
+                    "stale rollback tree remains at %s: %s" %
+                    (rollback, exc)) from exc
+    except Exception as original:
+        # Once the replacement runtime and all previously-running dependents are
+        # proven, cleanup failure is not grounds to undo a healthy update.
+        if committed:
+            raise
+        rollback_errors: List[str] = []
+
+        # A dependent may already have started on the new runtime before a later
+        # restart failed. Stop those before restoring the old tree.
+        if svc is not None:
+            for app in restarted:
+                try:
+                    svc.action(app, "stop")
+                except Exception as exc:
+                    rollback_errors.append("stop %s: %s" % (app, exc))
+
+        # Restore the previous tree for every failure after dest -> .old,
+        # including a failed staging -> dest rename. Keep .old if any rename
+        # fails so an operator still has the recovery artifact.
+        if rollback_created and os.path.isdir(rollback):
+            try:
+                if os.path.isdir(dest):
+                    if os.path.isdir(staging):
+                        rollback_errors.append(
+                            "cannot preserve failed JDK: staging path already exists")
+                    else:
+                        os.rename(dest, staging)
+                if not os.path.isdir(dest):
+                    os.rename(rollback, dest)
+            except Exception as exc:
+                rollback_errors.append("restore runtime tree: %s" % exc)
+        elif swapped and not had_live and os.path.isdir(dest):
+            # New installs have no old tree; remove the failed live candidate.
+            try:
+                if not os.path.isdir(staging):
+                    os.rename(dest, staging)
+            except Exception as exc:
+                rollback_errors.append("remove failed runtime: %s" % exc)
+
+        # Return every service we successfully stopped to its original running
+        # state. Originally inactive services were never touched.
+        if svc is not None and os.path.isdir(dest):
+            for app in stopped:
+                try:
+                    svc.action(app, "start")
+                except Exception as exc:
+                    rollback_errors.append("start %s: %s" % (app, exc))
+
+        if os.path.isdir(staging):
+            try:
+                fs.safe_rmtree(staging, require_marker=False)
+            except Exception as exc:
+                rollback_errors.append("clean staging: %s" % exc)
+
+        if rollback_errors:
+            raise RuntimeError(
+                "%s; rollback incomplete: %s" %
+                (original, "; ".join(rollback_errors))) from original
+        raise
     finally:
         # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
         # directly: safe_rmtree only permits MANAGED_ROOTS and would refuse /tmp.
         import shutil as _shutil
         _shutil.rmtree(tmp, ignore_errors=True)
-    got = probe(dest)
-    if got != major:
-        raise RuntimeError("installed JDK reports major %s, expected %s" % (got, major))
     return dest
 
 
@@ -227,11 +386,14 @@ def _is_plugin_runtime(path: str) -> bool:
     return rp == root or rp.startswith(root + os.sep)
 
 
-def usage(major: int) -> List[str]:
-    """App names whose pinned JAVA_HOME resolves to Java `major`.
+def usage(major: int, home: Optional[str] = None) -> List[str]:
+    """App names whose pinned JAVA_HOME matches Java ``major`` (or ``home``).
 
-    Scans every instance's setenv.sh / app.env for a JAVA_HOME and compares its
-    parsed major to `major`. Defensive: a malformed instance never raises here.
+    Scans every instance's setenv.sh / app.env for a JAVA_HOME. When ``home`` is
+    set, only apps whose resolved JAVA_HOME equals that path are returned (so
+    updating plugin ``jdk-17`` does not stop apps pinned to a distro JDK 17).
+    Without ``home``, any app whose parsed major matches is returned (UI /
+    uninstall overview). Defensive: a malformed instance never raises here.
     Imported lazily to avoid a runtime<->tomcat import cycle.
     """
     from ..tomcat import instance as _inst
@@ -240,6 +402,12 @@ def usage(major: int) -> List[str]:
     root = _inst.INSTANCE_ROOT
     if not os.path.isdir(root):
         return out
+    want = None
+    if home:
+        try:
+            want = os.path.realpath(home)
+        except OSError:
+            want = home
     for name in sorted(os.listdir(root)):
         base = os.path.join(root, name)
         if not os.path.isdir(base):
@@ -247,14 +415,30 @@ def usage(major: int) -> List[str]:
         try:
             env = _inst._read_setenv(base)
             jhome = env.get("JAVA_HOME") or _inst._read_app_env(base).get("JAVA_HOME", "")
-            if _inst._java_major_from_home(jhome) == int(major):
-                out.append(name)
+            if not jhome:
+                continue
+            if want is not None:
+                try:
+                    if os.path.realpath(jhome) != want:
+                        continue
+                except OSError:
+                    continue
+            elif _inst._java_major_from_home(jhome) != int(major):
+                continue
+            out.append(name)
         except Exception:
             continue
     return out
 
 
 def uninstall(major: int, force: bool = False) -> Dict:
+    """Serialize removal against install/update/reinstall for this major."""
+    major = int(major)
+    with _jdk_major_lock(major):
+        return _uninstall_locked(major, force=force)
+
+
+def _uninstall_locked(major: int, force: bool = False) -> Dict:
     """Remove the plugin-managed JDK `major`.
 
     Refuses the panel-owned JDK (anything outside /www/server/javahost/runtimes):
@@ -276,7 +460,10 @@ def uninstall(major: int, force: bool = False) -> Dict:
             "Java %d resolves to a panel-managed JDK (%s, shared); refusing to "
             "remove it. Reinstall into the plugin dir instead, don't remove the "
             "panel's copy." % (major, os.path.realpath(home)))
-    in_use = usage(major)
+    dest = os.path.join(_PLUGIN_RUNTIMES, "jdk-%d" % major)
+    # Gate on apps pinned to the plugin tree being removed — not every app
+    # that happens to share the same major on a distro JDK.
+    in_use = usage(major, home=dest if os.path.isdir(dest) else home)
     if in_use and not force:
         raise RuntimeError(
             "Java %d is in use by: %s (pass force to remove anyway)"
@@ -307,7 +494,7 @@ def uninstall(major: int, force: bool = False) -> Dict:
 def reinstall(major: int, to_plugin_dir: bool = False) -> Dict:
     """Reinstall Temurin JDK `major` into the plugin runtimes.
 
-    Normally uninstalls the plugin-managed copy first (force=True) then installs.
+    Replaces a plugin-managed copy through install_temurin's staged transaction.
     For a panel-owned JDK (e.g. the panel's jdk17) `to_plugin_dir=True` means:
     DON'T touch the panel copy — just install_temurin(major) under the plugin
     runtimes so the plugin owns its own. With to_plugin_dir False on a panel
@@ -317,15 +504,12 @@ def reinstall(major: int, to_plugin_dir: bool = False) -> Dict:
     found = detect()
     home = found.get(major)
     panel_owned = bool(home) and not _is_plugin_runtime(home)
-    if panel_owned and to_plugin_dir:
-        # leave the panel's copy alone; give the plugin its own under JDK_ROOT
-        new_home = install_temurin(major)
-        return {"major": major, "reinstalled": True, "home": new_home,
-                "kept_panel_copy": True}
-    uninstall(major, force=True)
+    if panel_owned and not to_plugin_dir:
+        # Preserve the established refusal and message for shared runtimes.
+        uninstall(major, force=True)
     new_home = install_temurin(major)
     return {"major": major, "reinstalled": True, "home": new_home,
-            "kept_panel_copy": False}
+            "kept_panel_copy": bool(panel_owned)}
 
 
 def _fetch_with_sha256(url: str, dest_dir: str, sha256_hex, sha256_url) -> str:

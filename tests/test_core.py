@@ -1680,8 +1680,9 @@ def _mk_instance_with_java(tmp_path, name, java_home):
     return base
 
 
-def test_java_uninstall_refuses_panel_path(monkeypatch):
+def test_java_uninstall_refuses_panel_path(monkeypatch, tmp_path):
     # major 17 resolves to the panel-owned /usr/local/btjdk -> refuse.
+    monkeypatch.setattr(java, "JDK_ROOT", str(tmp_path / "runtimes"))
     monkeypatch.setattr(java, "detect", lambda: {17: "/usr/local/btjdk/jdk17"})
     with pytest.raises(RuntimeError) as e:
         java.uninstall(17)
@@ -1690,6 +1691,7 @@ def test_java_uninstall_refuses_panel_path(monkeypatch):
 
 def test_java_uninstall_blocks_on_dependents_then_force(monkeypatch, tmp_path):
     from core.tomcat import instance as inst
+    monkeypatch.setattr(java, "JDK_ROOT", str(tmp_path / "runtimes"))
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     # an app pins jdk-8 under the plugin runtimes
     _mk_instance_with_java(tmp_path, "legacyapp",
@@ -1710,7 +1712,9 @@ def test_java_uninstall_blocks_on_dependents_then_force(monkeypatch, tmp_path):
     monkeypatch.setattr(java.fs, "safe_rmtree",
                         lambda p, **k: removed.update(path=p))
     monkeypatch.setattr(java.os.path, "isdir",
-                        lambda p: p == "/www/server/javahost/runtimes/jdk-8")
+                        lambda p: p in (
+                            "/www/server/javahost/runtimes/jdk-8",
+                            str(tmp_path / "runtimes")))
     res = java.uninstall(8, force=True)
     assert res["removed"] is True and res["forced"] is True
     assert removed["path"] == "/www/server/javahost/runtimes/jdk-8"
@@ -1743,6 +1747,460 @@ def test_uninstall_java_endpoint_blocks_with_in_use_list(monkeypatch):
     assert res["msg"]["in_use_by"] == ["webapp"]
 
 
+# ---- Tomcat uninstall: dependents block + force (mirrors Java) --------------
+def _mk_instance_with_tomcat(tmp_path, name, catalina_home):
+    base = tmp_path / name / "bin"
+    base.mkdir(parents=True)
+    (base / "setenv.sh").write_text(
+        'export JAVA_HOME="/opt/jdk-17"\n'
+        'export CATALINA_HOME="%s"\n' % catalina_home)
+    # non-jar marker: conf/server.xml present
+    (tmp_path / name / "conf").mkdir(parents=True, exist_ok=True)
+    (tmp_path / name / "conf" / "server.xml").write_text("<Server/>\n")
+    return base
+
+
+def test_tomcat_usage_and_uninstall_blocks_on_dependents(monkeypatch, tmp_path):
+    from core.tomcat import installer, instance as inst
+    home = str(tmp_path / "tomcat" / "10")
+    (tmp_path / "tomcat" / "10").mkdir(parents=True)
+    monkeypatch.setattr(installer, "HOME_ROOT", str(tmp_path / "tomcat"))
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path / "instances"))
+    (tmp_path / "instances").mkdir()
+    _mk_instance_with_tomcat(tmp_path / "instances", "webapp", home)
+
+    assert installer.usage("10") == ["webapp"]
+    with pytest.raises(RuntimeError) as e:
+        installer.uninstall("10")
+    assert "in use" in str(e.value) and "webapp" in str(e.value)
+
+    removed = {}
+    monkeypatch.setattr(installer.fs, "safe_rmtree",
+                        lambda p, **k: removed.update(path=p))
+    # force path also stops dependents
+    stops = []
+    monkeypatch.setattr("core.tomcat.service.action",
+                        lambda app, what: stops.append((app, what)))
+    monkeypatch.setattr("core.tomcat.service.status", lambda app: "inactive")
+    res = installer.uninstall("10", force=True)
+    assert res["removed"] is True and res["forced"] is True
+    assert stops == [("webapp", "stop")]
+    assert removed["path"] == home
+
+
+@pytest.mark.parametrize("failure", ["action", "status", "still-active"])
+def test_tomcat_force_uninstall_requires_confirmed_stop(monkeypatch, tmp_path, failure):
+    from core.tomcat import installer
+    home = tmp_path / "tomcat" / "10"
+    home.mkdir(parents=True)
+    monkeypatch.setattr(installer, "HOME_ROOT", str(tmp_path / "tomcat"))
+    monkeypatch.setattr(installer, "usage", lambda major: ["webapp"])
+    removed = []
+    monkeypatch.setattr(installer.fs, "safe_rmtree",
+                        lambda *a, **k: removed.append(a[0]))
+    if failure == "action":
+        monkeypatch.setattr("core.tomcat.service.action",
+                            lambda app, what: (_ for _ in ()).throw(RuntimeError("denied")))
+        monkeypatch.setattr("core.tomcat.service.status", lambda app: "active")
+    elif failure == "status":
+        monkeypatch.setattr("core.tomcat.service.action", lambda app, what: None)
+        monkeypatch.setattr("core.tomcat.service.status",
+                            lambda app: (_ for _ in ()).throw(RuntimeError("probe denied")))
+    else:
+        monkeypatch.setattr("core.tomcat.service.action", lambda app, what: None)
+        monkeypatch.setattr("core.tomcat.service.status", lambda app: "active")
+
+    with pytest.raises(RuntimeError, match="webapp"):
+        installer.uninstall("10", force=True)
+
+    assert removed == []
+
+
+def test_uninstall_tomcat_endpoint_blocks_with_in_use_list(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.installer, "usage", lambda m: ["shop"])
+    monkeypatch.setattr(javahost_main.installer, "uninstall",
+                        lambda *a, **k: pytest.fail("uninstall ran despite dependents"))
+
+    class G(object):
+        version = "10"
+        force = "0"
+
+    res = javahost_main.javahost_main().UninstallTomcat(G())
+    assert res["status"] is False
+    assert res["msg"]["in_use_by"] == ["shop"]
+
+
+def test_get_tomcat_usage_endpoint(monkeypatch):
+    import javahost_main
+    monkeypatch.setattr(javahost_main.installer, "usage", lambda m: ["a"])
+
+    class G(object):
+        version = "11"
+
+    res = javahost_main.javahost_main().GetTomcatUsage(G())
+    assert res["status"] is True
+    assert res["msg"] == {"version": "11", "in_use_by": ["a"]}
+
+
+def test_tomcat_initd_loads_app_env_line_by_line():
+    """Security: Tomcat init.d must never shell-source app.env."""
+    from core.tomcat import templating
+    body = templating.render_file("initd.sh.tmpl", {
+        "app": "demo", "java_home": "/j", "catalina_home": "/t",
+        "catalina_base": "/b", "user": "www",
+    })
+    assert body.startswith("#!/bin/bash -p\n")
+    assert 'done < "$env_file"' in body
+    assert ". $CATALINA_BASE/bin/app.env" not in body
+    assert ". \"$CATALINA_BASE/bin/app.env\"" not in body
+    assert "source " not in body
+
+
+def test_tomcat_initd_drops_privileges_before_allowlisted_env_load():
+    """Root-controlled PATH and loader hooks must never reach app startup."""
+    from core.tomcat import templating
+    body = templating.render_file("initd.sh.tmpl", {
+        "app": "demo", "java_home": "/j", "catalina_home": "/t",
+        "catalina_base": "/b", "user": "www",
+    })
+    assert 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' in body
+    assert "/usr/sbin/runuser" in body and "/bin/bash" in body
+    assert "/usr/bin/env -i" in body
+    assert 'export "$__k=$__v"' in body
+    assert "DB_*|SERVER_*|SPRING_PROFILES_ACTIVE|JAVA_OPTS" in body
+    assert "LD_PRELOAD" in body and "BASH_ENV" in body
+    # The loader/export lives inside the runuser child, never in the root shell.
+    assert body.index("/usr/sbin/runuser") < body.index('export "$__k=$__v"')
+
+
+def test_jdk_install_uses_staging_path(monkeypatch, tmp_path):
+    """install_temurin must stage then rename — never extract into the live tree."""
+    from core.runtime import java as j
+    dest_root = tmp_path / "runtimes"
+    monkeypatch.setattr(j, "JDK_ROOT", str(dest_root))
+    monkeypatch.setattr(j, "_latest_asset", lambda *a, **k: {
+        "version": {"semver": "17.0.99+0"},
+        "binary": {"package": {"link": "https://example/jdk.tgz",
+                               "checksum": "ab" * 32}},
+    })
+    monkeypatch.setattr(j, "_fetch_with_sha256",
+                        lambda url, tmp, sha, sha_url: str(tmp_path / "jdk.tgz"))
+    (tmp_path / "jdk.tgz").write_bytes(b"x")
+    calls = []
+
+    def fake_run(argv, check=True):
+        calls.append(list(argv))
+        # Simulate tar extract by writing a java binary into -C target
+        if argv[:2] == ["tar", "-xzf"]:
+            dest = argv[argv.index("-C") + 1]
+            bindir = os.path.join(dest, "bin")
+            os.makedirs(bindir, exist_ok=True)
+            open(os.path.join(bindir, "java"), "w").write("#!/bin/sh\n")
+            os.chmod(os.path.join(bindir, "java"), 0o755)
+        return (0, "", "")
+
+    monkeypatch.setattr(j.shell, "run", fake_run)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+    monkeypatch.setattr(j.fs, "require_free", lambda *a, **k: None)
+    monkeypatch.setattr(j.fs, "mkdtemp", lambda *a, **k: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    home = j.install_temurin(17)
+    assert home.endswith("jdk-17")
+    assert os.path.isdir(home)
+    assert not os.path.isdir(home + ".staging")
+    tar_calls = [c for c in calls if c[:2] == ["tar", "-xzf"]]
+    assert tar_calls, "expected a tar extract"
+    assert tar_calls[0][-1].endswith(".staging"), "must extract into staging"
+
+
+def test_jdk_install_stops_only_after_staging(monkeypatch, tmp_path):
+    """Failed download must not stop apps; successful staging may stop pins."""
+    from core.runtime import java as j
+    from core.tomcat import instance as inst
+
+    dest_root = tmp_path / "runtimes"
+    dest_root.mkdir()
+    live = dest_root / "jdk-17"
+    live.mkdir()
+    (live / "bin").mkdir()
+    (live / "bin" / "java").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(j, "JDK_ROOT", str(dest_root))
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path / "apps"))
+    _mk_instance_with_java(tmp_path / "apps", "pinned", str(live))
+    _mk_instance_with_java(tmp_path / "apps", "other", "/usr/lib/jvm/java-17")
+
+    stops = []
+    monkeypatch.setattr(j, "_latest_asset", lambda *a, **k: {
+        "version": {"semver": "17.0.99+0"},
+        "binary": {"package": {"link": "https://example/jdk.tgz",
+                               "checksum": "ab" * 32}},
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(j, "_fetch_with_sha256", boom)
+    monkeypatch.setattr(j.fs, "mkdtemp", lambda *a, **k: str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+
+    class _Svc(object):
+        @staticmethod
+        def action(app, act):
+            stops.append((app, act))
+
+    import sys
+    monkeypatch.setitem(sys.modules, "core.tomcat.service", _Svc)
+    # Also patch the lazy import path used inside install_temurin
+    monkeypatch.setattr("core.tomcat.service.action", _Svc.action, raising=False)
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        j.install_temurin(17)
+    assert stops == [], "must not stop apps when staging never succeeds"
+
+    # Successful path: stop only the plugin-path pin, after staging extract.
+    monkeypatch.setattr(j, "_fetch_with_sha256",
+                        lambda url, tmp, sha, sha_url: str(tmp_path / "jdk.tgz"))
+    (tmp_path / "jdk.tgz").write_bytes(b"x")
+    order = []
+
+    def fake_run(argv, check=True):
+        order.append(("tar", argv[argv.index("-C") + 1] if "-C" in argv else ""))
+        if argv[:2] == ["tar", "-xzf"]:
+            dest = argv[argv.index("-C") + 1]
+            bindir = os.path.join(dest, "bin")
+            os.makedirs(bindir, exist_ok=True)
+            open(os.path.join(bindir, "java"), "w").write("#!/bin/sh\n")
+            os.chmod(os.path.join(bindir, "java"), 0o755)
+        return (0, "", "")
+
+    def stop_app(app, act):
+        order.append((act, app))
+        stops.append((app, act))
+
+    monkeypatch.setattr(j.shell, "run", fake_run)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+    monkeypatch.setattr(j.fs, "require_free", lambda *a, **k: None)
+    import shutil
+    monkeypatch.setattr(j.fs, "safe_rmtree",
+                        lambda p, **k: shutil.rmtree(p))
+    # Re-bind service.action used by install_temurin lazy import
+    import core.tomcat.service as svcmod
+    monkeypatch.setattr(svcmod, "action", stop_app)
+    monkeypatch.setattr(svcmod, "status",
+                        lambda app: "active" if app == "pinned" else "inactive")
+
+    stops.clear()
+    j.install_temurin(17)
+    assert ("tar", str(live) + ".staging") in order or any(
+        t == "tar" and str(s).endswith(".staging") for t, s in order)
+    tar_i = next(i for i, (t, _) in enumerate(order) if t == "tar")
+    stop_i = next(i for i, (t, _) in enumerate(order) if t == "stop")
+    assert tar_i < stop_i, "stop must happen after staging extract"
+    assert stops == [("pinned", "stop"), ("pinned", "start")]
+    assert ("other", "stop") not in stops
+
+
+def _prepare_jdk_update(monkeypatch, tmp_path):
+    """Build an old live JDK plus one running and one stopped dependent."""
+    from core.runtime import java as j
+    from core.tomcat import instance as inst
+
+    root = tmp_path / "runtimes"
+    live = root / "jdk-17"
+    (live / "bin").mkdir(parents=True)
+    (live / "bin" / "java").write_text("old-runtime\n")
+    os.chmod(str(live / "bin" / "java"), 0o755)
+    j.fs.mark_managed(str(live))
+    apps = tmp_path / "apps"
+    _mk_instance_with_java(apps, "running", str(live))
+    _mk_instance_with_java(apps, "stopped", str(live))
+
+    monkeypatch.setattr(j, "JDK_ROOT", str(root))
+    monkeypatch.setattr(inst, "INSTANCE_ROOT", str(apps))
+    monkeypatch.setattr(j, "_latest_asset", lambda *a, **k: {
+        "version": {"semver": "17.0.99+0"},
+        "binary": {"package": {"link": "https://example/jdk.tgz",
+                                  "checksum": "ab" * 32}},
+    })
+    archive_path = tmp_path / "jdk.tgz"
+    archive_path.write_bytes(b"x")
+    monkeypatch.setattr(j, "_fetch_with_sha256",
+                        lambda *a, **k: str(archive_path))
+    work = tmp_path / "tmp"
+    work.mkdir()
+    monkeypatch.setattr(j.fs, "mkdtemp", lambda *a, **k: str(work))
+    monkeypatch.setattr(j.fs, "require_free", lambda *a, **k: None)
+
+    def extract(argv, check=True):
+        if argv[:2] == ["tar", "-xzf"]:
+            target = argv[argv.index("-C") + 1]
+            os.makedirs(os.path.join(target, "bin"), exist_ok=True)
+            java_bin = os.path.join(target, "bin", "java")
+            open(java_bin, "w").write("new-runtime\n")
+            os.chmod(java_bin, 0o755)
+        return (0, "", "")
+
+    monkeypatch.setattr(j.shell, "run", extract)
+    import shutil
+    monkeypatch.setattr(j.fs, "safe_rmtree",
+                        lambda path, **kwargs: shutil.rmtree(path))
+    return j, live
+
+
+def test_jdk_update_probes_stage_before_outage(monkeypatch, tmp_path):
+    """A corrupt staged JDK must leave the live tree and app states untouched."""
+    j, live = _prepare_jdk_update(monkeypatch, tmp_path)
+    actions = []
+    monkeypatch.setattr("core.tomcat.service.status",
+                        lambda app: "active" if app == "running" else "inactive")
+    monkeypatch.setattr("core.tomcat.service.action",
+                        lambda app, what: actions.append((app, what)))
+    monkeypatch.setattr(j, "probe",
+                        lambda home: None if home.endswith(".staging") else 17)
+
+    with pytest.raises(RuntimeError, match="staged JDK reports major"):
+        j.install_temurin(17)
+
+    assert (live / "bin" / "java").read_text() == "old-runtime\n"
+    assert actions == []
+    assert not os.path.exists(str(live) + ".old")
+
+
+def test_jdk_update_restarts_only_originally_running_dependents(monkeypatch, tmp_path):
+    """A proven swap restarts running dependents and preserves stopped apps."""
+    j, live = _prepare_jdk_update(monkeypatch, tmp_path)
+    states = {"running": "active", "stopped": "inactive"}
+    actions = []
+
+    def action(app, what):
+        actions.append((app, what))
+        states[app] = "active" if what in ("start", "restart") else "inactive"
+
+    monkeypatch.setattr("core.tomcat.service.status", lambda app: states[app])
+    monkeypatch.setattr("core.tomcat.service.action", action)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+
+    assert j.install_temurin(17) == str(live)
+    assert (live / "bin" / "java").read_text() == "new-runtime\n"
+    assert actions == [("running", "stop"), ("running", "start")]
+    assert states == {"running": "active", "stopped": "inactive"}
+    assert not os.path.exists(str(live) + ".old")
+
+
+def test_jdk_update_post_swap_failure_restores_tree_and_states(monkeypatch, tmp_path):
+    """Post-swap validation failure rolls back before discarding the old JDK."""
+    j, live = _prepare_jdk_update(monkeypatch, tmp_path)
+    states = {"running": "active", "stopped": "inactive"}
+    actions = []
+
+    def action(app, what):
+        actions.append((app, what))
+        states[app] = "active" if what in ("start", "restart") else "inactive"
+
+    def probe(home):
+        body = open(os.path.join(home, "bin", "java")).read()
+        if home.endswith(".staging") or body.startswith("old"):
+            return 17
+        return None
+
+    monkeypatch.setattr("core.tomcat.service.status", lambda app: states[app])
+    monkeypatch.setattr("core.tomcat.service.action", action)
+    monkeypatch.setattr(j, "probe", probe)
+
+    with pytest.raises(RuntimeError, match="installed JDK reports major"):
+        j.install_temurin(17)
+
+    assert (live / "bin" / "java").read_text() == "old-runtime\n"
+    assert actions == [("running", "stop"), ("running", "start")]
+    assert states == {"running": "active", "stopped": "inactive"}
+    assert not os.path.exists(str(live) + ".old")
+
+
+def test_jdk_update_refuses_and_preserves_stale_rollback(monkeypatch, tmp_path):
+    """An interrupted prior update requires operator recovery, not overwriting."""
+    j, live = _prepare_jdk_update(monkeypatch, tmp_path)
+    stale = str(live) + ".old"
+    os.makedirs(os.path.join(stale, "bin"))
+    open(os.path.join(stale, "bin", "java"), "w").write("rollback-runtime\n")
+    actions = []
+    monkeypatch.setattr("core.tomcat.service.action",
+                        lambda app, what: actions.append((app, what)))
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+
+    with pytest.raises(RuntimeError, match="rollback tree exists"):
+        j.install_temurin(17)
+
+    assert (live / "bin" / "java").read_text() == "old-runtime\n"
+    assert open(os.path.join(stale, "bin", "java")).read() == "rollback-runtime\n"
+    assert actions == []
+
+
+def test_jdk_reinstall_uses_transaction_without_uninstall(monkeypatch):
+    """Reinstall/update must not destroy the live tree before staging."""
+    monkeypatch.setattr(java, "detect", lambda: {
+        17: "/www/server/javahost/runtimes/jdk-17",
+    })
+    monkeypatch.setattr(java, "uninstall",
+                        lambda *a, **k: pytest.fail("destructive uninstall called"))
+    monkeypatch.setattr(java, "install_temurin",
+                        lambda major: "/www/server/javahost/runtimes/jdk-%d" % major)
+
+    result = java.reinstall(17)
+
+    assert result["reinstalled"] is True
+    assert result["kept_panel_copy"] is False
+
+
+def test_jdk_update_cleanup_failure_keeps_committed_runtime(monkeypatch, tmp_path):
+    """Failure deleting .old must not roll a proven, restarted runtime back."""
+    j, live = _prepare_jdk_update(monkeypatch, tmp_path)
+    states = {"running": "active", "stopped": "inactive"}
+    actions = []
+
+    def action(app, what):
+        actions.append((app, what))
+        states[app] = "active" if what == "start" else "inactive"
+
+    monkeypatch.setattr("core.tomcat.service.status", lambda app: states[app])
+    monkeypatch.setattr("core.tomcat.service.action", action)
+    monkeypatch.setattr(j, "probe", lambda home: 17)
+    real_remove = j.fs.safe_rmtree
+
+    def fail_old(path, **kwargs):
+        if path.endswith(".old"):
+            raise OSError("cleanup denied")
+        return real_remove(path, **kwargs)
+
+    monkeypatch.setattr(j.fs, "safe_rmtree", fail_old)
+
+    with pytest.raises(RuntimeError, match="committed.*rollback tree"):
+        j.install_temurin(17)
+
+    assert (live / "bin" / "java").read_text() == "new-runtime\n"
+    assert open(str(live) + ".old/bin/java").read() == "old-runtime\n"
+    assert actions == [("running", "stop"), ("running", "start")]
+
+
+def test_jdk_major_lock_rejects_concurrent_operation(monkeypatch, tmp_path):
+    from core.runtime import java as j
+    monkeypatch.setattr(j, "JDK_ROOT", str(tmp_path / "runtimes"))
+
+    with j._jdk_major_lock(17):
+        with pytest.raises(RuntimeError, match="already in progress"):
+            j.install_temurin(17)
+
+
+def test_jdk_major_lock_also_serializes_uninstall(monkeypatch, tmp_path):
+    from core.runtime import java as j
+    monkeypatch.setattr(j, "JDK_ROOT", str(tmp_path / "runtimes"))
+
+    with j._jdk_major_lock(17):
+        with pytest.raises(RuntimeError, match="already in progress"):
+            j.uninstall(17)
+
+
 # ---- maintenance.wipe_preview / wipe ----------------------------------------
 def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     from core import maintenance
@@ -1773,6 +2231,23 @@ def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     assert res["tomcats"]["items"] == ["11"]
     assert res["sites"]["items"] == ["site.conf"]
     assert res["data_root"]["path"].endswith("/javahost")
+
+
+def test_wipe_writes_uninstall_plan(monkeypatch, tmp_path):
+    from core import maintenance
+    data = tmp_path / "javahost"
+    data.mkdir()
+    monkeypatch.setattr(maintenance, "DATA_ROOT", str(data))
+    monkeypatch.setattr(maintenance, "UNINSTALL_PLAN", str(data / ".uninstall_plan"))
+    monkeypatch.setattr(maintenance, "_wipe_apps",
+                        lambda: {"removed": [], "errors": {}})
+    res = maintenance.wipe(["apps"], confirm="WIPE")
+    assert res["performed"] is True
+    plan = data / ".uninstall_plan"
+    assert plan.is_file()
+    assert plan.read_text().strip() == "apps"
+    assert oct(plan.stat().st_mode & 0o777) == "0o600"
+    assert res["uninstall_plan"] == str(plan)
 
 
 def test_wipe_noop_when_confirm_wrong(monkeypatch):

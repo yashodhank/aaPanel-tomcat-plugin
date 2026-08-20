@@ -28,10 +28,27 @@ from .deploy import proxy
 
 DATA_ROOT = "/www/server/javahost"
 CONFIRM = "WIPE"
+UNINSTALL_PLAN = os.path.join(DATA_ROOT, ".uninstall_plan")
 
 _VALID_SCOPE = ("apps", "jdks", "tomcats", "sites", "full")
 # Only plugin-managed runtimes — the panel's /usr/local/btjdk is NEVER in scope.
 _JDK_RE = re.compile(r"^jdk-\d+$")
+
+
+def write_uninstall_plan(scope) -> str:
+    """Persist the Danger-zone wipe scope for `install.sh uninstall`.
+
+    Writes `<DATA_ROOT>/.uninstall_plan` (first line = scope csv). Honored by
+    install.sh when the plugin is removed from the App Store. Mode 0600; path
+    is under the managed data root. Returns the path written.
+    """
+    items = _normalize_scope(scope)
+    if not items:
+        raise ValueError("empty uninstall plan scope")
+    body = ",".join(items) + "\n"
+    fs.ensure_dir(DATA_ROOT)
+    fs.atomic_write(UNINSTALL_PLAN, body, mode=0o600)
+    return UNINSTALL_PLAN
 
 
 # --------------------------------------------------------------------------- #
@@ -303,9 +320,23 @@ def wipe(scope, confirm: str) -> Dict:
                 "scope": items}
 
     results: Dict[str, Dict] = {}
+    # Persist the plan BEFORE destructive steps so App Store uninstall still
+    # sees it if a full wipe removes DATA_ROOT mid-flight, and so a partial
+    # wipe leaves a plan for leftover cleanup on plugin uninstall.
+    plan_path = None
+    plan_error = None
+    try:
+        plan_path = write_uninstall_plan(items)
+    except Exception as e:
+        plan_error = str(e)
+
     if "full" in items:
         results = _wipe_full()
-        return {"ok": True, "performed": True, "scope": ["full"], "steps": results}
+        out = {"ok": True, "performed": True, "scope": ["full"], "steps": results,
+               "uninstall_plan": plan_path}
+        if plan_error:
+            out["uninstall_plan_error"] = plan_error
+        return out
 
     if "apps" in items:
         results["apps"] = _wipe_apps()
@@ -315,4 +346,8 @@ def wipe(scope, confirm: str) -> Dict:
         results["tomcats"] = _wipe_tomcats()
     if "jdks" in items:
         results["jdks"] = _wipe_jdks()
-    return {"ok": True, "performed": True, "scope": items, "steps": results}
+    out = {"ok": True, "performed": True, "scope": items, "steps": results,
+           "uninstall_plan": plan_path}
+    if plan_error:
+        out["uninstall_plan_error"] = plan_error
+    return out

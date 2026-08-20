@@ -188,11 +188,26 @@ class javahost_main(object):
             return panel.err(str(e))
 
     def UninstallTomcat(self, get):
+        """Remove a managed Tomcat major. Blocks when apps still pin that
+        CATALINA_HOME unless force is set (mirrors UninstallJava)."""
         try:
             major = validate.tomcat_version(panel.attr(get, "version"))
-            installer.uninstall(major)
-            panel.log("UninstallTomcat", "tomcat %s" % major)
-            return panel.ok("uninstalled")
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            in_use = installer.usage(major)
+            if in_use and not force:
+                return panel.err({"error": "Tomcat %s is in use" % major,
+                                  "in_use_by": in_use})
+            res = installer.uninstall(major, force=force)
+            panel.log("UninstallTomcat", "tomcat %s removed=%s" % (major, res.get("removed")))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetTomcatUsage(self, get):
+        """Apps whose CATALINA_HOME pins this Tomcat major (uninstall gate)."""
+        try:
+            major = validate.tomcat_version(panel.attr(get, "version"))
+            return panel.ok({"version": major, "in_use_by": installer.usage(major)})
         except Exception as e:
             return panel.err(str(e))
 
@@ -239,9 +254,14 @@ class javahost_main(object):
     def StartUninstallTomcat(self, get):
         try:
             major = validate.tomcat_version(panel.attr(get, "version"))
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            in_use = installer.usage(major)
+            if in_use and not force:
+                return panel.err({"error": "Tomcat %s is in use" % major,
+                                  "in_use_by": in_use})
             argv = jobs.python_work(
                 "from core.tomcat import installer\n"
-                "installer.uninstall(%r)\n" % major)
+                "installer.uninstall(%r, force=%r)\n" % (major, force))
             job_id = jobs.start("uninstall-tomcat", major, argv)
             panel.log("StartUninstallTomcat", "tomcat %s -> job %s" % (major, job_id))
             return panel.ok({"job_id": job_id})

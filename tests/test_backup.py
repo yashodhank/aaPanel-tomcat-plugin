@@ -182,6 +182,226 @@ def test_restore_rejects_malicious_archive(env, tmp_path):
     assert not instance.exists("clone")          # nothing left half-created
 
 
+def test_restore_forces_secret_modes(env, monkeypatch):
+    """After extract, archive must be 0600 and bin/app.env 0640."""
+    iroot, broot = env
+    base = _mk_app(iroot, "sec", port=8090)
+    envp = os.path.join(base, "bin", "app.env")
+    # Build the manifest while the source satisfies the privileged app.env
+    # reader, then loosen only the archived payload to model an old/untrusted
+    # backup carrying permissive member modes.
+    manifest = store._build_manifest("sec", base)
+    monkeypatch.setattr(store, "_build_manifest",
+                        lambda app, app_base: manifest)
+    os.chmod(envp, 0o666)  # deliberately loose before backup
+    arc = store.backup_app("sec")["archive"]
+    # loosen archive mode to simulate a bad upload umask
+    os.chmod(arc, 0o644)
+    store.restore(arc, as_name="sec2")
+    assert oct(os.stat(arc).st_mode & 0o777) == "0o600"
+    restored = os.path.join(instance.base_path("sec2"), "bin", "app.env")
+    assert oct(os.stat(restored).st_mode & 0o777) == "0o640"
+
+
+def test_restore_jar_passes_java_opts_from_manifest(env, monkeypatch):
+    """JAR restore must not reinstall the unit with empty java_opts."""
+    iroot, broot = env
+    app = "jarapp"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
+                "SERVER_ADDRESS=127.0.0.1\nSERVER_HOST=127.0.0.1\n")
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)  # minimal zip EOCD
+    # stub _app_info so manifest builds as jar with memory
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda a: {"type": "jar", "tomcat": None, "java": 17,
+                                   "port": 8099, "domain": None, "ssl": False})
+    monkeypatch.setattr(store, "_read_unit_java_opts",
+                        lambda a: "-server -Xmx256m -XX:+UseG1GC")
+    seen = {}
+
+    def capture_jar_unit(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_jar_unit", capture_jar_unit)
+    arc = store.backup_app(app)["archive"]
+    man = store._read_manifest_file(arc)
+    assert man.get("java_opts")
+    assert man.get("memory_mb") == 256
+    store.restore(arc, as_name="jarclone")
+    assert "-Xmx256m" in seen.get("java_opts", "")
+
+
+def test_backup_jar_prefers_app_env_java_opts_over_unit(env, monkeypatch):
+    """The persisted app contract outranks a possibly missing/stale unit."""
+    iroot, _broot = env
+    app = "jarenv"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
+                'JAVA_OPTS="-server -Xmx768m -XX:+UseG1GC"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda a: {"type": "jar", "tomcat": None, "java": 17,
+                                   "port": 8099, "domain": None, "ssl": False})
+    monkeypatch.setattr(store, "_read_unit_java_opts",
+                        lambda a: "-server -Xmx256m")
+
+    manifest = store._build_manifest(app, base)
+
+    assert manifest["java_opts"] == "-server -Xmx768m -XX:+UseG1GC"
+    assert manifest["memory_mb"] == 768
+
+
+def test_restore_java_opts_prefers_app_env_before_manifest(env, monkeypatch):
+    iroot, _broot = env
+    base = os.path.join(iroot, "jaropts")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write('JAVA_OPTS="-server -Xmx640m -XX:+UseG1GC"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
+
+    opts = store._restore_java_opts(
+        base, "jar", {"java_opts": "-Xmx128m", "memory_mb": 256},
+        "/opt/jdk-17")
+
+    assert opts == "-server -Xmx640m -XX:+UseG1GC"
+
+
+@pytest.mark.parametrize("source", ["setenv", "app_env", "manifest"])
+def test_restore_java_opts_sanitizes_every_archive_source(env, monkeypatch,
+                                                          source):
+    """Untrusted backup options must be safe before service template render."""
+    iroot, _broot = env
+    base = os.path.join(iroot, "hostileopts")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    hostile = ('-server -Xmx128m"; /usr/bin/id; # '
+               '$(touch /tmp/javahost-owned)\n-Dsafe=yes')
+    manifest = {"memory_mb": 256}
+    monkeypatch.setattr(instance, "_read_setenv", lambda _base: {})
+    monkeypatch.setattr(instance, "_read_app_env", lambda _base: {})
+    if source == "setenv":
+        monkeypatch.setattr(instance, "_read_setenv",
+                            lambda _base: {"JAVA_OPTS": hostile})
+    elif source == "app_env":
+        monkeypatch.setattr(instance, "_read_app_env",
+                            lambda _base: {"JAVA_OPTS": hostile})
+    else:
+        manifest["java_opts"] = hostile
+
+    opts = store._restore_java_opts(base, "jar", manifest, "/opt/jdk-17")
+
+    assert opts == "-server -Dsafe=yes"
+    assert all(token not in opts for token in
+               ('"', ";", "$(", "\n", "/usr/bin/id", "javahost-owned"))
+
+
+def test_restore_hostile_jar_archive_never_renders_shell_tokens(env,
+                                                               monkeypatch):
+    """The restore-to-service boundary receives only sanitized archive opts."""
+    iroot, _broot = env
+    app = "hostilejar"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write('SERVER_PORT="8099"\nJAVA_HOME="/opt/jdk-17"\n'
+                'JAVA_OPTS="-server -Xmx128m\\"; /usr/bin/id; #"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda _app: {"type": "jar", "tomcat": None,
+                                      "java": 17, "port": 8099,
+                                      "domain": None, "ssl": False})
+    seen = {}
+
+    def capture_jar_unit(_app, _java_home, _app_dir, _port, java_opts="",
+                         user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(store.service, "install_jar_unit", capture_jar_unit)
+
+    archive_path = store.backup_app(app)["archive"]
+    store.restore(archive_path, as_name="safeclone")
+
+    assert seen["java_opts"] == "-server"
+    assert all(token not in seen["java_opts"] for token in
+               ('"', ";", "$(", "/usr/bin/id"))
+
+
+def test_secure_restored_secrets_fails_closed(env, monkeypatch):
+    iroot, _broot = env
+    base = os.path.join(iroot, "secret")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    envp = os.path.join(base, "bin", "app.env")
+    open(envp, "w").write("DB_PASSWORD=x\n")
+    real_chmod = os.chmod
+
+    def deny_env(path, mode):
+        if path == envp:
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store._secure_restored_secrets(base)
+
+
+def test_restore_discards_app_when_secret_permissions_fail(env, monkeypatch):
+    iroot, _broot = env
+    _mk_app(iroot, "source", port=8090)
+    archive_path = store.backup_app("source")["archive"]
+    real_chmod = os.chmod
+
+    def deny_restored_env(path, mode):
+        if path.endswith("/clone/bin/app.env"):
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_restored_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store.restore(archive_path, as_name="clone")
+
+    assert not instance.exists("clone")
+
+
+def test_overwrite_restore_checks_secret_modes_before_deleting_live_app(env, monkeypatch):
+    iroot, _broot = env
+    base = _mk_app(iroot, "live", port=8090)
+    payload = os.path.join(base, "webapps", "ROOT", "index.jsp")
+    open(payload, "w").write("ORIGINAL-LIVE")
+    archive_path = store.backup_app("live")["archive"]
+    real_chmod = os.chmod
+
+    def deny_staged_env(path, mode):
+        if path.endswith("/base/bin/app.env"):
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_staged_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store.restore(archive_path)
+
+    assert instance.exists("live")
+    assert open(payload).read() == "ORIGINAL-LIVE"
+
+
 def test_delete_backup_refuses_escape(env):
     with pytest.raises(ValueError):
         store.delete_backup("../../etc/passwd")

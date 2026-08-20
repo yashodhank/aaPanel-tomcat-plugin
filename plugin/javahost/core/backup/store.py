@@ -112,16 +112,47 @@ def _parse_xmx_mb(java_opts: str) -> Optional[int]:
     return n * 1024 if m.group(2).lower() == "g" else n
 
 
+def _read_unit_java_opts(app: str) -> str:
+    """Best-effort JAVA_OPTS from the installed systemd/init.d unit (JAR apps
+    bake opts into the unit; setenv.sh is absent). Never raises."""
+    candidates = [
+        "/etc/systemd/system/javahost-%s.service" % app,
+        "/etc/init.d/javahost-%s" % app,
+    ]
+    for path in candidates:
+        try:
+            if not os.path.isfile(path):
+                continue
+            body = open(path, errors="replace").read()
+            # systemd: ExecStart=.../java <opts> -jar ...
+            m = re.search(r"/bin/java\s+(.+?)\s+-jar\b", body)
+            if m:
+                return m.group(1).strip()
+            # init.d: JAVA_OPTS="..."
+            m = re.search(r'^JAVA_OPTS="([^"]*)"', body, re.M)
+            if m:
+                return m.group(1).strip()
+        except OSError:
+            continue
+    return ""
+
+
 def _build_manifest(app: str, base: str) -> Dict:
     info = instance._app_info(app)
     setenv = instance._read_setenv(base)
+    app_env = instance._read_app_env(base)
+    java_opts = (setenv.get("JAVA_OPTS") or
+                 app_env.get("JAVA_OPTS") or "").strip()
+    if not java_opts and (info.get("type") or "") == "jar":
+        java_opts = _read_unit_java_opts(app)
     return {
         "format": MANIFEST_FORMAT,
         "app": app,
         "type": info.get("type") or "war",
         "tomcat_major": info.get("tomcat"),
         "java_major": info.get("java"),
-        "memory_mb": _parse_xmx_mb(setenv.get("JAVA_OPTS", "")),
+        "memory_mb": _parse_xmx_mb(java_opts),
+        "java_opts": java_opts or None,
         "port": info.get("port"),
         "domain": info.get("domain"),
         "ssl_enabled": bool(info.get("ssl")),
@@ -400,6 +431,80 @@ def _clear_site_markers(base: str) -> None:
                 pass
 
 
+def _secure_restored_secrets(base: str, archive_path: str = None) -> None:
+    """Force secret modes after extract (tar members may carry looser modes).
+
+    Archives that carry DB creds → 0600; bin/app.env → 0640.
+    """
+    if archive_path and os.path.isfile(archive_path):
+        os.chmod(archive_path, 0o600)
+    envp = os.path.join(base, "bin", "app.env")
+    if os.path.isfile(envp):
+        os.chmod(envp, 0o640)
+
+
+def _secure_or_discard_restore(base: str, archive_path: str, target: str) -> None:
+    """Fail closed: an insecure restored secret invalidates the restore."""
+    try:
+        _secure_restored_secrets(base, archive_path)
+    except Exception as original:
+        cleanup_errors = []
+        try:
+            service.remove_unit(target)
+        except Exception as exc:
+            cleanup_errors.append("remove unit: %s" % exc)
+        if os.path.isdir(base):
+            try:
+                fs.safe_rmtree(base, require_marker=fs.is_managed(base))
+            except Exception as exc:
+                cleanup_errors.append("remove restored app: %s" % exc)
+        if cleanup_errors:
+            raise RuntimeError(
+                "%s; restore rollback incomplete: %s" %
+                (original, "; ".join(cleanup_errors))) from original
+        raise
+
+
+def _sanitize_restore_java_opts(raw: str, java_home: str) -> str:
+    """Return shell-safe JVM options recovered from an untrusted archive."""
+    if not isinstance(raw, str):
+        return ""
+    from ..runtime import java as _java, jvm_opts
+    major = (_java.probe(java_home)
+             or instance._java_major_from_home(java_home) or 17)
+    cleaned, _warns = jvm_opts.sanitize(raw.split(), int(major))
+    return " ".join(cleaned)
+
+
+def _restore_java_opts(base: str, itype: str, manifest: Dict,
+                       java_home: str) -> str:
+    """Rebuild JVM opts for a restored unit from setenv / manifest.
+
+    JAR backups do not ship the rendered systemd unit, so restore previously
+    reinstalled with empty java_opts. Prefer setenv JAVA_OPTS, then manifest
+    java_opts, else regenerate defaults from manifest memory_mb.
+    """
+    env = instance._read_setenv(base)
+    app_env = instance._read_app_env(base)
+    opts = (env.get("JAVA_OPTS") or app_env.get("JAVA_OPTS") or "").strip()
+    if opts:
+        return _sanitize_restore_java_opts(opts, java_home)
+    raw_man_opts = manifest.get("java_opts") or ""
+    man_opts = raw_man_opts.strip() if isinstance(raw_man_opts, str) else ""
+    if man_opts:
+        return _sanitize_restore_java_opts(man_opts, java_home)
+    mem = manifest.get("memory_mb")
+    if not mem:
+        return ""
+    try:
+        mem_i = int(mem)
+    except (TypeError, ValueError):
+        return ""
+    from ..runtime import jvm_opts
+    return _sanitize_restore_java_opts(
+        " ".join(jvm_opts.default_opts(mem_i)), java_home)
+
+
 def restore(archive_path: str, as_name: Optional[str] = None,
             domain: Optional[str] = None, user: str = "www") -> Dict:
     """Restore an app from a backup archive.
@@ -426,23 +531,24 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     if new_mode:
         if instance.exists(target):
             raise RuntimeError("app already exists: %s (choose another name)" % target)
-    else:
-        # overwrite: stop + remove the existing instance first (marker-gated delete)
-        if instance.exists(target):
-            try:
-                service.action(target, "stop")
-            except Exception:
-                pass
-            service.remove_unit(target)
-            instance.delete(target, purge=True)
 
-    # extract to staging, then move base/ into place (hardened extractor)
+    # Extract and prove secret permissions in staging before destructive
+    # overwrite cutover. A chmod failure must leave the live app untouched.
     staging = fs.mkdtemp("jh-restore-")
     try:
         archive.safe_extract_tar(archive_path, staging)
         src_base = os.path.join(staging, "base")
         if not os.path.isdir(src_base):
             raise RuntimeError("archive missing base/ payload")
+        _secure_restored_secrets(src_base, archive_path)
+
+        if not new_mode and instance.exists(target):
+            try:
+                service.action(target, "stop")
+            except Exception:
+                pass
+            service.remove_unit(target)
+            instance.delete(target, purge=True)
         if os.path.isdir(base):
             fs.safe_rmtree(base, require_marker=fs.is_managed(base))
         shutil.move(src_base, base)
@@ -450,6 +556,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         shutil.rmtree(staging, ignore_errors=True)
 
     fs.mark_managed(base)
+    _secure_or_discard_restore(base, archive_path, target)
 
     # port + domain
     if new_mode:
@@ -468,16 +575,21 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     # re-render setenv (fixes CATALINA_BASE/app for a new name) + the service unit
     env = instance._read_setenv(base)
     java_home = env.get("JAVA_HOME") or instance._read_app_env(base).get("JAVA_HOME", "")
+    java_opts = _restore_java_opts(base, itype, manifest, java_home)
     if itype == "jar":
-        service.install_jar_unit(target, java_home, base, port or 0, java_opts="", user=user)
+        service.install_jar_unit(target, java_home, base, port or 0,
+                                 java_opts=java_opts, user=user)
     else:
         catalina_home = env.get("CATALINA_HOME", "")
-        opts = [o for o in (env.get("JAVA_OPTS", "") or "").split() if o]
+        opts = [o for o in (java_opts or env.get("JAVA_OPTS", "") or "").split() if o]
         if java_home and catalina_home:
             service.write_setenv(base, target, java_home, catalina_home, opts, [])
             service.install_unit(target, java_home, catalina_home, base, user=user)
         else:
             raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
+
+    # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
+    _secure_or_discard_restore(base, archive_path, target)
 
     service.enable_start(target)
 

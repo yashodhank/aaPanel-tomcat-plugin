@@ -25,6 +25,7 @@ This list is the source of truth for the actual methods in `javahost_main.py`.
 | `StartInstallJava` | `version` | **Async** install (job kind `install-java`) → `{job_id}`. |
 | `StartReinstallJava` | `version`, `to_plugin_dir?` | **Async** reinstall (job `reinstall-java`) → `{job_id}`. |
 | `GetJavaUsage` | `version` | `{version, in_use_by: [apps]}` — apps whose pinned `JAVA_HOME` is this major; used to warn before an uninstall. |
+| `GetTomcatUsage` | `version` | `{version, in_use_by: [apps]}` — apps whose `CATALINA_HOME` pins this Tomcat major; uninstall gate. |
 | `UninstallJava` | `version`, `force?` | Sync uninstall of a plugin-managed JDK. **Blocked** when apps pin this major unless `force` (returns `{error, in_use_by}`). |
 | `StartUninstallJava` | `version`, `force?` | **Async** uninstall (job `uninstall-java`) → `{job_id}`; same in-use block; `force` also stops dependents. |
 
@@ -38,9 +39,9 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 |--------|--------|-----------------|
 | `InstallTomcat` | `version` (9 / 10 / 11) | Sync verified install → `{patch, …}`. |
 | `UpdateTomcat` | `version` | Upgrade a managed major to the latest patch (atomic, rollback-safe). |
-| `UninstallTomcat` | `version` | Sync uninstall. |
 | `StartInstallTomcat` | `version` | **Async** install (job `install-tomcat`) → `{job_id}`. |
-| `StartUninstallTomcat` | `version` | **Async** uninstall (job `uninstall-tomcat`) → `{job_id}`. |
+| `UninstallTomcat` | `version`, optional `force` | Sync uninstall. Blocks with `in_use_by` when apps still pin that CATALINA_HOME unless `force=1`. |
+| `StartUninstallTomcat` | `version`, optional `force` | **Async** uninstall (job `uninstall-tomcat`) → `{job_id}`. Same in-use gate as sync. |
 | `StartUpdateTomcat` | `version` | **Async** update to latest patch (job `update-tomcat`) → `{job_id}`. |
 | `GetRuntimeUpdates` | `force?` | `{java:[…], tomcat:[…]}` — cached (24h) upstream version check; `force=1` bypasses cache. |
 | `StartUpdateJava` | `version` | **Async** reinstall Temurin major to latest build (job `update-java`) → `{job_id}`. |
@@ -118,7 +119,7 @@ See [Reverse proxy & per-site HTTPS](../plugin/javahost/docs/user-guide.md#6-rev
 |--------|--------|-----------------|
 | `AllowServices` | — | Register JavaHost in aaPanel System Hardening's process allowlist (append-only, reversible; registers, never bypasses). See [System Hardening](../plugin/javahost/docs/system-hardening.md). |
 | `WipePreview` | — | **Dry run** of the Danger-zone wipe: counts + lists per category, removes nothing. `jdks` lists plugin runtimes only. |
-| `Wipe` | `confirm` (must equal `WIPE`), `scope` (csv from `apps,jdks,tomcats,sites,full`) | Granular plugin wipe. Stops apps first; **skips in-use** runtimes; never touches the panel cert, other plugins' configs, or any database. |
+| `Wipe` | `confirm` (must equal `WIPE`), `scope` (csv from `apps,jdks,tomcats,sites,full`) | Granular plugin wipe. Stops apps first; **skips in-use** runtimes; writes `/www/server/javahost/.uninstall_plan` for App Store uninstall; never touches the panel cert, other plugins' configs, or any database. |
 
 ## Docs (Help viewer)
 
