@@ -876,6 +876,10 @@
   function resultIsUncertain(r){
     return !!(r && r.transport_uncertain === true);
   }
+  function isPanelEnvelope(value){
+    return !!(value && typeof value === 'object' && !Array.isArray(value) &&
+      typeof value.status === 'boolean');
+  }
 
   // aaPanel merges query and POST parameters before dispatch. These names
   // select the plugin route and must never appear in a request body.
@@ -930,8 +934,10 @@
           var parsed;
           try { parsed = JSON.parse(s); }
           catch(_){ invalidResponse(); return; }
+          if(!isPanelEnvelope(parsed)){ invalidResponse(); return; }
           finish(parsed); return;
         }
+        if(!isPanelEnvelope(r)){ invalidResponse(); return; }
         finish(r);
       }).fail(function(e){
         if(settled) return;
@@ -955,6 +961,7 @@
             if(looksLikeLoginHtml(text, x.url, x.status)){ expireSession(); return null; }
             try {
               var parsed = JSON.parse(text.replace(/^﻿/, ''));
+              if(!isPanelEnvelope(parsed)){ invalidResponse(); return null; }
               if(x.ok === false && (!parsed || parsed.status !== false)){
                 return transportFailure('The panel connection failed. Check Activity or reload before retrying.');
               }
