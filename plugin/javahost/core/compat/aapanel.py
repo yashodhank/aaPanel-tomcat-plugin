@@ -25,7 +25,7 @@ import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 from .. import config
-from ..util import fs
+from ..util import fs, validate
 from ..util.shell import run
 
 try:
@@ -71,8 +71,9 @@ def detect_webserver() -> str:
     """Best-effort webserver id: nginx | apache | openlitespeed | unknown.
 
     Prefers ``public.get_webserver()`` when running inside the panel. Falls back
-    to aaPanel filesystem layout. Off-panel unit tests (no /www/server trees)
-    report ``nginx`` so mocked writers keep working.
+    to aaPanel filesystem layout only when exactly one known server tree is
+    present. Missing or conflicting evidence reports ``unknown``; callers that
+    write nginx configuration therefore fail closed.
     """
     if public is not None:
         try:
@@ -94,16 +95,14 @@ def detect_webserver() -> str:
         os.path.isdir("/usr/local/lsws/conf")
         or os.path.isdir("/www/server/panel/vhost/openlitespeed")
     )
-    # When several trees exist, prefer nginx (aaPanel default); only claim
-    # apache/OLS when nginx is absent so switched panels with leftover dirs
-    # still work when public.get_webserver is unavailable.
-    if has_nginx:
-        return "nginx"
-    if has_ols:
-        return "openlitespeed"
-    if has_apache:
-        return "apache"
-    return "nginx"
+    detected = [
+        name for name, present in (
+            ("nginx", has_nginx),
+            ("apache", has_apache),
+            ("openlitespeed", has_ols),
+        ) if present
+    ]
+    return detected[0] if len(detected) == 1 else "unknown"
 
 
 def require_nginx() -> Optional[str]:
@@ -210,8 +209,44 @@ def _lookup_site_row(domain: str) -> Optional[Dict]:
     return None
 
 
-def _site_ps_is_javahost(ps: Any) -> bool:
-    return "javahost" in str(ps or "").lower()
+def _created_site_id(result: Dict) -> Optional[str]:
+    """Extract an explicit, stable site id from a successful AddSite result."""
+    candidates = [result]
+    for key in ("data", "msg"):
+        nested = result.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for item in candidates:
+        for key in ("id", "site_id", "siteId"):
+            value = item.get(key)
+            if isinstance(value, bool):
+                continue
+            raw = str(value or "").strip()
+            if raw.isdigit() and int(raw) > 0:
+                return raw
+    return None
+
+
+_SITE_PS_RE = re.compile(
+    r"\AJavaHost: (?P<domain>[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?) "
+    r"-> http://127\.0\.0\.1:(?P<port>[0-9]{1,5})\Z"
+)
+
+
+def _site_ps_is_javahost(ps: Any, domain: str) -> bool:
+    """Require the exact JavaHost marker grammar for the requested domain."""
+    try:
+        expected_domain = validate.domain(domain)
+    except (TypeError, ValueError):
+        return False
+    match = _SITE_PS_RE.fullmatch(str(ps or ""))
+    if not match or match.group("domain") != expected_domain:
+        return False
+    try:
+        validate.port(match.group("port"))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
@@ -224,9 +259,9 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     or None when the API key is missing / AddSite itself failed.
 
     Fail-closed on non-nginx. Reuses an existing site only when its ``ps``
-    marks it as JavaHost-managed; otherwise returns a conflict error. On
-    CreateProxy+fallback failure after *we* created the site, attempts
-    DeleteSite rollback.
+    has an exact JavaHost marker bound to this domain; otherwise returns a
+    conflict error. A failed attach never deletes the aaPanel site automatically
+    because DeleteSite has no conditional ownership precondition.
     """
     nginx_err = require_nginx()
     if nginx_err:
@@ -243,6 +278,7 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     except OSError:
         pass
 
+    ownership_marker = "JavaHost: %s -> %s" % (domain, backend)
     add_body = {
         "webname": json.dumps({"domain": domain, "domainlist": [], "count": 0}),
         "path": "/www/wwwroot/%s" % domain,
@@ -250,7 +286,7 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         "type_id": "0",
         "version": "00",
         "port": "80",
-        "ps": "JavaHost: %s -> %s" % (domain, backend),
+        "ps": ownership_marker,
         "ftp": "false",
         "sql": "false",
         "set_ssl": "0",
@@ -262,17 +298,19 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
         method="POST", timeout=30)
     site_ok = False
     created_by_us = False
+    created_site_id = None
     reused_existing = False
     if isinstance(data, dict):
         if data.get("status") or data.get("siteStatus"):
             site_ok = True
             created_by_us = True
+            created_site_id = _created_site_id(data)
         else:
             msg = str(data.get("msg") or data.get("error") or "").lower()
             if "exist" in msg or "already" in msg:
                 row = _lookup_site_row(domain)
                 ps = (row or {}).get("ps") if isinstance(row, dict) else ""
-                if _site_ps_is_javahost(ps):
+                if _site_ps_is_javahost(ps, domain):
                     site_ok = True
                     reused_existing = True
                 else:
@@ -356,31 +394,36 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
     # Total failure — restore pre-scrub site conf so we don't leave a blanked
     # reverse-proxy when CreateProxy/fallback both failed.
     _restore_site_conf(domain, scrub_snap)
-    base_err = ("aaPanel site created but CreateProxy failed for %s -> %s: %s"
-                % (domain, backend, last_detail or fb_err or "no detail"))
-    # Only DeleteSite when we just created the shell — never roll back a
-    # pre-existing JavaHost (or other) site we merely tried to re-attach.
-    if created_by_us and http_remove_site(domain):
-        return {
-            "ok": False,
-            "path": "aapanel-http",
-            "error": base_err + "; orphan site rolled back via DeleteSite",
-            "detail": last_detail or fb_err or "CreateProxy failed",
-            "rolled_back": True,
-        }
+    site_context = ("new aaPanel site" if created_by_us
+                    else "existing JavaHost site")
+    base_err = ("Proxy attach failed for %s %s -> %s: %s"
+                % (site_context, domain, backend,
+                   last_detail or fb_err or "no detail"))
     orphan_hint = (
-        "; orphan aaPanel site left for %s — remove it under Website "
-        "(or fix nginx and retry SetSite)" % domain
+        "; the site may remain in aaPanel. Verify Website entry %s%s and "
+        "remove it manually only if it is still the failed JavaHost site, or "
+        "fix nginx and retry SetSite"
+        % (domain, " (site id %s)" % created_site_id if created_site_id else "")
         if created_by_us else
-        "; existing JavaHost site left unchanged — fix nginx and retry"
+        "; the existing JavaHost site was not deleted — fix nginx and retry"
     )
-    return {
+    result = {
         "ok": False,
         "path": "aapanel-http",
         "error": base_err + orphan_hint,
         "detail": last_detail or fb_err or "CreateProxy failed",
-        "orphan": bool(created_by_us),
+        "site_may_remain": bool(created_by_us),
+        "rollback_refused": bool(created_by_us),
+        "reused": bool(reused_existing),
     }
+    if created_site_id:
+        result["site_id"] = created_site_id
+    if created_by_us:
+        result["manual_cleanup"] = (
+            "In aaPanel Website, verify domain %s and its JavaHost marker before "
+            "manually deleting the failed site." % domain
+        )
+    return result
 
 
 _AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
