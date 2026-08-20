@@ -226,8 +226,10 @@ def test_deployment_endpoints_reject_a_swap_during_atomic_claim(
                         lambda *args, **kwargs: downstream_ran.append((args, kwargs)))
 
     real_rename = javahost_main.os.rename
+    renames = []
 
     def swap_then_rename(source, destination):
+        renames.append((source, destination))
         if source == str(artifact):
             artifact.unlink()
             artifact.symlink_to(outside)
@@ -239,6 +241,9 @@ def test_deployment_endpoints_reject_a_swap_during_atomic_claim(
     assert result["status"] is False
     assert "valid staged upload" in result["msg"]
     assert downstream_ran == []
+    assert len(renames) == 1
+    assert os.path.lexists(renames[0][1])
+    assert outside.read_bytes() == b"untrusted"
 
 
 def test_storage_profile_label_precedes_legacy_name():
