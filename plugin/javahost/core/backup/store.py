@@ -11,8 +11,8 @@ sensitive externals:
         keys are never bundled; SSL is RE-ISSUED on restore, best-effort).
 
 Restore has two modes:
-  * overwrite (as_name=None): stop+delete the existing app, restore in place with
-    its original port/domain.
+  * overwrite (as_name=None): fully stage and validate the replacement, then
+    swap it into place while retaining the original tree for rollback.
   * restore-as-new (as_name set): reallocate the port, rewrite server.xml/app.env,
     remap (or drop) the domain so two apps never collide.
 
@@ -23,21 +23,54 @@ contained. Defensive throughout.
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import re
+import shlex
 import shutil
+import stat
+import tempfile
 import time
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from .. import config
 from ..deploy import proxy, ssl
-from ..tomcat import instance, service
+from ..runtime import java, jvm_opts
+from ..tomcat import installer, instance, service, templating
+from ..util import shell
 from ..util import fs, validate
 from . import archive
 
 BACKUPS_ROOT = "/www/server/javahost/backups"   # default; override via config "backup_dest"
 MANIFEST_NAME = "manifest.json"
 MANIFEST_FORMAT = 1
+
+
+def _restore_root() -> str:
+    """Private same-filesystem restore workspace, never visible as an app."""
+    return os.path.join(os.path.dirname(instance.INSTANCE_ROOT), ".restore-transactions")
+
+
+@contextmanager
+def _app_restore_lock(app: str):
+    root = _restore_root()
+    fs.ensure_dir(root, 0o700)
+    fs.mark_managed(root)
+    locks = fs.ensure_dir(os.path.join(root, "locks"), 0o700)
+    path = os.path.join(locks, "%s.lock" % validate.identifier(app, "app"))
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("restore already in progress for app: %s" % app)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def _backups_root() -> str:
@@ -113,6 +146,7 @@ def _parse_xmx_mb(java_opts: str) -> Optional[int]:
 def _build_manifest(app: str, base: str) -> Dict:
     info = instance._app_info(app)
     setenv = instance._read_setenv(base)
+    app_env = instance._read_app_env(base)
     return {
         "format": MANIFEST_FORMAT,
         "app": app,
@@ -120,6 +154,9 @@ def _build_manifest(app: str, base: str) -> Dict:
         "tomcat_major": info.get("tomcat"),
         "java_major": info.get("java"),
         "memory_mb": _parse_xmx_mb(setenv.get("JAVA_OPTS", "")),
+        # JAR services do not have setenv.sh. New backups persist their validated
+        # flags in the manifest so a restore never silently drops them.
+        "java_opts": app_env.get("JAVA_OPTS", "") if info.get("type") == "jar" else None,
         "port": info.get("port"),
         "domain": info.get("domain"),
         "ssl_enabled": bool(info.get("ssl")),
@@ -396,6 +433,168 @@ def _clear_site_markers(base: str) -> None:
                 pass
 
 
+def _safe_opts(raw, java_major: int) -> List[str]:
+    """Parse archived JVM flags without ever accepting shell syntax."""
+    if isinstance(raw, list):
+        opts = [str(v) for v in raw]
+    else:
+        try:
+            opts = shlex.split(str(raw or ""), posix=True)
+        except ValueError as e:
+            raise ValueError("invalid archived JAVA_OPTS: %s" % e)
+    cleaned, warnings = jvm_opts.sanitize(opts, java_major)
+    if warnings or cleaned != opts:
+        raise ValueError("unsafe or unsupported archived JAVA_OPTS")
+    return cleaned
+
+
+def _validate_restore_payload(src_base: str, manifest: Dict) -> Dict:
+    """Treat every archive field and config file as untrusted input."""
+    if manifest.get("format") != MANIFEST_FORMAT:
+        raise ValueError("unsupported backup manifest format: %r" % manifest.get("format"))
+    itype = str(manifest.get("type") or "")
+    if itype not in ("war", "jar"):
+        raise ValueError("unsupported restored app type: %r" % itype)
+    actual = instance._instance_type(src_base)
+    if (itype == "jar" and actual != "jar") or (itype == "war" and actual == "jar"):
+        raise ValueError("manifest app type does not match archive payload")
+
+    config_port = instance._read_port(src_base)
+    port = validate.port(config_port if config_port is not None else manifest.get("port"))
+    if manifest.get("port") is not None and validate.port(manifest["port"]) != port:
+        raise ValueError("manifest port does not match archive payload")
+
+    setenv_path = os.path.join(src_base, "bin", "setenv.sh")
+    if os.path.isfile(setenv_path):
+        with open(setenv_path, errors="strict") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if not re.fullmatch(r'export\s+[A-Z][A-Z0-9_]*="[^"\r\n]*"', stripped):
+                    raise ValueError("invalid archived setenv configuration")
+    env = instance._read_setenv(src_base)
+    app_env = instance._read_app_env(src_base)
+    java_home = env.get("JAVA_HOME") or app_env.get("JAVA_HOME", "")
+    detected = {major: os.path.realpath(path) for major, path in java.detect().items()}
+    java_real = os.path.realpath(java_home) if java_home else ""
+    matching = [major for major, path in detected.items() if path == java_real]
+    if not matching:
+        raise ValueError("archived JAVA_HOME is not an installed managed runtime")
+    java_major = matching[0]
+    if manifest.get("java_major") is not None:
+        expected_java = validate.java_major(manifest["java_major"])
+        if expected_java != java_major:
+            raise ValueError("manifest Java version does not match JAVA_HOME")
+
+    if itype == "jar":
+        if not os.path.isfile(os.path.join(src_base, "app.jar")):
+            raise ValueError("JAR archive is missing app.jar")
+        raw_opts = manifest.get("java_opts", app_env.get("JAVA_OPTS", ""))
+        catalina_home = ""
+    else:
+        major = validate.tomcat_version(manifest.get("tomcat_major"))
+        catalina_home = env.get("CATALINA_HOME", "")
+        expected_home = os.path.realpath(installer.home_path(major))
+        if not catalina_home or os.path.realpath(catalina_home) != expected_home:
+            raise ValueError("archived CATALINA_HOME is not the managed Tomcat runtime")
+        if not installer.is_installed(major):
+            raise ValueError("required managed Tomcat runtime is not installed")
+        raw_opts = env.get("JAVA_OPTS", "")
+    opts = _safe_opts(raw_opts, java_major)
+    return {"type": itype, "port": port, "java_home": java_real,
+            "java_major": java_major, "catalina_home": catalina_home,
+            "opts": opts}
+
+
+def _unit_path(app: str, backend: Optional[str]) -> Optional[str]:
+    if backend == "systemd":
+        return service._unit_path(app)
+    if backend == "initd":
+        return service._script_path(app)
+    return None
+
+
+def _service_snapshot(app: str) -> Dict:
+    backend = service._backend(app)
+    path = _unit_path(app, backend)
+    status = service.status(app)
+    snap = {"backend": backend, "path": path, "content": None, "mode": None,
+            "active": status == "active", "status": status,
+            "enabled": instance._is_enabled(app, backend), "user": "www"}
+    if path and os.path.isfile(path) and not os.path.islink(path):
+        with open(path, errors="strict") as f:
+            snap["content"] = f.read()
+        snap["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+        m = re.search(r"^(?:User|RUNAS)=\"?([A-Za-z0-9._-]+)\"?$", snap["content"], re.M)
+        if m:
+            snap["user"] = validate.identifier(m.group(1), "service user")
+    return snap
+
+
+def _install_payload_service(app: str, base: str, cfg: Dict, user: str,
+                             backend: Optional[str] = None) -> str:
+    """Render for the prior backend when overwriting; auto-select for new apps."""
+    if backend is None:
+        if cfg["type"] == "jar":
+            return service.install_jar_unit(app, cfg["java_home"], base, cfg["port"],
+                                            java_opts=" ".join(cfg["opts"]), user=user)
+        service.write_setenv(base, app, cfg["java_home"], cfg["catalina_home"], cfg["opts"], [])
+        return service.install_unit(app, cfg["java_home"], cfg["catalina_home"], base, user=user)
+
+    if cfg["type"] == "jar":
+        ctx = {"app": app, "user": user, "group": user, "java_home": cfg["java_home"],
+               "app_dir": base, "port": str(cfg["port"]),
+               "java_opts": " ".join(cfg["opts"])}
+        template = "%s-jar.%s.tmpl" % ("systemd" if backend == "systemd" else "initd",
+                                         "service" if backend == "systemd" else "sh")
+    else:
+        service.write_setenv(base, app, cfg["java_home"], cfg["catalina_home"], cfg["opts"], [])
+        ctx = service._ctx(app, cfg["java_home"], cfg["catalina_home"], base, user)
+        template = "systemd.service.tmpl" if backend == "systemd" else "initd.sh.tmpl"
+    path = _unit_path(app, backend)
+    service._write_unit_file(path, templating.render_file(template, ctx),
+                             0o644 if backend == "systemd" else 0o755)
+    if backend == "systemd":
+        shell.run(["systemctl", "daemon-reload"])
+    return path
+
+
+def _set_enabled(app: str, backend: Optional[str], enabled: Optional[bool]) -> None:
+    if enabled is None or backend is None:
+        return
+    if backend == "systemd":
+        shell.run(["systemctl", "enable" if enabled else "disable",
+                   "javahost-%s.service" % app])
+        return
+    tool = shell.which("update-rc.d")
+    if not tool:
+        raise RuntimeError("cannot restore init.d enabled state: update-rc.d unavailable")
+    shell.run([tool, "javahost-%s" % app, "enable" if enabled else "disable"])
+
+
+def _apply_service_state(app: str, snap: Dict) -> None:
+    _set_enabled(app, snap.get("backend"), snap.get("enabled"))
+    if snap.get("active"):
+        service.action(app, "start")
+        if service.status(app) != "active":
+            raise RuntimeError("restored service did not become active")
+
+
+def _restore_unit_snapshot(app: str, snap: Dict) -> None:
+    """Restore exact pre-transaction unit bytes/mode, or remove a new unit."""
+    current = service._backend(app)
+    if snap.get("content") is None:
+        if current:
+            service.remove_unit(app)
+        return
+    if current and current != snap["backend"]:
+        service.remove_unit(app)
+    service._write_unit_file(snap["path"], snap["content"], snap["mode"])
+    if snap["backend"] == "systemd":
+        shell.run(["systemctl", "daemon-reload"])
+
+
 def restore(archive_path: str, as_name: Optional[str] = None,
             domain: Optional[str] = None, user: str = "www") -> Dict:
     """Restore an app from a backup archive.
@@ -408,74 +607,139 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     """
     if not archive_path or not os.path.isfile(archive_path):
         raise FileNotFoundError("archive not found: %r" % archive_path)
-    manifest = _read_manifest_file(archive_path)
-    if not manifest:
+    raw_manifest = archive.read_member_bytes(archive_path, MANIFEST_NAME)
+    try:
+        manifest = json.loads(raw_manifest.decode("utf-8", "strict")) if raw_manifest else None
+    except (UnicodeDecodeError, ValueError):
+        manifest = None
+    if not isinstance(manifest, dict) or not manifest:
         raise RuntimeError("archive has no manifest.json (not a JavaHost backup)")
     src_app = manifest.get("app")
-    itype = manifest.get("type") or "war"
     new_mode = as_name is not None
     target = validate.identifier(as_name or src_app, "app")
+    user = validate.identifier(user, "service user")
     if domain:
         domain = validate.domain(domain)
 
     base = instance.base_path(target)
-    if new_mode:
-        if instance.exists(target):
+    cleanup_warning = None
+    with _app_restore_lock(target):
+        if os.path.islink(base):
+            raise RuntimeError("refusing to restore over symlink target: %s" % target)
+        if os.path.lexists(base) and not os.path.isdir(base):
+            raise RuntimeError("restore target is not a directory: %s" % target)
+        had_existing = os.path.isdir(base)
+        if had_existing and not fs.is_managed(base):
+            raise RuntimeError("refusing to restore over unmanaged app: %s" % target)
+        if new_mode and had_existing:
             raise RuntimeError("app already exists: %s (choose another name)" % target)
-    else:
-        # overwrite: stop + remove the existing instance first (marker-gated delete)
-        if instance.exists(target):
+
+        root = _restore_root()
+        txn = tempfile.mkdtemp(prefix="%s-" % target, dir=root)
+        os.chmod(txn, 0o700)
+        fs.mark_managed(txn)
+        staging = os.path.join(txn, "staging")
+        os.mkdir(staging, 0o700)
+        incoming = os.path.join(txn, "incoming")
+        recovery = os.path.join(txn, "recovery") if had_existing else None
+        failed_replacement = os.path.join(txn, "failed-replacement")
+        snap = None
+        replacement_installed = False
+        service_install_attempted = False
+        committed = False
+        retain_txn = False
+        try:
+            archive.safe_extract_tar(archive_path, staging)
+            src_base = os.path.join(staging, "base")
+            if not os.path.isdir(src_base):
+                raise RuntimeError("archive missing base/ payload")
+            cfg = _validate_restore_payload(src_base, manifest)
+            if new_mode:
+                cfg["port"] = instance.allocate_port()
+                _rewrite_port(src_base, cfg["type"], cfg["port"])
+                _clear_site_markers(src_base)
+                dom = domain
+            else:
+                dom = manifest.get("domain")
+                if dom:
+                    dom = validate.domain(dom)
+
+            os.replace(src_base, incoming)
+            fs.mark_managed(incoming)
+            shell.run(["chown", "-R", "%s:%s" % (user, user), incoming], check=False)
+
+            if new_mode and os.path.lexists(base):
+                raise RuntimeError("app appeared during restore: %s" % target)
+            if had_existing:
+                snap = _service_snapshot(target)
+                if snap["status"] == "active":
+                    service.action(target, "stop")
+                    if service.status(target) != "inactive":
+                        raise RuntimeError("service did not become inactive; restore aborted")
+                elif snap["status"] not in ("inactive", "absent"):
+                    raise RuntimeError("cannot prove service is inactive (status: %s)" % snap["status"])
+                os.replace(base, recovery)
+            os.replace(incoming, base)
+            replacement_installed = True
+
+            prior_backend = snap.get("backend") if snap else None
+            prior_user = snap.get("user") if snap else user
+            service_install_attempted = True
+            _install_payload_service(target, base, cfg, prior_user, prior_backend)
+            if snap:
+                _apply_service_state(target, snap)
+            else:
+                service.enable_start(target)
+            committed = True
+        except Exception as restore_error:
+            rollback_errors = []
+            if replacement_installed and os.path.isdir(base):
+                try:
+                    if service.status(target) == "active":
+                        service.action(target, "stop")
+                except Exception as e:
+                    rollback_errors.append("stop replacement: %s" % e)
+                try:
+                    os.replace(base, failed_replacement)
+                    replacement_installed = False
+                except Exception as e:
+                    rollback_errors.append("quarantine replacement: %s" % e)
+            if recovery and os.path.isdir(recovery):
+                try:
+                    if os.path.lexists(base):
+                        raise RuntimeError("target path remains occupied")
+                    os.replace(recovery, base)
+                    recovery = None
+                except Exception as e:
+                    rollback_errors.append("restore original tree: %s" % e)
             try:
-                service.action(target, "stop")
-            except Exception:
-                pass
-            service.remove_unit(target)
-            instance.delete(target, purge=True)
-
-    # extract to staging, then move base/ into place (hardened extractor)
-    staging = fs.mkdtemp("jh-restore-")
-    try:
-        archive.safe_extract_tar(archive_path, staging)
-        src_base = os.path.join(staging, "base")
-        if not os.path.isdir(src_base):
-            raise RuntimeError("archive missing base/ payload")
-        if os.path.isdir(base):
-            fs.safe_rmtree(base, require_marker=fs.is_managed(base))
-        shutil.move(src_base, base)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
-
-    fs.mark_managed(base)
-
-    # port + domain
-    if new_mode:
-        port = instance.allocate_port()
-        _rewrite_port(base, itype, port)
-        _clear_site_markers(base)            # never inherit the source domain/cert
-        dom = domain                          # only the explicitly-provided one
-    else:
-        port = instance._read_port(base) or manifest.get("port")
-        dom = manifest.get("domain")
-
-    # ownership
-    from ..util import shell
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-
-    # re-render setenv (fixes CATALINA_BASE/app for a new name) + the service unit
-    env = instance._read_setenv(base)
-    java_home = env.get("JAVA_HOME") or instance._read_app_env(base).get("JAVA_HOME", "")
-    if itype == "jar":
-        service.install_jar_unit(target, java_home, base, port or 0, java_opts="", user=user)
-    else:
-        catalina_home = env.get("CATALINA_HOME", "")
-        opts = [o for o in (env.get("JAVA_OPTS", "") or "").split() if o]
-        if java_home and catalina_home:
-            service.write_setenv(base, target, java_home, catalina_home, opts, [])
-            service.install_unit(target, java_home, catalina_home, base, user=user)
-        else:
-            raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
-
-    service.enable_start(target)
+                if snap:
+                    _restore_unit_snapshot(target, snap)
+                    _apply_service_state(target, snap)
+                elif service_install_attempted and service._backend(target):
+                    service.remove_unit(target)
+            except Exception as e:
+                rollback_errors.append("restore service state: %s" % e)
+            if rollback_errors:
+                retain_txn = True
+                raise RuntimeError("restore failed: %s; rollback errors: %s; recovery retained at %s"
+                                   % (restore_error, "; ".join(rollback_errors), txn)) from restore_error
+            raise
+        finally:
+            if committed and recovery and os.path.isdir(recovery):
+                try:
+                    fs.safe_rmtree(recovery, require_marker=True)
+                    recovery = None
+                except Exception as e:
+                    cleanup_warning = "restore committed but recovery cleanup failed: %s" % e
+                    retain_txn = True
+            if not retain_txn:
+                try:
+                    fs.safe_rmtree(txn, require_marker=True)
+                except Exception as e:
+                    if committed:
+                        cleanup_warning = "restore committed but transaction cleanup failed: %s" % e
+        port = cfg["port"]
 
     # republish the reverse-proxy site + re-issue SSL (best-effort, never bundle keys)
     ssl_state = False
@@ -505,4 +769,6 @@ def restore(archive_path: str, as_name: Optional[str] = None,
            "status": service.status(target)}
     if ssl_warning:
         out["ssl_warning"] = ssl_warning
+    if cleanup_warning:
+        out["cleanup_warning"] = cleanup_warning
     return out
