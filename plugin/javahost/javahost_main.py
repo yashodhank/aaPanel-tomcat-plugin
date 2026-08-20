@@ -107,14 +107,9 @@ def _claimed_staged_upload(raw_path, extension):
     except (OSError, TypeError, ValueError):
         if claim_dir:
             # Never recursively delete an untrusted object moved into the claim
-            # directory.  Restore it to the original name when possible; if an
-            # attacker recreated that name, leave the random claim directory in
-            # place for safe operator recovery rather than risking data loss.
-            if claimed and os.path.lexists(claimed) and not os.path.lexists(normalized):
-                try:
-                    os.rename(claimed, normalized)
-                except OSError:
-                    pass
+            # directory, and never rename it over the public upload name: POSIX
+            # rename would replace a concurrent new upload.  Leave invalid moved
+            # objects quarantined under the random directory for safe recovery.
             try:
                 os.rmdir(claim_dir)
             except OSError:
