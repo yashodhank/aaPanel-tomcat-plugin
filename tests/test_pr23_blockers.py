@@ -44,10 +44,7 @@ def test_persist_jar_java_opts_uses_canonical_db_env_api(monkeypatch):
     written = []
     ports = iter((8088, 8088))
     monkeypatch.setattr(
-        db_engines, "read_app_env",
-        lambda base: {"SERVER_PORT": "8088", "DB_PASSWORD": "keep-me"})
-    monkeypatch.setattr(
-        db_engines, "write_app_env",
+        db_engines, "update_app_env",
         lambda base, mapping: written.append((base, dict(mapping))) or "app.env")
     monkeypatch.setattr(instance, "_read_port", lambda base: next(ports))
     monkeypatch.setattr(
@@ -56,15 +53,60 @@ def test_persist_jar_java_opts_uses_canonical_db_env_api(monkeypatch):
 
     instance._persist_jar_java_opts("/managed/app", "-Xmx512m")
 
-    assert written == [("/managed/app", {
-        "SERVER_PORT": "8088", "DB_PASSWORD": "keep-me", "JAVA_OPTS": "-Xmx512m"})]
+    assert written == [("/managed/app", {"JAVA_OPTS": "-Xmx512m"})]
+
+
+def test_persist_jar_java_opts_preserves_concurrent_db_update(tmp_path, monkeypatch):
+    """A DB update after repair starts must survive the JAVA_OPTS merge."""
+    from core.util import fs
+
+    managed_root = tmp_path / "managed"
+    base = managed_root / "app"
+    (base / "bin").mkdir(parents=True)
+    fs.mark_managed(str(base))
+    monkeypatch.setattr(fs, "MANAGED_ROOTS", (str(managed_root),))
+    db_base.write_app_env(str(base), {
+        "SERVER_PORT": "8088", "DB_USER": "old", "DB_PASSWORD": "old-secret"})
+
+    real_update = db_engines.update_app_env
+
+    def _interleaved_update(catalina_base, updates):
+        db_base.write_app_env(catalina_base, {
+            "DB_USER": "new", "DB_PASSWORD": "new-secret"})
+        return real_update(catalina_base, updates)
+
+    monkeypatch.setattr(db_engines, "update_app_env", _interleaved_update)
+    instance._persist_jar_java_opts(str(base), "-Xmx512m")
+
+    parsed = db_base.read_app_env(str(base))
+    assert parsed["DB_USER"] == "new"
+    assert parsed["DB_PASSWORD"] == "new-secret"
+    assert parsed["SERVER_PORT"] == "8088"
+    assert parsed["JAVA_OPTS"] == "-Xmx512m"
+
+
+def test_update_app_env_rejects_symlinked_lock(tmp_path, monkeypatch):
+    """A compromised instance cannot redirect the privileged lock open."""
+    from core.util import fs
+
+    managed_root = tmp_path / "managed"
+    base = managed_root / "app"
+    (base / "bin").mkdir(parents=True)
+    fs.mark_managed(str(base))
+    monkeypatch.setattr(fs, "MANAGED_ROOTS", (str(managed_root),))
+    target = tmp_path / "foreign-lock"
+    target.write_text("untouched")
+    (base / "bin" / ".app.env.lock").symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="unsafe app.env"):
+        db_base.update_app_env(str(base), {"JAVA_OPTS": "-Xmx512m"})
+
+    assert target.read_text() == "untouched"
 
 
 def test_persist_jar_java_opts_detects_port_corruption(monkeypatch):
     ports = iter((8088, 9099))
-    monkeypatch.setattr(
-        db_engines, "read_app_env", lambda base: {"SERVER_PORT": "8088"})
-    monkeypatch.setattr(db_engines, "write_app_env", lambda base, mapping: "app.env")
+    monkeypatch.setattr(db_engines, "update_app_env", lambda base, updates: "app.env")
     monkeypatch.setattr(instance, "_read_port", lambda base: next(ports))
 
     with pytest.raises(RuntimeError, match="SERVER_PORT"):
@@ -214,10 +256,6 @@ def test_ensure_ws_map_does_not_restore_over_concurrent_change(monkeypatch, tmp_
     assert conf.read_text().endswith("# concurrent panel update\n")
 
 
-@pytest.mark.skipif(
-    not hasattr(proxy.panel_api, "require_nginx"),
-    reason="requires restack onto PR22 webserver gate",
-)
 def test_set_site_checks_nginx_gate_before_ws_map(monkeypatch):
     calls = []
     monkeypatch.setattr(
