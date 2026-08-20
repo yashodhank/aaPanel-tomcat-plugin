@@ -27,25 +27,33 @@ DESIGN (lifecycle):
 
 SECURITY: job_id is validated against ^[A-Za-z0-9_.-]+$ and every path is
 realpath-contained under JOBS_ROOT before any open/join (closes traversal).
+Cancellation fails closed unless readable Linux procfs proves the supervisor's
+exact argv and stable PID starttime immediately before each destructive signal.
 """
 from __future__ import annotations
 
+import errno
 import json
+import math
 import os
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 JOBS_ROOT = "/www/server/javahost/jobs"
+PROC_ROOT = "/proc"
 
 # Plugin root (…/plugin/javahost) so the detached child can `import core.*`.
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _VALID_STATES = ("running", "done", "failed", "cancelled")
+_TERMINAL_STATES = frozenset(("done", "failed", "cancelled"))
+DEFAULT_TERMINAL_RETENTION = 500
 
 
 # --------------------------------------------------------------------------- #
@@ -60,7 +68,7 @@ def _new_job_id(kind: str) -> str:
 
 def _validate_job_id(job_id: str) -> str:
     job_id = str(job_id or "")
-    if not _JOB_ID_RE.match(job_id) or job_id in (".", ".."):
+    if not _JOB_ID_RE.fullmatch(job_id) or job_id in (".", ".."):
         raise ValueError("invalid job_id: %r" % job_id)
     return job_id
 
@@ -100,17 +108,64 @@ def _read_argv(jdir: str) -> Optional[List[str]]:
 
 
 def _read_meta(jdir: str) -> Dict:
-    with open(_meta_path(jdir), encoding="utf-8") as f:
-        return json.load(f)
+    meta_path = _meta_path(jdir)
+    if os.path.islink(meta_path):
+        raise ValueError("job metadata must not be a symlink")
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+    if not isinstance(meta, dict):
+        raise ValueError("job metadata must be a JSON object")
+    return meta
+
+
+def _normalise_state(value) -> str:
+    """Return a known state or ``unknown`` for corrupt/unrecognised values."""
+    if not isinstance(value, str):
+        return "unknown"
+    state = value.strip().lower()
+    return state if state in _VALID_STATES else "unknown"
+
+
+def _normalise_started(value) -> float:
+    """Return a finite timestamp suitable for total ordering."""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        started = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return started if math.isfinite(started) and started >= 0 else 0.0
+
+
+def _job_storage_dir(name: str) -> Optional[str]:
+    """Resolve a real, non-symlink job directory from an untrusted entry name."""
+    if not _JOB_ID_RE.fullmatch(name) or name in (".", ".."):
+        return None
+    jdir = os.path.join(JOBS_ROOT, name)
+    try:
+        if os.path.islink(jdir) or not os.path.isdir(jdir):
+            return None
+        # Reuse the containment boundary used by public job-id operations.
+        return job_dir(name)
+    except (OSError, ValueError):
+        return None
 
 
 def _write_meta(jdir: str, meta: Dict) -> None:
-    """Atomic meta write (temp + rename) so a poller never reads a half file."""
+    """Durably replace metadata without sharing a temp path across writers."""
     os.makedirs(jdir, exist_ok=True)
-    tmp = _meta_path(jdir) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(meta, f)
-    os.replace(tmp, _meta_path(jdir))
+    fd, tmp = tempfile.mkstemp(prefix=".meta-", suffix=".tmp", dir=jdir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _meta_path(jdir))
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def _mark_launch_failed(jdir: str) -> None:
@@ -141,6 +196,9 @@ def start(kind: str, target, argv: Sequence[str]) -> str:
     if isinstance(argv, str):
         raise TypeError("argv must be a list, not a shell string")
     argv = [str(a) for a in argv]
+    # Retention is a write-path invariant, not something that depends on a UI
+    # client eventually polling GetJobs.
+    prune(DEFAULT_TERMINAL_RETENTION)
     job_id = _new_job_id(kind)
     jdir = job_dir(job_id)
     os.makedirs(jdir, exist_ok=True)
@@ -184,7 +242,7 @@ def _spawn_detached(jdir: str, argv: Sequence[str]) -> None:
     real work and finalizes meta.json. We reap the intermediate child so no
     zombie is left in the panel process.
     """
-    supervisor = [sys.executable or "python3", os.path.abspath(__file__),
+    supervisor = [sys.executable or "python3", os.path.realpath(__file__),
                   "exec", jdir, "--"] + list(argv)
     pid = os.fork()
     if pid > 0:
@@ -230,18 +288,20 @@ def list_jobs(limit: int = 200) -> List[Dict]:
         return out
     metas: List[Dict] = []
     for name in names:
-        if not _JOB_ID_RE.match(name):
-            continue
-        jdir = os.path.join(JOBS_ROOT, name)
-        if not os.path.isdir(jdir):
+        jdir = _job_storage_dir(name)
+        if jdir is None:
             continue
         try:
             meta = _read_meta(jdir)
         except Exception:
             continue  # malformed: skip rather than crash the list
-        meta.setdefault("id", name)
+        # The directory name is the storage identity. Never trust a mutable or
+        # corrupt value from meta.json to redirect later job operations.
+        meta["id"] = name
+        meta["state"] = _normalise_state(meta.get("state"))
+        meta["started"] = _normalise_started(meta.get("started"))
         metas.append(meta)
-    metas.sort(key=lambda m: m.get("started") or 0, reverse=True)
+    metas.sort(key=lambda m: m["started"], reverse=True)
     return metas[: max(0, int(limit))]
 
 
@@ -258,10 +318,8 @@ def count_skipped() -> int:
         return 0
     skipped = 0
     for name in names:
-        if not _JOB_ID_RE.match(name):
-            continue
-        jdir = os.path.join(JOBS_ROOT, name)
-        if not os.path.isdir(jdir):
+        jdir = _job_storage_dir(name)
+        if jdir is None:
             continue
         try:
             _read_meta(jdir)
@@ -285,8 +343,8 @@ def read_log(job_id: str, lines: int = 200) -> Dict:
         state = "unknown"
         try:
             meta = _read_meta(jdir)
-            state = (meta.get("state") or "unknown")
-            message = (meta.get("message") or "")
+            state = _normalise_state(meta.get("state"))
+            message = meta.get("message") if isinstance(meta.get("message"), str) else ""
         except Exception:
             pass  # dir present but meta unreadable -> "unknown" (not "running")
     log = _tail(_log_path(jdir), max(1, min(int(lines), 5000))) if exists else ""
@@ -295,9 +353,16 @@ def read_log(job_id: str, lines: int = 200) -> Dict:
 
 
 def prune(keep: int = 500) -> int:
-    """Remove all but the newest `keep` job dirs. Returns count removed."""
+    """Keep the newest terminal records and never remove active/unknown jobs.
+
+    ``keep`` applies only to completed history. Non-terminal states are excluded
+    from the count so a busy system still retains the requested audit history.
+    """
     import shutil
-    metas = list_jobs(limit=10 ** 9)
+    metas = [
+        meta for meta in list_jobs(limit=10 ** 9)
+        if (meta.get("state") or "").lower() in _TERMINAL_STATES
+    ]
     removed = 0
     for meta in metas[max(0, int(keep)):]:
         try:
@@ -312,67 +377,279 @@ def prune(keep: int = 500) -> int:
     return removed
 
 
-def _pid_is_supervisor(pid, jdir: str) -> bool:
-    """Best-effort check that `pid` is still THIS job's supervisor (guards pid
-    reuse before we signal its process group). Reads /proc/<pid>/cmdline and
-    confirms it is our `jobs.py exec <jdir>` invocation. Where /proc isn't
-    available (e.g. macOS) we can't verify, so return True — same exposure as
-    before the check, and the surrounding kill calls already tolerate failures."""
+def _capture_supervisor_identity(pid, jdir: str) -> Optional[Tuple[int, int]]:
+    """Return ``(pid, Linux starttime)`` only for the exact supervisor argv.
+
+    Reading both procfs records fails closed. The starttime from ``stat`` is the
+    process birth identity used to detect PID reuse between probes.
+    """
     try:
-        with open("/proc/%d/cmdline" % int(pid), "rb") as f:
-            cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
-    except OSError:
-        return True  # no /proc, or pid already gone — don't block on it
-    real = os.path.realpath(jdir)
-    return ("jobs.py" in cmd and " exec " in (" " + cmd + " ") and real in cmd)
+        pid = int(pid)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    try:
+        with open(os.path.join(PROC_ROOT, str(pid), "cmdline"), "rb") as f:
+            raw_cmdline = f.read()
+        with open(os.path.join(PROC_ROOT, str(pid), "stat"), "rb") as f:
+            raw_stat = f.read()
+    except (OSError, ValueError):
+        return None
+    if not raw_cmdline.endswith(b"\x00"):
+        return None
+    try:
+        proc_argv = [os.fsdecode(item) for item in raw_cmdline[:-1].split(b"\x00")]
+    except (TypeError, UnicodeError):
+        return None
+    expected_prefix = [
+        sys.executable or "python3",
+        os.path.realpath(__file__),
+        "exec",
+        os.path.realpath(jdir),
+        "--",
+    ]
+    if len(proc_argv) < len(expected_prefix) or proc_argv[:5] != expected_prefix:
+        return None
+
+    left_paren = raw_stat.find(b"(")
+    right_paren = raw_stat.rfind(b")")
+    if left_paren <= 0 or right_paren <= left_paren:
+        return None
+    try:
+        stat_pid = int(raw_stat[:left_paren].strip())
+        stat_fields = raw_stat[right_paren + 1:].split()
+        starttime = int(stat_fields[19])  # proc(5) field 22; tail begins at field 3
+    except (IndexError, TypeError, ValueError, OverflowError):
+        return None
+    if stat_pid != pid or starttime < 0:
+        return None
+    return pid, starttime
+
+
+def _pid_is_supervisor(pid, jdir: str):
+    """Compatibility wrapper returning the captured process birth identity."""
+    return _capture_supervisor_identity(pid, jdir)
+
+
+def _process_group_exists(pgid: int) -> bool:
+    """Return whether a process group has at least one non-zombie member.
+
+    ``killpg(..., 0)`` continues to succeed while a killed group is represented
+    only by unreaped zombies.  Treating those entries as live makes a successful
+    SIGKILL look like a failed cancellation.  On Linux, verify the group's
+    members through procfs and consider an all-zombie group exited.  Every
+    uncertainty fails closed: hidden/malformed proc records must never turn a
+    potentially live group into a reported cancellation.
+    """
+    try:
+        pgid = int(pgid)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("invalid process group id: %r" % pgid) from exc
+    if pgid <= 0:
+        raise RuntimeError("invalid process group id: %r" % pgid)
+
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as exc:
+        raise RuntimeError(
+            "permission denied while verifying whether process group %d exited" % pgid
+        ) from exc
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        raise RuntimeError(
+            "could not verify whether process group %d exited: %s" % (pgid, exc)
+        ) from exc
+
+    try:
+        proc_entries = os.listdir(PROC_ROOT)
+    except PermissionError as exc:
+        raise RuntimeError(
+            "permission denied while inspecting procfs for process group %d" % pgid
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            "could not inspect procfs for process group %d: %s" % (pgid, exc)
+        ) from exc
+
+    matched = 0
+    for entry in proc_entries:
+        if not entry.isdigit():
+            continue
+        stat_path = os.path.join(PROC_ROOT, entry, "stat")
+        try:
+            with open(stat_path, "rb") as f:
+                raw_stat = f.read()
+        except FileNotFoundError:
+            # Normal race: a process exited between listing procfs and opening
+            # its stat record.  Absence is re-probed below when needed.
+            continue
+        except PermissionError as exc:
+            raise RuntimeError(
+                "permission denied while reading proc stat for pid %s" % entry
+            ) from exc
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            raise RuntimeError(
+                "could not read proc stat for pid %s: %s" % (entry, exc)
+            ) from exc
+
+        # comm is parenthesized and may itself contain ')' characters.  Fields
+        # after the final ')' are: state (3), ppid (4), pgrp (5), ... .
+        left_paren = raw_stat.find(b"(")
+        right_paren = raw_stat.rfind(b")")
+        try:
+            stat_pid = int(raw_stat[:left_paren].strip())
+            stat_fields = raw_stat[right_paren + 1:].split()
+            state = stat_fields[0]
+            member_pgid = int(stat_fields[2])
+        except (IndexError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("malformed proc stat for pid %s" % entry) from exc
+        if (left_paren <= 0 or right_paren <= left_paren or
+                stat_pid != int(entry) or len(state) != 1 or member_pgid < 0):
+            raise RuntimeError("malformed proc stat for pid %s" % entry)
+        if member_pgid != pgid:
+            continue
+        matched += 1
+        if state != b"Z":
+            return True
+
+    if matched:
+        return False
+
+    # No matching entry may mean the group disappeared during the scan.  Only
+    # ESRCH proves that benign race; a still-addressable but invisible group is
+    # an uncertainty (for example hidepid) and must remain running.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as exc:
+        raise RuntimeError(
+            "permission denied while rechecking process group %d" % pgid
+        ) from exc
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        raise RuntimeError(
+            "could not recheck process group %d: %s" % (pgid, exc)
+        ) from exc
+    raise RuntimeError(
+        "process group %d exists but no members were visible in procfs" % pgid
+    )
+
+
+def _wait_for_process_group_exit(pgid: int, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _process_group_exists(pgid):
+            return True
+        time.sleep(0.1)
+    return not _process_group_exists(pgid)
+
+
+def _terminal_cancel_result(job_id: str, jdir: str) -> Optional[Dict]:
+    """Return a terminal state won by the supervisor during a cancellation race."""
+    try:
+        current = _read_meta(jdir)
+    except Exception:
+        return None
+    state = _normalise_state(current.get("state"))
+    if state in _TERMINAL_STATES:
+        return {"id": _validate_job_id(job_id), "state": state}
+    return None
+
+
+def _signal_process_group(pgid: int, sig: int) -> bool:
+    """Signal a group. Return False only when its absence is proven."""
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError as exc:
+        raise RuntimeError(
+            "permission denied while signalling process group %d" % pgid
+        ) from exc
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        raise RuntimeError(
+            "could not signal process group %d: %s" % (pgid, exc)
+        ) from exc
 
 
 def cancel(job_id: str) -> Dict:
-    """Stop a running job. The supervisor is a session/process-group leader
-    (setsid), so killpg() reaps both it and the work it spawned. We then finalize
-    meta as 'cancelled' (the killed supervisor can no longer write it itself).
-    Idempotent-ish: raises only if the job isn't running."""
+    """Stop a running job and only finalize after its process group is gone.
+
+    The detached supervisor and its work share a process group. Any uncertainty
+    about process identity, signalling permission, or group exit is surfaced and
+    leaves the record running instead of claiming a cancellation that may not
+    have happened. Cancellation therefore requires readable Linux procfs.
+    """
     jdir = job_dir(job_id)
     meta = _read_meta(jdir)
-    state = (meta.get("state") or "").lower()
+    state = _normalise_state(meta.get("state"))
     if state != "running":
         raise ValueError("job is not running (state=%s)" % (state or "unknown"))
     pid = meta.get("pid")
     if not pid:
         raise ValueError("job is still starting; try again in a moment")
+    identity = _pid_is_supervisor(pid, jdir)
+    if identity is None:
+        raced = _terminal_cancel_result(job_id, jdir)
+        if raced:
+            return raced
+        raise RuntimeError(
+            "job supervisor identity could not be verified via readable Linux procfs"
+        )
     try:
         pgid = os.getpgid(int(pid))
-    except (ProcessLookupError, OSError):
-        pgid = None  # supervisor already exited; just finalize meta below
+    except ProcessLookupError as exc:
+        raced = _terminal_cancel_result(job_id, jdir)
+        if raced:
+            return raced
+        raise RuntimeError(
+            "job supervisor no longer exists, but its terminal state could not be verified"
+        ) from exc
+    except PermissionError as exc:
+        raise RuntimeError("permission denied while locating the job process group") from exc
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError("could not locate the job process group: %s" % exc) from exc
     # Guard pid reuse: the recorded pid may have been recycled to an UNRELATED
     # process since the job ended. Escalating to SIGKILL against a stranger's
     # group would be destructive, so verify the pid is still THIS job's
-    # supervisor before signaling. Best-effort (skipped where /proc is absent).
-    if pgid is not None and not _pid_is_supervisor(pid, jdir):
-        pgid = None
-    if pgid is not None:
-        # graceful first, then ESCALATE to SIGKILL so work that ignores/blocks
-        # SIGTERM can't keep running while meta says "cancelled".
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
-        deadline = time.time() + 2.0
-        alive = True
-        while time.time() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except ProcessLookupError:
-                alive = False  # group is gone
-                break
-            except OSError:
-                break  # can't probe (e.g. EPERM) — stop waiting, still try SIGKILL
-            time.sleep(0.1)
-        if alive:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+    # supervisor before signaling. The check fails closed if no trustworthy
+    # platform probe is available.
+    if _pid_is_supervisor(pid, jdir) != identity:
+        raced = _terminal_cancel_result(job_id, jdir)
+        if raced:
+            return raced
+        raise RuntimeError("job supervisor birth identity changed before SIGTERM")
+
+    try:
+        group_gone = not _signal_process_group(pgid, signal.SIGTERM)
+        if not group_gone:
+            group_gone = _wait_for_process_group_exit(pgid, 2.0)
+        if not group_gone:
+            if _pid_is_supervisor(pid, jdir) != identity:
+                raise RuntimeError(
+                    "job supervisor birth identity changed before SIGKILL escalation"
+                )
+            group_gone = not _signal_process_group(pgid, signal.SIGKILL)
+        if not group_gone:
+            group_gone = _wait_for_process_group_exit(pgid, 2.0)
+    except RuntimeError:
+        raced = _terminal_cancel_result(job_id, jdir)
+        if raced:
+            return raced
+        raise
+    if not group_gone:
+        raise RuntimeError(
+            "process group %d still exists after SIGTERM and SIGKILL; job remains running" % pgid
+        )
     # Re-read: if the supervisor finalized on its own in the race window (the job
     # finished naturally between our state check and the kill), respect that
     # terminal state instead of clobbering it with "cancelled".
@@ -380,8 +657,8 @@ def cancel(job_id: str) -> Dict:
         meta = _read_meta(jdir)
     except Exception:
         pass
-    cur = (meta.get("state") or "").lower()
-    if cur in ("done", "failed"):
+    cur = _normalise_state(meta.get("state"))
+    if cur in _TERMINAL_STATES:
         return {"id": _validate_job_id(job_id), "state": cur}
     meta["state"] = "cancelled"
     meta["ended"] = time.time()
@@ -402,12 +679,14 @@ def retry(job_id: str) -> str:
 
 
 def clear() -> int:
-    """Remove every finished (done/failed/cancelled) job dir; keep running ones.
-    Returns the count removed."""
+    """Remove terminal job dirs; preserve every active or unknown state.
+
+    Returns the count removed.
+    """
     import shutil
     removed = 0
     for meta in list_jobs(limit=10 ** 9):
-        if (meta.get("state") or "").lower() == "running":
+        if (meta.get("state") or "").lower() not in _TERMINAL_STATES:
             continue
         try:
             jdir = job_dir(meta.get("id", ""))
@@ -445,7 +724,12 @@ def _tail(path: str, lines: int) -> str:
 # --------------------------------------------------------------------------- #
 def _supervise(jdir: str, argv: Sequence[str]) -> int:
     """Run `argv`, capture rc, finalize meta.json. stdout/stderr already point at
-    output.log (the grandchild dup2'd them), so we let the child inherit them."""
+    output.log (the grandchild dup2'd them), so we let the child inherit them.
+
+    The supervisor catches SIGTERM while the exec'd worker retains the default
+    disposition. This keeps the verified supervisor birth identity alive when a
+    stubborn worker requires a subsequent, independently reverified SIGKILL.
+    """
     jdir = os.path.realpath(jdir)
     try:
         meta = _read_meta(jdir)
@@ -453,16 +737,28 @@ def _supervise(jdir: str, argv: Sequence[str]) -> int:
         meta = {"id": os.path.basename(jdir), "kind": "", "target": None,
                 "state": "running", "started": time.time(), "ended": None,
                 "message": "", "pid": None}
-    meta["pid"] = os.getpid()
-    meta["state"] = "running"
-    _write_meta(jdir, meta)
-
     rc, message = 1, ""
+    cancel_requested = [False]
+
+    def _note_cancel(signum, frame):
+        cancel_requested[0] = True
+
     try:
         env = dict(os.environ)
         env["PYTHONPATH"] = _PLUGIN_DIR + os.pathsep + env.get("PYTHONPATH", "")
-        proc = subprocess.run(list(argv), stdout=1, stderr=2, env=env)
-        rc = proc.returncode
+        # A caught signal handler resets to SIG_DFL across exec, so the worker
+        # receives TERM normally while this supervisor stays available for the
+        # cancellation authority recheck.
+        signal.signal(signal.SIGTERM, _note_cancel)
+        proc = subprocess.Popen(list(argv), stdout=1, stderr=2, env=env)
+        meta["pid"] = os.getpid()
+        meta["state"] = "running"
+        _write_meta(jdir, meta)
+        rc = proc.wait()
+        if cancel_requested[0]:
+            # The cancelling process owns the terminal transition, but only
+            # after it has proved that this entire process group is gone.
+            return 128 + signal.SIGTERM
         message = "completed (rc=0)" if rc == 0 else "exited rc=%d" % rc
     except Exception as e:  # spawn failure etc.
         rc = 127
