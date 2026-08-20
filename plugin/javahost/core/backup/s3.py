@@ -26,6 +26,11 @@ from typing import Dict, List, Optional
 
 _EMPTY_SHA = hashlib.sha256(b"").hexdigest()
 _UNSIGNED = "UNSIGNED-PAYLOAD"
+# A backup listing should never need unbounded memory or requests.  These
+# fail-closed limits still permit a very large fleet (100k retained objects).
+MAX_LIST_PAGES = 100
+MAX_LIST_OBJECTS = 100_000
+MAX_LIST_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 class S3Error(RuntimeError):
@@ -183,24 +188,76 @@ class S3Client:
 
     def list_objects(self, prefix: Optional[str] = None) -> List[Dict]:
         """ListObjectsV2 under the client prefix (optionally narrowed). Returns
-        [{key, name, size}] (name = key with the client prefix stripped)."""
+        [{key, name, size}] (name = key with the client prefix stripped).
+
+        Follows ContinuationToken / IsTruncated until the listing is complete
+        (S3 returns at most 1000 keys per page by default).
+        """
         q = {"list-type": "2"}
         eff_prefix = self.prefix
         if prefix:
             eff_prefix = ("%s/%s" % (self.prefix, prefix)).lstrip("/") if self.prefix else prefix
         if eff_prefix:
             q["prefix"] = eff_prefix
-        headers = self._sign("GET", "", q, _EMPTY_SHA)
-        conn = self._conn()
+        out: List[Dict] = []
+        token = None
+        seen_tokens = set()
+        pages = 0
+        while True:
+            if pages >= MAX_LIST_PAGES:
+                raise S3Error("LIST aborted: page limit %d exceeded" % MAX_LIST_PAGES)
+            page_q = dict(q)
+            if token:
+                page_q["continuation-token"] = token
+            headers = self._sign("GET", "", page_q, _EMPTY_SHA)
+            conn = self._conn()
+            try:
+                conn.request("GET", self._path("", page_q), headers=headers)
+                resp = conn.getresponse()
+                data = resp.read(MAX_LIST_RESPONSE_BYTES + 1)
+                if len(data) > MAX_LIST_RESPONSE_BYTES:
+                    raise S3Error(
+                        "LIST aborted: response byte limit %d exceeded"
+                        % MAX_LIST_RESPONSE_BYTES)
+                if resp.status != 200:
+                    raise S3Error("LIST failed: HTTP %d %s" % (
+                        resp.status, data[:300].decode("utf-8", "replace")))
+            finally:
+                conn.close()
+            pages += 1
+            out.extend(self._parse_list(data))
+            if len(out) > MAX_LIST_OBJECTS:
+                raise S3Error(
+                    "LIST aborted: object limit %d exceeded" % MAX_LIST_OBJECTS)
+            next_token = self._parse_continuation(data)
+            if not next_token:
+                break
+            if next_token in seen_tokens:
+                raise S3Error("LIST aborted: repeated continuation token")
+            seen_tokens.add(next_token)
+            token = next_token
+        return out
+
+    def _parse_continuation(self, data: bytes) -> Optional[str]:
+        """Return NextContinuationToken when IsTruncated is true, else None."""
+        lowered = data.lower()
+        if b"<!doctype" in lowered or b"<!entity" in lowered:
+            raise S3Error("LIST rejected XML DTD/entity declaration")
         try:
-            conn.request("GET", self._path("", q), headers=headers)
-            resp = conn.getresponse()
-            data = resp.read()
-            if resp.status != 200:
-                raise S3Error("LIST failed: HTTP %d %s" % (resp.status, data[:300].decode("utf-8", "replace")))
-        finally:
-            conn.close()
-        return self._parse_list(data)
+            root = ET.fromstring(data)  # nosec B314 — DTD/entities rejected above
+        except ET.ParseError as exc:
+            raise S3Error("LIST returned invalid XML: %s" % exc)
+        truncated = False
+        token = None
+        for el in root.iter():
+            tag = el.tag.rsplit("}", 1)[-1] if "}" in el.tag else el.tag
+            if tag == "IsTruncated" and (el.text or "").strip().lower() == "true":
+                truncated = True
+            elif tag == "NextContinuationToken" and el.text:
+                token = el.text.strip()
+        if truncated and not token:
+            raise S3Error("LIST truncated page is missing continuation token")
+        return token if truncated else None
 
     def _parse_list(self, data: bytes) -> List[Dict]:
         out: List[Dict] = []
@@ -210,13 +267,13 @@ class S3Client:
         # XXE and no billion-laughs expansion vector. The body is the S3 API
         # response from the operator's OWN TLS-authenticated endpoint, not
         # arbitrary attacker input.
-        head = data[:8192].lower()
-        if b"<!doctype" in head or b"<!entity" in head:
-            return out
+        lowered = data.lower()
+        if b"<!doctype" in lowered or b"<!entity" in lowered:
+            raise S3Error("LIST rejected XML DTD/entity declaration")
         try:
             root = ET.fromstring(data)  # nosec B314 — DTD/entities rejected above; no external-entity resolution
-        except ET.ParseError:
-            return out
+        except ET.ParseError as exc:
+            raise S3Error("LIST returned invalid XML: %s" % exc)
         plen = len(self.prefix) + 1 if self.prefix else 0
         for el in root.iter():
             if not el.tag.endswith("}Contents") and el.tag != "Contents":

@@ -406,10 +406,9 @@ def test_list_apps_empty_tomcat_is_type_tomcat(monkeypatch, tmp_path):
 
 def test_list_apps_jar_instance(monkeypatch, tmp_path):
     _stub_list_apps_env(monkeypatch, tmp_path)
-    base = tmp_path / "boot"
-    (base / "bin").mkdir(parents=True)
+    base = _secure_test_app(tmp_path, monkeypatch, "boot")
     (base / "app.jar").write_text("PK\x03\x04")     # marker file is enough
-    (base / "bin" / "app.env").write_text("SERVER_PORT=8090\n")
+    _write_secure_env(base / "bin" / "app.env", "SERVER_PORT=8090\n")
     (base / "bin" / "setenv.sh").write_text(
         'export JAVA_HOME="/www/server/javahost/runtimes/jdk-21"\n')
     app = instance.list_apps()[0]
@@ -528,19 +527,18 @@ def test_jar_executable_and_springboot(tmp_path):
 
 def test_read_port_jar_app(monkeypatch, tmp_path):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
-    base = tmp_path / "japp" / "bin"
-    base.mkdir(parents=True)
-    (base / "app.env").write_text("SERVER_PORT=8090\nFOO=bar\n")
-    assert instance._read_port(str(tmp_path / "japp")) == 8090
+    app_base = _secure_test_app(tmp_path, monkeypatch, "japp")
+    _write_secure_env(app_base / "bin" / "app.env", "SERVER_PORT=8090\nFOO=bar\n")
+    assert instance._read_port(str(app_base)) == 8090
 
 
 def test_read_port_jar_quoted_server_port(monkeypatch, tmp_path):
     """SetDbEnv merge quotes SERVER_PORT — health/list must still see the port."""
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
-    base = tmp_path / "japp" / "bin"
-    base.mkdir(parents=True)
-    (base / "app.env").write_text('SERVER_PORT="8090"\nJAVA_HOME=/opt/jdk\n')
-    assert instance._read_port(str(tmp_path / "japp")) == 8090
+    app_base = _secure_test_app(tmp_path, monkeypatch, "japp")
+    _write_secure_env(
+        app_base / "bin" / "app.env", 'SERVER_PORT="8090"\nJAVA_HOME=/opt/jdk\n')
+    assert instance._read_port(str(app_base)) == 8090
 
 
 def test_health_no_port(monkeypatch, tmp_path):
@@ -745,6 +743,17 @@ def _managed_env_base(tmp_path, monkeypatch, name="jarapp"):
     (base / "bin").mkdir(parents=True)
     fsmod.mark_managed(str(base))
     monkeypatch.setattr(fsmod, "MANAGED_ROOTS", (str(managed_root),))
+    return base
+
+
+def _secure_test_app(tmp_path, monkeypatch, name="jarapp"):
+    """Create a production-shaped managed instance under the test root."""
+    from core.util import fs as fsmod
+
+    base = tmp_path / name
+    (base / "bin").mkdir(parents=True)
+    fsmod.mark_managed(str(base))
+    monkeypatch.setattr(fsmod, "MANAGED_ROOTS", (str(tmp_path),))
     return base
 
 
@@ -1325,6 +1334,7 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     vdir = str(tmp_path / "vhost")
+    monkeypatch.setattr(proxy.panel_api, "ensure_ws_map", lambda: True)
     monkeypatch.setattr(proxy, "VHOST_DIR", vdir)
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "reload_nginx", lambda *a, **k: True)
@@ -1344,6 +1354,7 @@ def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
     from core.tomcat import instance as inst
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
+    monkeypatch.setattr(proxy.panel_api, "ensure_ws_map", lambda: True)
     monkeypatch.setattr(inst, "INSTANCE_ROOT", str(tmp_path))
     (tmp_path / "demo" / "bin").mkdir(parents=True)
     monkeypatch.setattr(proxy, "VHOST_DIR", str(tmp_path / "vhost"))
@@ -1988,3 +1999,144 @@ def test_find_wildcard_cert_rejects_multi_label(monkeypatch):
     base, wildcard = ssl_mod._find_wildcard_cert("a.b.example.com")
     # Parent base is b.example.com; file check may "succeed" but SAN won't match *.b.example.com
     assert base is None and wildcard is None
+
+
+# ---- PR4 ops polish: WS map, JAR logs/repair, wipe schedules --------------------
+def test_ensure_ws_map_idempotent(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
+    conf = tmp_path / "nginx.conf"
+    conf.write_text("user www;\nhttp {\n    include mime.types;\n}\nevents {}\n")
+    monkeypatch.setattr(panel_api, "run", lambda cmd, **kw: (0, "", ""))
+    assert panel_api.ensure_ws_map(str(conf)) is True
+    body = conf.read_text()
+    assert "map $http_upgrade $connection_upgrade" in body
+    assert "default upgrade;" in body
+    # second call is a no-op success
+    assert panel_api.ensure_ws_map(str(conf)) is True
+    assert body.count("map $http_upgrade $connection_upgrade") == 1
+
+
+def test_ensure_ws_map_rolls_back_on_nginx_t_fail(monkeypatch, tmp_path):
+    from core.compat import aapanel as panel_api
+    conf = tmp_path / "nginx.conf"
+    original = "http {\n    keepalive_timeout 65;\n}\n"
+    conf.write_text(original)
+    monkeypatch.setattr(panel_api, "run", lambda cmd, **kw: (1, "", "bad"))
+    assert panel_api.ensure_ws_map(str(conf)) is False
+    assert conf.read_text() == original
+
+
+def test_set_site_calls_compat_ws_map(monkeypatch, tmp_path):
+    """proxy.set_site must route WS-map install through compat, not write nginx.conf."""
+    from core.compat import aapanel as panel_api
+    called = []
+    monkeypatch.setattr(panel_api, "require_nginx", lambda: None)
+    monkeypatch.setattr(panel_api, "ensure_ws_map", lambda: called.append("ws") or True)
+    monkeypatch.setattr(proxy, "aapanel_add_site",
+                        lambda d, p: {"ok": False, "tried": ["x"], "error": "nope"})
+    monkeypatch.setattr(proxy, "read_domain", lambda a: None)
+    res = proxy.set_site("app1", "app1.example.com", 8080)
+    assert res["ok"] is False
+    assert called == ["ws"]
+
+
+def test_jar_tail_log_reads_app_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = tmp_path / "jarapp"
+    (base / "logs").mkdir(parents=True)
+    (base / "app.jar").write_bytes(b"PK\x03\x04")  # marks type=jar
+    (base / "logs" / "app.out").write_text("\n".join("j%d" % i for i in range(1, 11)) + "\n")
+    assert instance.tail_log("jarapp", 3).splitlines() == ["j8", "j9", "j10"]
+
+
+def test_repair_jar_reinstalls_unit(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = _secure_test_app(tmp_path, monkeypatch)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    _write_secure_env(base / "bin" / "app.env",
+        "JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\nSERVER_ADDRESS=127.0.0.1\n")
+    (tmp_path / "etc" / "systemd" / "system").mkdir(parents=True)
+    unit = tmp_path / "etc" / "systemd" / "system" / "javahost-jarapp.service"
+    unit.write_text(
+        "ExecStart=/opt/jdk-17/bin/java -Xmx512m -jar /x/app.jar\n")
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "etc" / "systemd" / "system"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "etc" / "init.d"))
+    seen = {}
+
+    def _install(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen.update(app=app, java_home=java_home, port=port, java_opts=java_opts)
+        return "/unit"
+
+    monkeypatch.setattr(instance.service, "install_jar_unit", _install)
+    monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
+    monkeypatch.setattr(instance.service, "enable_start", lambda a: None)
+    monkeypatch.setattr(instance.service, "action", lambda a, act: None)
+    res = instance.repair("jarapp")
+    assert res["repaired"] is True and res["type"] == "jar"
+    assert seen["java_home"] == "/opt/jdk-17" and seen["port"] == 8099
+    assert seen["java_opts"] == "-Xmx512m"
+    # recovered opts are backfilled into app.env for the next missing-unit repair
+    assert 'JAVA_OPTS="-Xmx512m"' in (base / "bin" / "app.env").read_text()
+
+
+def test_repair_jar_recovers_opts_from_app_env_when_unit_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = _secure_test_app(tmp_path, monkeypatch)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    _write_secure_env(base / "bin" / "app.env",
+        'JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\n'
+        'JAVA_OPTS="-server -Xms256m -Xmx512m -XX:+UseG1GC"\n')
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "no-units"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "no-init"))
+    seen = {}
+
+    def _install(app, java_home, app_dir, port, java_opts="", user="www"):
+        seen["java_opts"] = java_opts
+        return "/unit"
+
+    monkeypatch.setattr(instance.service, "install_jar_unit", _install)
+    monkeypatch.setattr(instance.service, "status", lambda a: "inactive")
+    monkeypatch.setattr(instance.service, "enable_start", lambda a: None)
+    res = instance.repair("jarapp")
+    assert res["repaired"] is True
+    assert seen["java_opts"] == "-server -Xms256m -Xmx512m -XX:+UseG1GC"
+
+
+def test_repair_jar_fails_when_opts_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
+    base = _secure_test_app(tmp_path, monkeypatch)
+    (base / "logs").mkdir()
+    (base / "app.jar").write_bytes(b"PK\x03\x04")
+    _write_secure_env(base / "bin" / "app.env",
+        "JAVA_HOME=/opt/jdk-17\nSERVER_PORT=8099\n")
+    monkeypatch.setattr(instance.service, "SYSTEMD_DIR", str(tmp_path / "no-units"))
+    monkeypatch.setattr(instance.service, "INITD_DIR", str(tmp_path / "no-init"))
+    installed = []
+    monkeypatch.setattr(
+        instance.service, "install_jar_unit",
+        lambda *a, **k: installed.append(1) or "/unit")
+    with pytest.raises(RuntimeError, match="no JAVA_OPTS"):
+        instance.repair("jarapp")
+    assert installed == []
+
+
+def test_wipe_apps_prunes_schedules(monkeypatch, tmp_path):
+    from core import maintenance
+    from core.backup import schedule as backupschedule
+    monkeypatch.setattr(maintenance, "_list_apps", lambda: ["gone"])
+    monkeypatch.setattr(maintenance.service, "action", lambda *a, **k: None)
+    monkeypatch.setattr(maintenance.service, "remove_unit", lambda *a, **k: None)
+    monkeypatch.setattr(maintenance.instance, "delete", lambda app: {"app": app, "removed": True})
+    pruned = []
+
+    def _rm(app):
+        pruned.append(app)
+        return {"app": app, "removed": True}
+
+    monkeypatch.setattr(backupschedule, "remove_schedule", _rm)
+    res = maintenance._wipe_apps()
+    assert res["removed"] == ["gone"]
+    assert "gone" in res["schedules_pruned"]
+    assert pruned == ["gone"]

@@ -144,6 +144,11 @@ links working.
 - Panels: aaPanel / BaoTa-style (Python 3 plugin runtime).
 - OS: Ubuntu 22.04 / 24.04 (primary), Debian 11/12; EL (Rocky/Alma) best-effort.
 - Tomcat 10.1 needs Java 11+, Tomcat 11 needs Java 17+ (enforced).
+- **Webserver: nginx only.** Reverse-proxy + per-site HTTPS writers target aaPanel's
+  nginx vhost/proxy layout. Apache httpd and OpenLiteSpeed are **not** supported
+  (no writers). A dedicated fail-closed gate for non-nginx panels is tracked with
+  the SSL/webserver honesty work (do not expect silent success on Apache/OLS once
+  that lands). Full Apache/OLS parity is a later epic.
 
 ## Install
 

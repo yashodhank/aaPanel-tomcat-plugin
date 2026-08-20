@@ -148,10 +148,19 @@ def _normalize_scope(scope) -> List[str]:
 def _wipe_apps() -> Dict:
     removed: List[str] = []
     errors: Dict[str, str] = {}
+    schedules_pruned: List[str] = []
     for app in _list_apps():
         try:
             # stop + disable the service first (immutable-aware via service layer),
             # then delete the instance (marker-gated by instance.delete).
+            # instance.delete also removes the backup schedule; prune here too so
+            # a failed delete mid-wipe still drops cron for apps we intended to wipe.
+            try:
+                from .backup import schedule as backupschedule
+                if backupschedule.remove_schedule(app).get("removed"):
+                    schedules_pruned.append(app)
+            except Exception:
+                pass
             try:
                 service.action(app, "stop")
             except Exception:
@@ -161,7 +170,7 @@ def _wipe_apps() -> Dict:
             removed.append(app)
         except Exception as e:
             errors[app] = str(e)
-    return {"removed": removed, "errors": errors}
+    return {"removed": removed, "errors": errors, "schedules_pruned": schedules_pruned}
 
 
 def _wipe_jdks() -> Dict:

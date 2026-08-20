@@ -101,3 +101,23 @@ def test_shape(monkeypatch):
         assert key in s["apps"]
     for key in ("instances_mb", "backups_mb"):
         assert key in s["disk"]
+
+
+def test_disk_backups_uses_backup_dest(monkeypatch, tmp_path):
+    """Dashboard must size the configured backup_dest, not a hardcoded path."""
+    _stub_common(monkeypatch, [])
+    custom = tmp_path / "alt-backups"
+    custom.mkdir()
+    (custom / "big.bin").write_bytes(b"x" * 2048)
+    seen = []
+
+    def _size(path, ttl=0):
+        seen.append(path)
+        return 2048 if path == str(custom) else 0
+
+    monkeypatch.setattr(dashboard.maintenance, "_dir_size", _size)
+    monkeypatch.setattr(dashboard.backupstore, "_backups_root", lambda: str(custom))
+    s = dashboard.summary()
+    assert str(custom) in seen
+    assert s["disk"]["backups_bytes"] == 2048
+    assert s["disk"]["backups_mb"] == 0.0  # 2048 < 1 MiB → rounds to 0.0

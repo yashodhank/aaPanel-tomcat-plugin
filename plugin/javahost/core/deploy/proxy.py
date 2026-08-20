@@ -95,14 +95,6 @@ server {
 }
 """
 
-# map $http_upgrade $connection_upgrade is required for WS; emit once via include hint.
-_WS_MAP = """map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-"""
-
-
 def _nginx_supports_http2_on() -> bool:
     """True when `nginx -V` reports a version that accepts standalone `http2 on;`."""
     nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
@@ -407,14 +399,10 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
       3. Legacy panelSite module (older aaPanel versions)
 
     Returns {"ok": bool, "path": "aapanel"|"aapanel-http", "detail": str,
-            "tried": [str]}. Fail-closed when the active webserver is not nginx.
+            "tried": [str]}.
     """
     domain = validate.domain(domain)
     port = validate.port(port)
-    nginx_err = panel_api.require_nginx()
-    if nginx_err:
-        return {"ok": False, "path": "aapanel", "error": nginx_err,
-                "detail": nginx_err, "tried": ["webserver-gate"]}
     tried = []
 
     # Path 1: HTTP API (most reliable — same auth scheme proven on VPS)
@@ -441,14 +429,9 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
         return res
 
     paths = ", ".join(tried)
-    hint = ""
-    if "http-api-skipped-no-key" in tried:
-        hint = (" Configure aapanel_api_key in Settings — required on aaPanel "
-                "7.x where panelSite.CreateProxy crashes (see "
-                "docs/bugs/createproxy-checklocation-bool-regex.md).")
     return {"ok": False, "path": "aapanel",
             "detail": "aaPanel site registration failed: tried [%s] — "
-                      "none succeeded.%s" % (paths, hint),
+                      "none succeeded" % paths,
             "tried": tried}
 
 
@@ -606,6 +589,23 @@ def set_site(app: str, domain: str, port: int) -> Dict:
     nginx_err = panel_api.require_nginx()
     if nginx_err:
         return {"ok": False, "error": nginx_err}
+
+    # Ensure $connection_upgrade exists before aaPanel/proxy snippets reference it.
+    # Writes to panel nginx.conf only via compat/aapanel (panel-coupling boundary).
+    try:
+        ws_map_ready = panel_api.ensure_ws_map()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": ("WebSocket proxy prerequisite failed: could not install "
+                      "or validate the nginx upgrade map: %s" % exc),
+        }
+    if not ws_map_ready:
+        return {
+            "ok": False,
+            "error": ("WebSocket proxy prerequisite failed: aaPanel nginx.conf "
+                      "is unavailable or nginx rejected the upgrade map."),
+        }
 
     # Changing domain: attach the NEW site first; only then drop the previous
     # aaPanel site. Delete-before-create orphans the live site when add fails.

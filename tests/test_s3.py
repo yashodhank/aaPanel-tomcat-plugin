@@ -45,4 +45,52 @@ def test_listobjects_xml_parse_strips_prefix():
     assert "backup-app-20260101T000000Z.tar.gz" in by_name
     assert by_name["backup-app-20260101T000000Z.tar.gz"]["size"] == 2048
 
+
+def test_listobjects_pagination_follows_continuation(monkeypatch):
+    c = s3.S3Client("https://s3.wasabisys.com", "us-east-1", "b", "AK", "SK", prefix="javahost")
+    page1 = (b'<?xml version="1.0" encoding="UTF-8"?>'
+             b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+             b'<IsTruncated>true</IsTruncated>'
+             b'<NextContinuationToken>tok-2</NextContinuationToken>'
+             b'<Contents><Key>javahost/a.tar.gz</Key><Size>1</Size></Contents>'
+             b'</ListBucketResult>')
+    page2 = (b'<?xml version="1.0" encoding="UTF-8"?>'
+             b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+             b'<IsTruncated>false</IsTruncated>'
+             b'<Contents><Key>javahost/b.tar.gz</Key><Size>2</Size></Contents>'
+             b'</ListBucketResult>')
+    pages = [page1, page2]
+    seen_tokens = []
+
+    class _Resp:
+        def __init__(self, data):
+            self.status = 200
+            self._data = data
+
+        def read(self, amount=None):
+            return self._data if amount is None else self._data[:amount]
+
+    class _Conn:
+        def request(self, method, path, headers=None):
+            # capture continuation-token from query
+            if "continuation-token=" in path:
+                seen_tokens.append("tok-2" if "tok-2" in path else path)
+
+        def getresponse(self):
+            return _Resp(pages.pop(0))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(c, "_sign", lambda *a, **k: {})
+    monkeypatch.setattr(c, "_conn", lambda: _Conn())
+    monkeypatch.setattr(c, "_path", lambda key, q: "/b?" + "&".join(
+        "%s=%s" % (k, v) for k, v in sorted((q or {}).items())))
+    items = c.list_objects()
+    assert [i["name"] for i in items] == ["a.tar.gz", "b.tar.gz"]
+    assert any("tok-2" in t for t in seen_tokens)
+    assert c._parse_continuation(page1) == "tok-2"
+    assert c._parse_continuation(page2) is None
+
+
 # (Profile registry config/secret-safety is covered by tests/test_remote_profiles.py)

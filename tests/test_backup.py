@@ -72,7 +72,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", iroot)
     monkeypatch.setattr(store, "BACKUPS_ROOT", broot)
     # allow safe_rmtree/mark under the tmp roots
-    monkeypatch.setattr(fs, "MANAGED_ROOTS", tuple(fs.MANAGED_ROOTS) + (iroot, broot))
+    monkeypatch.setattr(fs, "MANAGED_ROOTS", (iroot, broot))
     # stub the live boundaries
     monkeypatch.setattr(store.service, "status", lambda app: "inactive")
     monkeypatch.setattr(store.service, "action", lambda app, what: None)
@@ -102,6 +102,7 @@ def _mk_app(iroot, app, port=8080):
         f.write('export JAVA_HOME="/opt/jdk-17"\nexport CATALINA_HOME="/opt/tomcat/10"\nexport JAVA_OPTS="-Xmx512m"\n')
     with open(os.path.join(base, "bin", "app.env"), "w") as f:
         f.write('DB_URL="jdbc:postgresql://h:5432/d"\nDB_USER="appuser"\nDB_PASSWORD="s3cret"\n')
+    os.chmod(os.path.join(base, "bin", "app.env"), 0o640)
     with open(os.path.join(base, "webapps", "ROOT", "index.jsp"), "w") as f:
         f.write("PAYLOAD-OK")
     with open(os.path.join(base, "logs", "catalina.out"), "w") as f:
