@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import urllib.parse
 
 # Make `core` importable regardless of how the panel loads the plugin.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -877,26 +878,56 @@ class javahost_main(object):
         password — only whether one is set). Lets the UI show what's configured."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
-            env = instance._read_app_env(instance.base_path(app))
+            env = dbengines.read_app_env(instance.base_path(app))
             url = env.get("DB_URL", "") or ""
             engine = None
-            if url.startswith("jdbc:"):
-                parts = url.split(":", 2)
-                engine = parts[1] if len(parts) > 1 else None
-            elif url.startswith("mongodb"):
-                engine = "mongodb"
+
+            # app.env is writable by the managed app account.  Treat DB_URL as
+            # untrusted and return only a display-safe descriptor: discard all
+            # user-info and fragment data, and replace every query value.  This
+            # also covers credentials hidden under non-standard query keys.
+            safe_url = None
+            if url:
+                jdbc_prefix = "jdbc:" if url.startswith("jdbc:") else ""
+                parse_url = url[len(jdbc_prefix):]
+                parsed = urllib.parse.urlsplit(parse_url)
+                supported = {
+                    "postgresql", "mysql", "mariadb", "mongodb", "mongodb+srv",
+                }
+                if parsed.scheme.lower() in supported and parsed.netloc:
+                    engine = (
+                        "mongodb" if parsed.scheme.lower().startswith("mongodb")
+                        else parsed.scheme.lower()
+                    )
+                    netloc = parsed.netloc.rsplit("@", 1)[-1]
+                    if ";" not in netloc and not any(
+                            marker in parsed.path.lower()
+                            for marker in ("password=", "passwd=", "pwd=")):
+                        if "@" in parsed.netloc:
+                            netloc = "REDACTED@" + netloc
+                        query = urllib.parse.urlencode([
+                            (key, "REDACTED")
+                            for key, _value in urllib.parse.parse_qsl(
+                                parsed.query, keep_blank_values=True,
+                            )
+                        ])
+                        safe_url = jdbc_prefix + urllib.parse.urlunsplit((
+                            parsed.scheme, netloc, parsed.path, query, "",
+                        ))
             return panel.ok({
                 "app": app,
                 "configured": bool(url),
                 "engine": engine,
-                "url": url or None,            # host/port/db only — never the password
+                "url": safe_url,
                 "user": env.get("DB_USER") or None,
                 "driver": env.get("DB_DRIVER") or None,
                 "driver_maven": env.get("DB_DRIVER_MAVEN") or None,
                 "has_password": bool(env.get("DB_PASSWORD")),
             })
-        except Exception as e:
-            return panel.err(str(e))
+        except Exception:
+            # Descriptor-read failures can contain filesystem paths or hostile
+            # file contents.  Keep the endpoint response intentionally generic.
+            return panel.err("Unable to read database configuration safely.")
 
     def GetHealthAll(self, get=None):
         """Batched health for all apps in one round-trip (avoids the per-app
