@@ -230,6 +230,104 @@ def test_restore_jar_passes_java_opts_from_manifest(env, monkeypatch):
     assert "-Xmx256m" in seen.get("java_opts", "")
 
 
+def test_backup_jar_prefers_app_env_java_opts_over_unit(env, monkeypatch):
+    """The persisted app contract outranks a possibly missing/stale unit."""
+    iroot, _broot = env
+    app = "jarenv"
+    base = os.path.join(iroot, app)
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    fs.mark_managed(base)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write("SERVER_PORT=8099\nJAVA_HOME=/opt/jdk-17\n"
+                'JAVA_OPTS="-server -Xmx768m -XX:+UseG1GC"\n')
+    with open(os.path.join(base, "app.jar"), "wb") as f:
+        f.write(b"PK\x05\x06" + b"\0" * 18)
+    monkeypatch.setattr(instance, "_app_info",
+                        lambda a: {"type": "jar", "tomcat": None, "java": 17,
+                                   "port": 8099, "domain": None, "ssl": False})
+    monkeypatch.setattr(store, "_read_unit_java_opts",
+                        lambda a: "-server -Xmx256m")
+
+    manifest = store._build_manifest(app, base)
+
+    assert manifest["java_opts"] == "-server -Xmx768m -XX:+UseG1GC"
+    assert manifest["memory_mb"] == 768
+
+
+def test_restore_java_opts_prefers_app_env_before_manifest(env, monkeypatch):
+    iroot, _broot = env
+    base = os.path.join(iroot, "jaropts")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    with open(os.path.join(base, "bin", "app.env"), "w") as f:
+        f.write('JAVA_OPTS="-server -Xmx640m -XX:+UseG1GC"\n')
+
+    opts = store._restore_java_opts(
+        base, "jar", {"java_opts": "-Xmx128m", "memory_mb": 256},
+        "/opt/jdk-17")
+
+    assert opts == "-server -Xmx640m -XX:+UseG1GC"
+
+
+def test_secure_restored_secrets_fails_closed(env, monkeypatch):
+    iroot, _broot = env
+    base = os.path.join(iroot, "secret")
+    os.makedirs(os.path.join(base, "bin"), exist_ok=True)
+    envp = os.path.join(base, "bin", "app.env")
+    open(envp, "w").write("DB_PASSWORD=x\n")
+    real_chmod = os.chmod
+
+    def deny_env(path, mode):
+        if path == envp:
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store._secure_restored_secrets(base)
+
+
+def test_restore_discards_app_when_secret_permissions_fail(env, monkeypatch):
+    iroot, _broot = env
+    _mk_app(iroot, "source", port=8090)
+    archive_path = store.backup_app("source")["archive"]
+    real_chmod = os.chmod
+
+    def deny_restored_env(path, mode):
+        if path.endswith("/clone/bin/app.env"):
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_restored_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store.restore(archive_path, as_name="clone")
+
+    assert not instance.exists("clone")
+
+
+def test_overwrite_restore_checks_secret_modes_before_deleting_live_app(env, monkeypatch):
+    iroot, _broot = env
+    base = _mk_app(iroot, "live", port=8090)
+    payload = os.path.join(base, "webapps", "ROOT", "index.jsp")
+    open(payload, "w").write("ORIGINAL-LIVE")
+    archive_path = store.backup_app("live")["archive"]
+    real_chmod = os.chmod
+
+    def deny_staged_env(path, mode):
+        if path.endswith("/base/bin/app.env"):
+            raise PermissionError("chmod denied")
+        return real_chmod(path, mode)
+
+    monkeypatch.setattr(store.os, "chmod", deny_staged_env)
+
+    with pytest.raises(PermissionError, match="chmod denied"):
+        store.restore(archive_path)
+
+    assert instance.exists("live")
+    assert open(payload).read() == "ORIGINAL-LIVE"
+
+
 def test_delete_backup_refuses_escape(env):
     with pytest.raises(ValueError):
         store.delete_backup("../../etc/passwd")

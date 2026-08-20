@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -p
 ### BEGIN INIT INFO
 # Provides:          javahost-@@app@@
 # Required-Start:    $network $local_fs
@@ -16,26 +16,36 @@ export CATALINA_HOME="@@catalina_home@@"
 export CATALINA_BASE="@@catalina_base@@"
 export CATALINA_PID="@@catalina_base@@/temp/tomcat.pid"
 RUNAS="@@user@@"
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+unset LD_PRELOAD BASH_ENV ENV CDPATH GLOBIGNORE
 
-# Load app.env WITHOUT shell-sourcing it: `. file` would expand $(...)/backticks
-# in values (e.g. a DB password), enabling command injection. Read line-by-line
-# and export literally instead — `export "$k=$v"` does not re-evaluate $v.
-load_app_env() {
-  if [ -f "$CATALINA_BASE/bin/app.env" ]; then
-    while IFS='=' read -r __k __v; do
-      case "$__k" in ''|\#*) continue ;; esac
-      __v="${__v%\"}"; __v="${__v#\"}"
-      export "$__k=$__v"
-    done < "$CATALINA_BASE/bin/app.env"
-  fi
+# Start from an empty, fixed environment and drop privileges before reading
+# app.env. The unprivileged child exports only application keys; root never
+# imports attacker-controlled PATH/LD_PRELOAD/BASH_ENV or arbitrary variables.
+run() {
+  /usr/bin/env -i PATH="$PATH" JAVA_HOME="$JAVA_HOME" \
+    CATALINA_HOME="$CATALINA_HOME" CATALINA_BASE="$CATALINA_BASE" \
+    CATALINA_PID="$CATALINA_PID" \
+    /usr/sbin/runuser -u "$RUNAS" -- /bin/bash -c '
+      env_file="$1"; shift
+      if [ -r "$env_file" ]; then
+        while IFS="=" read -r __k __v; do
+          case "$__k" in
+            DB_*|SERVER_*|SPRING_PROFILES_ACTIVE|JAVA_OPTS) ;;
+            *) continue ;;
+          esac
+          __v="${__v%\"}"; __v="${__v#\"}"
+          export "$__k=$__v"
+        done < "$env_file"
+      fi
+      exec "$@"
+    ' javahost-run "$CATALINA_BASE/bin/app.env" "$@"
 }
-
-# Use runuser (not the aaPanel-jailed `su`) to drop privileges.
-run() { runuser -u "$RUNAS" -- bash -c "$1"; }
 case "$1" in
-  start)   load_app_env; run "$CATALINA_HOME/bin/catalina.sh start" ;;
-  stop)    run "$CATALINA_HOME/bin/catalina.sh stop" ;;
-  restart) run "$CATALINA_HOME/bin/catalina.sh stop"; sleep 2; load_app_env; run "$CATALINA_HOME/bin/catalina.sh start" ;;
+  start)   run "$CATALINA_HOME/bin/catalina.sh" start ;;
+  stop)    run "$CATALINA_HOME/bin/catalina.sh" stop ;;
+  restart) run "$CATALINA_HOME/bin/catalina.sh" stop; sleep 2; run "$CATALINA_HOME/bin/catalina.sh" start ;;
   status)  [ -f "$CATALINA_PID" ] && kill -0 "$(cat "$CATALINA_PID")" 2>/dev/null && echo running || { echo stopped; exit 3; } ;;
   *)       echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac

@@ -140,7 +140,9 @@ def _read_unit_java_opts(app: str) -> str:
 def _build_manifest(app: str, base: str) -> Dict:
     info = instance._app_info(app)
     setenv = instance._read_setenv(base)
-    java_opts = (setenv.get("JAVA_OPTS") or "").strip()
+    app_env = instance._read_app_env(base)
+    java_opts = (setenv.get("JAVA_OPTS") or
+                 app_env.get("JAVA_OPTS") or "").strip()
     if not java_opts and (info.get("type") or "") == "jar":
         java_opts = _read_unit_java_opts(app)
     return {
@@ -435,16 +437,32 @@ def _secure_restored_secrets(base: str, archive_path: str = None) -> None:
     Archives that carry DB creds → 0600; bin/app.env → 0640.
     """
     if archive_path and os.path.isfile(archive_path):
-        try:
-            os.chmod(archive_path, 0o600)
-        except OSError:
-            pass
+        os.chmod(archive_path, 0o600)
     envp = os.path.join(base, "bin", "app.env")
     if os.path.isfile(envp):
+        os.chmod(envp, 0o640)
+
+
+def _secure_or_discard_restore(base: str, archive_path: str, target: str) -> None:
+    """Fail closed: an insecure restored secret invalidates the restore."""
+    try:
+        _secure_restored_secrets(base, archive_path)
+    except Exception as original:
+        cleanup_errors = []
         try:
-            os.chmod(envp, 0o640)
-        except OSError:
-            pass
+            service.remove_unit(target)
+        except Exception as exc:
+            cleanup_errors.append("remove unit: %s" % exc)
+        if os.path.isdir(base):
+            try:
+                fs.safe_rmtree(base, require_marker=fs.is_managed(base))
+            except Exception as exc:
+                cleanup_errors.append("remove restored app: %s" % exc)
+        if cleanup_errors:
+            raise RuntimeError(
+                "%s; restore rollback incomplete: %s" %
+                (original, "; ".join(cleanup_errors))) from original
+        raise
 
 
 def _restore_java_opts(base: str, itype: str, manifest: Dict,
@@ -456,7 +474,8 @@ def _restore_java_opts(base: str, itype: str, manifest: Dict,
     java_opts, else regenerate defaults from manifest memory_mb.
     """
     env = instance._read_setenv(base)
-    opts = (env.get("JAVA_OPTS") or "").strip()
+    app_env = instance._read_app_env(base)
+    opts = (env.get("JAVA_OPTS") or app_env.get("JAVA_OPTS") or "").strip()
     if opts:
         return opts
     man_opts = (manifest.get("java_opts") or "").strip()
@@ -504,23 +523,24 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     if new_mode:
         if instance.exists(target):
             raise RuntimeError("app already exists: %s (choose another name)" % target)
-    else:
-        # overwrite: stop + remove the existing instance first (marker-gated delete)
-        if instance.exists(target):
-            try:
-                service.action(target, "stop")
-            except Exception:
-                pass
-            service.remove_unit(target)
-            instance.delete(target, purge=True)
 
-    # extract to staging, then move base/ into place (hardened extractor)
+    # Extract and prove secret permissions in staging before destructive
+    # overwrite cutover. A chmod failure must leave the live app untouched.
     staging = fs.mkdtemp("jh-restore-")
     try:
         archive.safe_extract_tar(archive_path, staging)
         src_base = os.path.join(staging, "base")
         if not os.path.isdir(src_base):
             raise RuntimeError("archive missing base/ payload")
+        _secure_restored_secrets(src_base, archive_path)
+
+        if not new_mode and instance.exists(target):
+            try:
+                service.action(target, "stop")
+            except Exception:
+                pass
+            service.remove_unit(target)
+            instance.delete(target, purge=True)
         if os.path.isdir(base):
             fs.safe_rmtree(base, require_marker=fs.is_managed(base))
         shutil.move(src_base, base)
@@ -528,7 +548,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         shutil.rmtree(staging, ignore_errors=True)
 
     fs.mark_managed(base)
-    _secure_restored_secrets(base, archive_path)
+    _secure_or_discard_restore(base, archive_path, target)
 
     # port + domain
     if new_mode:
@@ -561,7 +581,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
             raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
 
     # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
-    _secure_restored_secrets(base, archive_path)
+    _secure_or_discard_restore(base, archive_path, target)
 
     service.enable_start(target)
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 import re
+import fcntl
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from ..util import shell, download, fs
@@ -169,7 +171,37 @@ def version_newer(latest: str, installed: str) -> bool:
     return bool(a) and bool(b) and a > b
 
 
+@contextmanager
+def _jdk_major_lock(major: int):
+    """Fail-fast cross-process lock for one managed JDK major."""
+    fs.ensure_dir(JDK_ROOT)
+    path = os.path.join(JDK_ROOT, ".jdk-%d.lock" % int(major))
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            raise RuntimeError(
+                "JDK %s operation already in progress" % major) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
+    """Serialize a complete staged install/update for one JDK major."""
+    if major not in (17, 21, 11, 8):
+        raise ValueError("unsupported JDK major to install: %s" % major)
+    with _jdk_major_lock(major):
+        return _install_temurin_locked(major, arch=arch, os_name=os_name)
+
+
+def _install_temurin_locked(major: int, *, arch: str = "x64",
+                            os_name: str = "linux") -> str:
     """Download + verify + staged-extract Temurin JDK <major>. Returns JAVA_HOME.
 
     Extract lands in ``jdk-<major>.staging`` and is atomically renamed into
@@ -194,7 +226,14 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
     dest = os.path.join(JDK_ROOT, "jdk-%d" % major)
     staging = dest + ".staging"
     tmp = fs.mkdtemp("javahost-jdk-")
+    rollback = dest + ".old"
     stopped: List[str] = []
+    restarted: List[str] = []
+    had_live = False
+    swapped = False
+    rollback_created = False
+    committed = False
+    svc = None
     try:
         # Adoptium publishes SHA-256; verify_sha512 expects sha512, so verify sha256 here.
         tgz = _fetch_with_sha256(url, tmp, sha, sha_url)
@@ -210,62 +249,125 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
                 fs.atomic_write(_version_marker(staging), semver + "\n", 0o644)
             except OSError:
                 pass
+        staged_major = probe(staging)
+        if staged_major != major:
+            raise RuntimeError(
+                "staged JDK reports major %s, expected %s" %
+                (staged_major, major))
+
+        had_live = os.path.isdir(dest)
         # Stop dependents only once staging is ready — a failed download/verify
         # must not take apps down while the old tree is still intact.
-        if os.path.isdir(dest):
+        if had_live:
+            if os.path.exists(rollback):
+                raise RuntimeError(
+                    "refusing JDK update while rollback tree exists: %s" % rollback)
             in_use = usage(major, home=dest)
             if in_use:
                 from ..tomcat import service as _svc
+                svc = _svc
                 for app in in_use:
-                    try:
-                        _svc.action(app, "stop")
-                        stopped.append(app)
-                    except Exception:
-                        pass
+                    state = _svc.status(app)
+                    if state not in ("active", "activating", "reloading"):
+                        continue
+                    _svc.action(app, "stop")
+                    stopped.append(app)
         # Atomic swap: existing tree → .old, staging → dest, then drop .old.
-        if os.path.isdir(dest):
-            old = dest + ".old"
-            if os.path.isdir(old):
-                fs.safe_rmtree(old, require_marker=False)
-            os.rename(dest, old)
-            try:
-                os.rename(staging, dest)
-            except Exception:
-                # Roll the live tree back so a failed second rename is not an outage.
-                if not os.path.isdir(dest) and os.path.isdir(old):
-                    try:
-                        os.rename(old, dest)
-                    except OSError:
-                        pass
-                raise
-            fs.safe_rmtree(old, require_marker=False)
+        if had_live:
+            os.rename(dest, rollback)
+            rollback_created = True
+            os.rename(staging, dest)
         else:
             os.rename(staging, dest)
-    except Exception:
+        swapped = True
+
+        # Prove the tree survived the swap before the rollback copy is touched.
+        got = probe(dest)
+        if got != major:
+            raise RuntimeError(
+                "installed JDK reports major %s, expected %s" % (got, major))
+
+        # Restore only services that were running before the update. A stopped
+        # dependent must remain stopped; a start failure rolls the JDK back.
+        if svc is not None:
+            for app in stopped:
+                svc.action(app, "start")
+                restarted.append(app)
+
+        # Runtime + dependent restarts are now proven. Only now may rollback go.
+        committed = True
+        if had_live:
+            try:
+                fs.safe_rmtree(rollback, require_marker=False)
+            except Exception as exc:
+                raise RuntimeError(
+                    "JDK update committed; rollback tree cleanup failed and "
+                    "stale rollback tree remains at %s: %s" %
+                    (rollback, exc)) from exc
+    except Exception as original:
+        # Once the replacement runtime and all previously-running dependents are
+        # proven, cleanup failure is not grounds to undo a healthy update.
+        if committed:
+            raise
+        rollback_errors: List[str] = []
+
+        # A dependent may already have started on the new runtime before a later
+        # restart failed. Stop those before restoring the old tree.
+        if svc is not None:
+            for app in restarted:
+                try:
+                    svc.action(app, "stop")
+                except Exception as exc:
+                    rollback_errors.append("stop %s: %s" % (app, exc))
+
+        # Restore the previous tree for every failure after dest -> .old,
+        # including a failed staging -> dest rename. Keep .old if any rename
+        # fails so an operator still has the recovery artifact.
+        if rollback_created and os.path.isdir(rollback):
+            try:
+                if os.path.isdir(dest):
+                    if os.path.isdir(staging):
+                        rollback_errors.append(
+                            "cannot preserve failed JDK: staging path already exists")
+                    else:
+                        os.rename(dest, staging)
+                if not os.path.isdir(dest):
+                    os.rename(rollback, dest)
+            except Exception as exc:
+                rollback_errors.append("restore runtime tree: %s" % exc)
+        elif swapped and not had_live and os.path.isdir(dest):
+            # New installs have no old tree; remove the failed live candidate.
+            try:
+                if not os.path.isdir(staging):
+                    os.rename(dest, staging)
+            except Exception as exc:
+                rollback_errors.append("remove failed runtime: %s" % exc)
+
+        # Return every service we successfully stopped to its original running
+        # state. Originally inactive services were never touched.
+        if svc is not None and os.path.isdir(dest):
+            for app in stopped:
+                try:
+                    svc.action(app, "start")
+                except Exception as exc:
+                    rollback_errors.append("start %s: %s" % (app, exc))
+
         if os.path.isdir(staging):
             try:
                 fs.safe_rmtree(staging, require_marker=False)
-            except Exception:
-                pass
-        # Download/staging failures never stop apps. Swap failures restore
-        # ``dest`` above; restart anything we stopped so a failed update is
-        # not a lasting outage while the old JDK is still present.
-        if stopped and os.path.isdir(dest):
-            from ..tomcat import service as _svc
-            for app in stopped:
-                try:
-                    _svc.action(app, "start")
-                except Exception:
-                    pass
+            except Exception as exc:
+                rollback_errors.append("clean staging: %s" % exc)
+
+        if rollback_errors:
+            raise RuntimeError(
+                "%s; rollback incomplete: %s" %
+                (original, "; ".join(rollback_errors))) from original
         raise
     finally:
         # `tmp` is our own fs.mkdtemp (0700, in the system tempdir). Remove it
         # directly: safe_rmtree only permits MANAGED_ROOTS and would refuse /tmp.
         import shutil as _shutil
         _shutil.rmtree(tmp, ignore_errors=True)
-    got = probe(dest)
-    if got != major:
-        raise RuntimeError("installed JDK reports major %s, expected %s" % (got, major))
     return dest
 
 
@@ -330,6 +432,13 @@ def usage(major: int, home: Optional[str] = None) -> List[str]:
 
 
 def uninstall(major: int, force: bool = False) -> Dict:
+    """Serialize removal against install/update/reinstall for this major."""
+    major = int(major)
+    with _jdk_major_lock(major):
+        return _uninstall_locked(major, force=force)
+
+
+def _uninstall_locked(major: int, force: bool = False) -> Dict:
     """Remove the plugin-managed JDK `major`.
 
     Refuses the panel-owned JDK (anything outside /www/server/javahost/runtimes):
@@ -385,7 +494,7 @@ def uninstall(major: int, force: bool = False) -> Dict:
 def reinstall(major: int, to_plugin_dir: bool = False) -> Dict:
     """Reinstall Temurin JDK `major` into the plugin runtimes.
 
-    Normally uninstalls the plugin-managed copy first (force=True) then installs.
+    Replaces a plugin-managed copy through install_temurin's staged transaction.
     For a panel-owned JDK (e.g. the panel's jdk17) `to_plugin_dir=True` means:
     DON'T touch the panel copy — just install_temurin(major) under the plugin
     runtimes so the plugin owns its own. With to_plugin_dir False on a panel
@@ -395,15 +504,12 @@ def reinstall(major: int, to_plugin_dir: bool = False) -> Dict:
     found = detect()
     home = found.get(major)
     panel_owned = bool(home) and not _is_plugin_runtime(home)
-    if panel_owned and to_plugin_dir:
-        # leave the panel's copy alone; give the plugin its own under JDK_ROOT
-        new_home = install_temurin(major)
-        return {"major": major, "reinstalled": True, "home": new_home,
-                "kept_panel_copy": True}
-    uninstall(major, force=True)
+    if panel_owned and not to_plugin_dir:
+        # Preserve the established refusal and message for shared runtimes.
+        uninstall(major, force=True)
     new_home = install_temurin(major)
     return {"major": major, "reinstalled": True, "home": new_home,
-            "kept_panel_copy": False}
+            "kept_panel_copy": bool(panel_owned)}
 
 
 def _fetch_with_sha256(url: str, dest_dir: str, sha256_hex, sha256_url) -> str:

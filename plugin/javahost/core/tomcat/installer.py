@@ -173,8 +173,19 @@ def uninstall(major: str, force: bool = False) -> dict:
         for app in in_use:
             try:
                 _svc.action(app, "stop")
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to stop dependent app %s: %s" % (app, exc)) from exc
+            try:
+                state = _svc.status(app)
+            except Exception as exc:
+                raise RuntimeError(
+                    "failed to verify dependent app %s stopped: %s" %
+                    (app, exc)) from exc
+            if state != "inactive":
+                raise RuntimeError(
+                    "dependent app %s did not stop (status: %s); "
+                    "Tomcat %s was not removed" % (app, state, major))
     removed = False
     if os.path.isdir(dest):
         fs.safe_rmtree(dest, require_marker=True)  # refuses unmanaged (F14)
