@@ -1,7 +1,6 @@
 # aaPanel Tomcat Plugin — Agent Rules (auto-loaded every session)
 
 > **If you're working on this project, do NOT proceed before reading this file.**
-> MEMPALACE: Query `mempalace_search(query="javahost", wing="javahost")` before starting.
 
 ## Mandatory workflow
 
@@ -50,7 +49,3 @@
 
 ## Memory system
 
-- **mempalace (`wing: "javahost"`, 6 drawers):** Project decisions, architecture,
-  conventions, deployment state. Query before starting, write after learning.
-- **graphify:** Code knowledge graph. Use `graphify_query_graph` for code structure
-  questions, `graphify_list_prs` to check open PRs before starting work.
