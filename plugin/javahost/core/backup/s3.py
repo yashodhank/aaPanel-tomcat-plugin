@@ -19,6 +19,7 @@ import datetime
 import hashlib
 import hmac
 import http.client
+import os
 import ssl as _sslmod
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -164,12 +165,34 @@ class S3Client:
             if resp.status != 200:
                 resp.read()
                 raise S3Error("GET failed: HTTP %d" % resp.status)
-            with open(local_path, "wb") as out:
-                while True:
-                    chunk = resp.read(1 << 16)
-                    if not chunk:
-                        break
-                    out.write(chunk)
+            # Download beside the target and publish only a complete file: a dropped
+            # connection ends read() early without raising, and a partial archive at
+            # the final name would be taken for a local backup from then on.
+            expected = resp.getheader("Content-Length")
+            part = local_path + ".part"
+            written = 0
+            try:
+                if os.path.lexists(part):
+                    os.unlink(part)
+                fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0), 0o600)   # holds DB credentials
+                with os.fdopen(fd, "wb") as out:
+                    while True:
+                        chunk = resp.read(1 << 16)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        written += len(chunk)
+                if expected is not None and str(expected).strip().isdigit() \
+                        and written != int(expected):
+                    raise S3Error("GET incomplete: got %d of %s bytes" % (written, expected))
+                os.replace(part, local_path)
+            except BaseException:
+                try:
+                    os.unlink(part)
+                except OSError:
+                    pass
+                raise
         finally:
             conn.close()
 
