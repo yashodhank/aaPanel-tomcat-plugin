@@ -258,6 +258,31 @@ def status_all(names) -> Dict[str, str]:
     return out
 
 
+def snapshot_unit(app: str):
+    """(path, content, mode) of the unit or init script that manages `app` right
+    now, or None when it has none."""
+    for path in (_unit_path(app), _script_path(app)):
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                return path, f.read(), os.stat(path).st_mode & 0o777
+    return None
+
+
+def restore_unit(app: str, snap) -> None:
+    """Put the service definition back to exactly what snapshot_unit() saw:
+    rewrite it if it was replaced, remove one that did not exist before."""
+    current = snapshot_unit(app)
+    if current == snap:
+        return
+    if current and (snap is None or current[0] != snap[0]):
+        remove_unit(app)                 # a unit that was not there before
+    if snap is not None:
+        path, content, mode = snap
+        _write_unit_file(path, content, mode)
+        if path == _unit_path(app):
+            shell.run(["systemctl", "daemon-reload"], check=False)
+
+
 def remove_unit(app: str) -> None:
     b = _backend(app)
     mh = _manage()

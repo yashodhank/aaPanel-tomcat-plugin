@@ -18,7 +18,13 @@ from ..util import fs, download, shell
 
 # Apache Tomcat Migration Tool for Jakarta EE (verified download).
 MIGRATION_VER = "1.0.8"
-_MIGRATION_BASE = "https://dlcdn.apache.org/tomcat/jakartaee-migration/v%s/binaries"
+# Pinned release + pinned digest (checked against Apache's signature when it was
+# pinned). Fetched from the permanent archive: dlcdn only carries the newest
+# release, so a pinned version there starts returning 404 at the next release.
+MIGRATION_SHA512 = (
+    "2a3deb12d3397dcfa7bc6ea0bfb0ba335ff9910e504e5a8bd7fcb530cd28e1e5"
+    "74b1b7328fa0628c1a03e707330a77bfd4eb526b52a250e100d3b1f78f51fa4b")
+_MIGRATION_BASE = "https://archive.apache.org/dist/tomcat/jakartaee-migration/v%s/binaries"
 _MIGRATION_JAR = "jakartaee-migration-%s-shaded.jar"
 TOOLS_DIR = "/www/server/javahost/.tools"
 
@@ -140,16 +146,23 @@ def detect_namespace(war_path: str) -> Optional[str]:
     return None
 
 
+def migration_url() -> str:
+    return "%s/%s" % (_MIGRATION_BASE % MIGRATION_VER, _MIGRATION_JAR % MIGRATION_VER)
+
+
 def ensure_migration_tool() -> str:
-    """Download + SHA-512-verify the Jakarta EE migration JAR. Returns its path."""
+    """Return the path of the Jakarta EE migration JAR, verified against the
+    pinned SHA-512 on every call (it is run as root). A jar that does not match,
+    e.g. one left by an interrupted download, is discarded and fetched again."""
     fs.ensure_dir(TOOLS_DIR)
     jar = os.path.join(TOOLS_DIR, _MIGRATION_JAR % MIGRATION_VER)
     if os.path.isfile(jar):
-        return jar
-    base = _MIGRATION_BASE % MIGRATION_VER
-    url = "%s/%s" % (base, _MIGRATION_JAR % MIGRATION_VER)
-    # SHA-512 mandatory (fail-closed); Apache publishes .sha512 alongside the jar.
-    return download.fetch_verified(url, TOOLS_DIR, sha512_url=url + ".sha512")
+        try:
+            download.verify_sha512(jar, MIGRATION_SHA512)
+            return jar
+        except RuntimeError:
+            os.unlink(jar)
+    return download.fetch_verified(migration_url(), TOOLS_DIR, sha512=MIGRATION_SHA512)
 
 
 def migrate(war_path: str, out_path: str, java_home: str) -> str:

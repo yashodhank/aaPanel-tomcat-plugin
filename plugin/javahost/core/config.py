@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+from .util import fs
+
 CONFIG_PATH = "/www/server/javahost/config.json"
 _INFO_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "info.json")
 
@@ -67,33 +69,34 @@ def set(key: str, value):
 
 
 def update(values: dict) -> dict:
-    """Merge `values` into config.json atomically. Returns the merged dict."""
-    try:
-        with open(CONFIG_PATH) as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            data = {}
-    except Exception:
-        data = {}
-    data.update(values or {})
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    tmp = CONFIG_PATH + ".tmp"
-    # config.json may hold a secret (e.g. aapanel_api_key) — keep it owner-only
-    # (0600) rather than whatever the umask gives. Create the temp restricted,
-    # not chmod-after, so it is never briefly world-readable.
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
+    """Merge `values` into config.json atomically. Returns the merged dict.
+
+    Serialized, so two concurrent saves cannot drop each other's keys. A file
+    that cannot be parsed is moved to config.json.unreadable, not overwritten:
+    writing over it would discard every other setting, the API key included."""
+    with fs.locked(CONFIG_PATH):
         try:
-            os.unlink(tmp)
-        finally:
-            raise
-    os.chmod(tmp, 0o600)  # O_CREAT mode is masked by umask; force it
-    os.replace(tmp, CONFIG_PATH)
-    _CACHE.pop("k", None)  # force re-read on next get()
-    return data
+            with open(CONFIG_PATH) as f:
+                raw = f.read()
+        except FileNotFoundError:
+            raw = ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                raise ValueError("not a settings object")
+        except ValueError:
+            # Reads already treat this file as empty. Keep what is in it for the
+            # operator (it may hold the API key) and carry on with a fresh one, so
+            # Settings does not stay unsaveable.
+            os.replace(CONFIG_PATH, CONFIG_PATH + ".unreadable")
+            os.chmod(CONFIG_PATH + ".unreadable", 0o600)
+            data = {}
+        data.update(values or {})
+        # config.json may hold a secret (e.g. aapanel_api_key): the temp file is
+        # created 0600 (mkstemp), so it is never briefly world-readable.
+        fs.atomic_write(CONFIG_PATH, json.dumps(data, indent=2), mode=0o600)
+        _CACHE.pop("k", None)  # force re-read on next get()
+        return data
 
 
 def _as_bool(v, default: bool) -> bool:
@@ -113,25 +116,25 @@ def log_rotate_when() -> str:
     return v if v in ("daily", "weekly", "monthly") else "daily"
 
 
-def log_rotate_keep(default: int = 7) -> int:
+def _int(key: str, default: int, lo: int) -> int:
+    """Stored integer setting, floor `lo`. A stored 0 is a value, not "unset"."""
+    v = get(key, default)
     try:
-        return max(0, int(get("log_rotate_keep", default) or default))
+        return max(lo, int(default if v is None or v == "" else v))
     except (TypeError, ValueError):
         return default
+
+
+def log_rotate_keep(default: int = 7) -> int:
+    return _int("log_rotate_keep", default, 0)      # 0 = keep no rotations
 
 
 def log_rotate_max_mb(default: int = 50) -> int:
-    try:
-        return max(1, int(get("log_rotate_max_mb", default) or default))
-    except (TypeError, ValueError):
-        return default
+    return _int("log_rotate_max_mb", default, 1)
 
 
 def log_purge_days(default: int = 30) -> int:
-    try:
-        return max(0, int(get("log_purge_days", default) or default))
-    except (TypeError, ValueError):
-        return default
+    return _int("log_purge_days", default, 0)       # 0 = purge every rotation
 
 
 def aapanel_api_key():

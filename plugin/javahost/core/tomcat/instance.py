@@ -9,6 +9,7 @@ CATALINA_HOME (see installer.py). All removals are marker-gated (fs.safe_rmtree)
 from __future__ import annotations
 
 import os
+import stat
 import re
 import shutil
 import socket
@@ -686,7 +687,11 @@ def metrics_all(names) -> Dict[str, Dict]:
     return out
 
 
-def delete(app: str, *, purge: bool = True) -> Dict:
+def delete(app: str, *, purge: bool = True, force: bool = False) -> Dict:
+    """Remove an app. When its aaPanel site cannot be removed the app is left
+    whole so the delete can be retried, unless `force`: then the app goes and
+    the site is reported as possibly left behind. That is the way out when the
+    panel cannot be reached at all (plugin uninstall, no API key)."""
     app = validate.identifier(app, "app")
     site_cleanup = None
     # Clean up the reverse-proxy site in aaPanel before removing the instance
@@ -695,13 +700,6 @@ def delete(app: str, *, purge: bool = True) -> Dict:
         site_cleanup = proxy.remove_site(app)
     except Exception as e:
         site_cleanup = {"removed": False, "error": str(e)}
-    # Drop any backup schedule/cron entry for this app (partial wipe + DeleteApp).
-    try:
-        from ..backup import schedule as backupschedule
-        backupschedule.remove_schedule(app)
-    except Exception:
-        pass
-    service.remove_unit(app)
     base = base_path(app)
     removed = False
     # If aaPanel delete failed, keep the instance tree (incl. site.domain marker)
@@ -709,9 +707,21 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     site_blocked = (isinstance(site_cleanup, dict)
                     and site_cleanup.get("removed") is False
                     and site_cleanup.get("domain"))
-    if purge and os.path.isdir(base) and not site_blocked:
-        fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
-        removed = True
+    if force or not (site_blocked and purge):
+        # Only past this point is the app being taken apart. A blocked delete
+        # leaves it whole and running, not stopped with its unit and schedule
+        # gone but its files and site still there.
+        try:
+            from ..backup import schedule as backupschedule
+            backupschedule.remove_schedule(app)
+        except Exception:
+            pass
+        service.remove_unit(app)
+        if purge and os.path.isdir(base):
+            fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
+        # gone is gone: a leftover unit or site with no directory (or a second
+        # click) is a finished delete, not a failed one
+        removed = purge and not os.path.isdir(base)
     out = {"app": app, "removed": removed}
     if site_cleanup is not None:
         out["site"] = site_cleanup
@@ -720,9 +730,9 @@ def delete(app: str, *, purge: bool = True) -> Dict:
                 site_cleanup.get("error")
                 or "reverse-proxy site may still exist in aaPanel — remove it manually"
             )
-            if site_blocked and purge:
+            if site_blocked and purge and not force:
                 out["site_warning"] += (
-                    "; instance kept so domain marker remains for retry"
+                    "; the app was left unchanged so the delete can be retried"
                 )
     return out
 
@@ -862,22 +872,35 @@ def tail_log(app: str, lines: int = 200) -> str:
     app = validate.identifier(app, "app")
     base = base_path(app)
     n = max(1, min(int(lines), 2000))
-    log_dir = os.path.join(base, "logs")
-    # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
-    if _instance_type(base) == "jar":
-        app_out = os.path.join(log_dir, "app.out")
-        if os.path.isfile(app_out):
-            return _tail(app_out, n)
+    # logs/ belongs to the app user and this read runs as root: go through a
+    # descriptor on the directory and refuse links, so a planted
+    # `catalina.out -> /etc/shadow` is not tailed into the panel.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = os.open(os.path.join(base, "logs"),
+                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow)
+    except OSError:
         return ""
-    candidates = ["catalina.out"] + [
-        f for f in (os.listdir(log_dir) if os.path.isdir(log_dir) else [])
-        if f.startswith("catalina") and f.endswith(".log")
-    ]
-    for name in candidates:
-        path = os.path.join(log_dir, name)
-        if os.path.isfile(path):
-            return _tail(path, n)
-    return ""
+    try:
+        # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
+        if _instance_type(base) == "jar":
+            candidates = ["app.out"]
+        else:
+            candidates = ["catalina.out"] + [
+                f for f in os.listdir(dir_fd)
+                if f.startswith("catalina") and f.endswith(".log")]
+        for name in candidates:
+            try:
+                fd = os.open(name, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0),
+                             dir_fd=dir_fd)
+            except OSError:
+                continue
+            with os.fdopen(fd, "rb") as f:
+                if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    return _tail_file(f, n)
+        return ""
+    finally:
+        os.close(dir_fd)
 
 
 # --- helpers ---
@@ -918,16 +941,20 @@ def _read_port(base: str) -> Optional[int]:
 
 
 def _tail(path: str, lines: int) -> str:
-    # memory-safe tail without reading the whole file
     with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        end = f.tell()
-        block, data, found = 4096, b"", 0
-        pos = end
-        while pos > 0 and found <= lines:
-            step = min(block, pos)
-            pos -= step
-            f.seek(pos)
-            data = f.read(step) + data
-            found = data.count(b"\n")
-        return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
+        return _tail_file(f, lines)
+
+
+def _tail_file(f, lines: int) -> str:
+    # memory-safe tail without reading the whole file
+    f.seek(0, os.SEEK_END)
+    end = f.tell()
+    block, data, found = 4096, b"", 0
+    pos = end
+    while pos > 0 and found <= lines:
+        step = min(block, pos)
+        pos -= step
+        f.seek(pos)
+        data = f.read(step) + data
+        found = data.count(b"\n")
+    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
