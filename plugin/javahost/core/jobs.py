@@ -168,6 +168,46 @@ def _write_meta(jdir: str, meta: Dict) -> None:
             pass
 
 
+def _boot_time() -> Optional[float]:
+    """Wall-clock time of the current boot (Linux `btime`), or None if unknown."""
+    try:
+        with open(os.path.join(PROC_ROOT, "stat"), "r") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+# Slack for the wall clock being stepped after boot (btime moves with it).
+_BOOT_MARGIN = 120.0
+
+
+def _reconcile_interrupted(jdir: str, meta: Dict, boot: Optional[float]) -> Dict:
+    """A job still marked running that started before this boot cannot be running:
+    its supervisor died with the machine and will never record a result. Record
+    one, so the task stops showing as in progress and can be retried or cleared.
+
+    Deliberately narrow. A supervisor that vanished without a reboot is left
+    alone here: telling that apart from a live job needs process identity, and
+    getting it wrong would release a job that is still working."""
+    if _normalise_state(meta.get("state")) != "running" or boot is None:
+        return meta
+    started = _normalise_started(meta.get("started"))
+    if not started or started >= boot - _BOOT_MARGIN:
+        return meta
+    meta = dict(meta)
+    meta["state"] = "failed"
+    meta["ended"] = boot
+    meta["message"] = "interrupted: the server restarted while this task was running"
+    try:
+        _write_meta(jdir, meta)
+    except Exception:
+        pass
+    return meta
+
+
 def _mark_launch_failed(jdir: str) -> None:
     """Best-effort: flip a job's meta to failed when its supervisor can't exec."""
     try:
@@ -287,12 +327,13 @@ def list_jobs(limit: int = 200) -> List[Dict]:
     except OSError:
         return out
     metas: List[Dict] = []
+    boot = _boot_time()
     for name in names:
         jdir = _job_storage_dir(name)
         if jdir is None:
             continue
         try:
-            meta = _read_meta(jdir)
+            meta = _reconcile_interrupted(jdir, _read_meta(jdir), boot)
         except Exception:
             continue  # malformed: skip rather than crash the list
         # The directory name is the storage identity. Never trust a mutable or
@@ -590,7 +631,7 @@ def cancel(job_id: str) -> Dict:
     have happened. Cancellation therefore requires readable Linux procfs.
     """
     jdir = job_dir(job_id)
-    meta = _read_meta(jdir)
+    meta = _reconcile_interrupted(jdir, _read_meta(jdir), _boot_time())
     state = _normalise_state(meta.get("state"))
     if state != "running":
         raise ValueError("job is not running (state=%s)" % (state or "unknown"))
