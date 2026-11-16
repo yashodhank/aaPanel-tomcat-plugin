@@ -90,7 +90,7 @@ without the panel) to exercise the real path, and a Playwright pass for UI.
 - The aaPanel `get` is an **attribute namespace** (`panel.attr` = `getattr`), not
   a dict → endpoint tests pass a `SimpleNamespace`, never `{...}`.
 - Never unlock a system directory or edit System Hardening's config from the
-  plugin. A blocked write goes through `compat.aapanel.hardening_paused` (the
+  plugin. A blocked write goes through `compat.aapanel.system_write` (the
   panel's own pause) or fails with a message for the operator.
 - After `make deploy`, the panel **must** be restarted (`make deploy` does it) or
   it serves the stale module.
