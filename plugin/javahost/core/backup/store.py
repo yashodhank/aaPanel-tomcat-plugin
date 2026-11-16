@@ -24,11 +24,14 @@ contained. Defensive throughout.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import shutil
+import signal
 import time
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from .. import config
@@ -268,6 +271,12 @@ def _read_manifest_file(path: str) -> Dict:
 def list_backups(app: Optional[str] = None, include_remote: bool = False) -> List[Dict]:
     """Newest-first backup records. Each carries `locations` — the union of the local
     store + (when include_remote) every enabled storage profile that holds it."""
+    # Opening the Backups view is the natural moment to notice a restore that was
+    # killed before it could roll itself back, and put that app back.
+    try:
+        recover_interrupted_restores()
+    except Exception:
+        pass
     out: List[Dict] = []
     by_name: Dict[str, Dict] = {}
     root = _backups_root()
@@ -443,28 +452,6 @@ def _secure_restored_secrets(base: str, archive_path: str = None) -> None:
         os.chmod(envp, 0o640)
 
 
-def _secure_or_discard_restore(base: str, archive_path: str, target: str) -> None:
-    """Fail closed: an insecure restored secret invalidates the restore."""
-    try:
-        _secure_restored_secrets(base, archive_path)
-    except Exception as original:
-        cleanup_errors = []
-        try:
-            service.remove_unit(target)
-        except Exception as exc:
-            cleanup_errors.append("remove unit: %s" % exc)
-        if os.path.isdir(base):
-            try:
-                fs.safe_rmtree(base, require_marker=fs.is_managed(base))
-            except Exception as exc:
-                cleanup_errors.append("remove restored app: %s" % exc)
-        if cleanup_errors:
-            raise RuntimeError(
-                "%s; restore rollback incomplete: %s" %
-                (original, "; ".join(cleanup_errors))) from original
-        raise
-
-
 def _sanitize_restore_java_opts(raw: str, java_home: str) -> str:
     """Return shell-safe JVM options recovered from an untrusted archive."""
     if not isinstance(raw, str):
@@ -505,44 +492,8 @@ def _restore_java_opts(base: str, itype: str, manifest: Dict,
         " ".join(jvm_opts.default_opts(mem_i)), java_home)
 
 
-def _undo_restore(base: str, target: str, itype: str, manifest: Dict, user: str,
-                  aside: Optional[str], carried: List[str]) -> List[str]:
-    """Back out a failed restore. With `aside` (in-place restore) the previous
-    app is put back and restarted; otherwise the half-built app is removed.
-    Returns the problems hit while undoing (empty = clean)."""
-    problems: List[str] = []
-    try:
-        service.action(target, "stop")
-    except Exception:
-        pass        # the restored app may never have started
-    for name in carried:        # hand the app's own data back before the tree goes
-        try:
-            os.rename(os.path.join(base, name), os.path.join(aside, name))
-        except OSError as exc:
-            problems.append("return %s to the previous app: %s" % (name, exc))
-    if problems:
-        return problems         # do not delete a tree that still holds that data
-    if os.path.lexists(base):
-        try:
-            fs.safe_rmtree(base, require_marker=False)
-        except Exception as exc:
-            problems.append("remove restored tree: %s" % exc)
-    if not aside:
-        try:
-            service.remove_unit(target)
-        except Exception as exc:
-            problems.append("remove unit: %s" % exc)
-        return problems
-    if os.path.lexists(base):
-        problems.append("previous app kept at %s" % aside)
-        return problems
-    try:
-        os.rename(aside, base)
-        _install_service(base, target, itype, instance._read_port(base), manifest, user)
-        service.enable_start(target)
-    except Exception as exc:
-        problems.append("restart previous app: %s" % exc)
-    return problems
+class RestoreCancelled(Exception):
+    """The restore job was asked to stop (SIGTERM) part-way."""
 
 
 def _install_service(base: str, target: str, itype: str, port, manifest: Dict,
@@ -577,15 +528,92 @@ def _preflight_staged(src_base: str, itype: str) -> None:
                            "cannot rebuild the service, nothing was changed")
 
 
-def _aside_path(target: str) -> str:
-    # outside INSTANCE_ROOT so it never lists as an app; same filesystem so the
-    # move is one atomic rename
+# --- the previous app, while an in-place restore is running ------------------- #
+# <data root>/.restore-aside/<app>        the live tree, moved here for the cutover
+# <data root>/.restore-aside/<app>.done   the same tree once the restore committed
+# <data root>/.restore-aside/<app>.lock   one restore per app at a time
+# It sits outside INSTANCE_ROOT so it never lists as an app, on the same
+# filesystem so the move is one atomic rename. The name carries no pid: a later
+# run must be able to find what a killed one left behind.
+def _aside_root() -> str:
     root = os.path.join(os.path.dirname(instance.INSTANCE_ROOT.rstrip(os.sep)), ".restore-aside")
-    fs.ensure_dir(root, 0o700)
-    return os.path.join(root, "%s-%d" % (target, os.getpid()))
+    if not os.path.isdir(root):
+        os.makedirs(root)
+    os.chmod(root, 0o700)
+    return root
+
+
+def _aside_path(target: str) -> str:
+    return os.path.join(_aside_root(), target)
+
+
+@contextmanager
+def _restore_lock(target: str):
+    fd = os.open(_aside_path(target) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError("a restore of %s is already running" % target) from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _remove_tree(path: str) -> Optional[str]:
+    """Remove one of our own aside trees. Returns an error string, or None."""
+    try:
+        if os.path.lexists(path):
+            fs.safe_rmtree(path, require_marker=False)
+        return None
+    except Exception as exc:
+        return "%s: %s" % (path, exc)
+
+
+def _recover_interrupted(target: str) -> Optional[str]:
+    """Undo what a killed restore of `target` left behind (call under the lock).
+
+    An aside tree that was never renamed to .done means the restore did not
+    commit, so the tree in instances/ (if any) is a half-built replacement: it
+    is discarded and the previous app is put back. Returns a note, or None."""
+    aside = _aside_path(target)
+    _remove_tree(aside + ".done")                # committed: just leftovers
+    if not os.path.isdir(aside):
+        return None
+    base = instance.base_path(target)
+    if os.path.lexists(base):
+        fs.safe_rmtree(base, require_marker=False)
+    os.rename(aside, base)
+    try:
+        service.action(target, "start")
+    except Exception:
+        pass                                     # tree is back; Repair can do the rest
+    return "an interrupted restore of %s was rolled back first" % target
+
+
+def recover_interrupted_restores() -> List[str]:
+    """Roll back every restore that was killed before it could (power loss,
+    SIGKILL). Cheap when there is nothing to do; skips apps being restored now."""
+    notes: List[str] = []
+    try:
+        root = _aside_root()
+        names = sorted(n for n in os.listdir(root)
+                       if os.path.isdir(os.path.join(root, n)) and not n.endswith(".done"))
+    except OSError:
+        return notes
+    for name in names:
+        try:
+            with _restore_lock(name):
+                note = _recover_interrupted(validate.identifier(name, "app"))
+            if note:
+                notes.append(note)
+        except Exception:
+            continue
+    return notes
 
 
 _REGENERATED = ("work", "temp")     # Tomcat caches: never carried over
+_STILL_RUNNING = ("active", "activating", "deactivating", "reloading")
 
 
 def _carry_over(aside: str, base: str, moved: List[str]) -> None:
@@ -603,6 +631,66 @@ def _carry_over(aside: str, base: str, moved: List[str]) -> None:
         moved.append(name)       # recorded as it happens, so a rollback can undo it
 
 
+def _stop_for_restore(target: str) -> None:
+    """Stop the live app before its files are replaced. An app that is already
+    down, or has no service at all (restore is how that gets repaired), is fine;
+    one that is still running after a failed stop aborts the restore."""
+    if service.status(target) == "absent":
+        return
+    try:
+        service.action(target, "stop")
+    except Exception as exc:
+        if service.status(target) in _STILL_RUNNING:
+            raise RuntimeError("could not stop %s (%s); restore aborted, the app "
+                               "was not changed" % (target, exc)) from exc
+
+
+def _undo_restore(base: str, target: str, overwrite: bool, aside_moved: bool,
+                  carried: List[str], unit_snap, restart: bool) -> List[str]:
+    """Back out a failed restore. Returns the problems hit while undoing.
+
+    In place: the previous tree is renamed back and the exact unit that was
+    there is written back, nothing is re-rendered, so the previous app comes
+    back as it was. As new: the half-built app and its unit are removed."""
+    problems: List[str] = []
+    aside = _aside_path(target)
+    if aside_moved or not overwrite:
+        try:
+            service.action(target, "stop")       # the restored app may have started
+        except Exception:
+            pass
+    if aside_moved:
+        for name in carried:    # hand the app's own data back before the tree goes
+            try:
+                os.rename(os.path.join(base, name), os.path.join(aside, name))
+            except OSError as exc:
+                problems.append("return %s to the previous app: %s" % (name, exc))
+        if problems:
+            # do not delete a tree that still holds that data
+            return problems + ["previous app kept at %s" % aside]
+    if (aside_moved or not overwrite) and os.path.lexists(base):
+        err = _remove_tree(base)
+        if err:
+            problems.append("remove restored tree: %s" % err)
+    if aside_moved:
+        if os.path.lexists(base):
+            return problems + ["previous app kept at %s" % aside]
+        try:
+            os.rename(aside, base)
+        except OSError as exc:
+            return problems + ["put the previous app back from %s: %s" % (aside, exc)]
+    try:
+        service.restore_unit(target, unit_snap)
+    except Exception as exc:
+        problems.append("restore the previous service unit: %s" % exc)
+    if overwrite and restart:
+        try:
+            service.action(target, "start")
+        except Exception as exc:
+            problems.append("restart previous app: %s" % exc)
+    return problems
+
+
 def restore(archive_path: str, as_name: Optional[str] = None,
             domain: Optional[str] = None, user: str = "www") -> Dict:
     """Restore an app from a backup archive.
@@ -613,9 +701,11 @@ def restore(archive_path: str, as_name: Optional[str] = None,
                    domain). Set -> create a NEW app (reallocated port; domain only
                    if `domain` is given, else the site is dropped).
 
-    An in-place restore is transactional: the live app is moved aside, not
-    deleted, and is put back and restarted if any step up to starting the
-    restored app fails.
+    An in-place restore is transactional. The live app is moved aside, not
+    deleted. If any step up to starting the restored app fails, or the job is
+    cancelled, the previous tree and its service unit are put back as they were
+    and the app is started again. A restore that is killed outright is rolled
+    back by the next restore or backup listing (recover_interrupted_restores).
     """
     if not archive_path or not os.path.isfile(archive_path):
         raise FileNotFoundError("archive not found: %r" % archive_path)
@@ -628,16 +718,40 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     target = validate.identifier(as_name or src_app, "app")
     if domain:
         domain = validate.domain(domain)
+    with _restore_lock(target):
+        recovered = _recover_interrupted(target)
+        out = _restore_locked(archive_path, manifest, itype, new_mode, target, domain, user)
+    if recovered:
+        out["note"] = recovered
+    return out
 
+
+def _restore_locked(archive_path: str, manifest: Dict, itype: str, new_mode: bool,
+                    target: str, domain: Optional[str], user: str) -> Dict:
     base = instance.base_path(target)
     if new_mode:
         if instance.exists(target):
             raise RuntimeError("app already exists: %s (choose another name)" % target)
     overwrite = not new_mode and instance.exists(target)
+    if overwrite:
+        live_is_jar = instance._instance_type(base) == "jar"
+        if live_is_jar != (itype == "jar"):
+            raise RuntimeError(
+                "%s is a %s app but the archive holds a %s app; restore it under a new "
+                "name instead, nothing was changed"
+                % (target, "JAR" if live_is_jar else "Tomcat", "JAR" if itype == "jar" else "Tomcat"))
     from ..util import shell
 
-    aside = None
+    aside = _aside_path(target)
+    aside_moved = False
     carried: List[str] = []
+    unit_snap = None
+    restart = False
+
+    def _on_term(signum, frame):
+        raise RestoreCancelled("restore of %s was cancelled" % target)
+
+    previous_handler = None
     # Extract and prove the archive usable in staging before the cutover. Any
     # failure up to here must leave the live app untouched.
     staging = fs.mkdtemp("jh-restore-")
@@ -650,23 +764,25 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         _preflight_staged(src_base, itype)
 
         if overwrite:
-            try:
-                service.action(target, "stop")
-            except Exception as exc:
-                # replacing files under a JVM that is still running corrupts both
-                raise RuntimeError("could not stop %s (%s); restore aborted, the app "
-                                   "was not changed" % (target, exc)) from exc
-            aside = _aside_path(target)
-            if os.path.lexists(aside):
-                shutil.rmtree(aside)
-            os.rename(base, aside)
-        elif os.path.isdir(base):
-            fs.safe_rmtree(base, require_marker=fs.is_managed(base))
-
+            unit_snap = service.snapshot_unit(target)
+            restart = service.status(target) in _STILL_RUNNING
         try:
+            # From here a cancel (SIGTERM) must unwind through the rollback below,
+            # not kill the job with the live app sitting in the aside dir.
+            try:
+                previous_handler = signal.signal(signal.SIGTERM, _on_term)
+            except ValueError:
+                previous_handler = None          # not the main thread
+            if overwrite:
+                _stop_for_restore(target)
+                os.rename(base, aside)
+                aside_moved = True
+            elif os.path.isdir(base):
+                fs.safe_rmtree(base, require_marker=fs.is_managed(base))
+
             shutil.move(src_base, base)
             fs.mark_managed(base)
-            _secure_or_discard_restore(base, archive_path, target)
+            _secure_restored_secrets(base, archive_path)
 
             # port + domain
             if new_mode:
@@ -678,7 +794,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
                 port = instance._read_port(base) or manifest.get("port")
                 dom = manifest.get("domain")
 
-            if aside:
+            if aside_moved:
                 _carry_over(aside, base, carried)
             # logs/work/temp are never archived, and Tomcat will not start without them
             for sub in (("logs",) if itype == "jar" else ("logs", "work", "temp")):
@@ -690,22 +806,30 @@ def restore(archive_path: str, as_name: Optional[str] = None,
                 from ..tomcat import hardening
                 hardening.secure_perms(base, user=user)
             # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
-            _secure_or_discard_restore(base, archive_path, target)
+            _secure_restored_secrets(base, archive_path)
             service.enable_start(target)
         except Exception as exc:
-            problems = _undo_restore(base, target, itype, manifest, user, aside, carried)
-            if aside and not problems:
-                raise RuntimeError("restore failed, the previous app was put back and "
-                                   "restarted: %s" % exc) from exc
+            problems = _undo_restore(base, target, overwrite, aside_moved, carried,
+                                     unit_snap, restart)
             if problems:
                 raise RuntimeError("%s; rollback incomplete: %s"
                                    % (exc, "; ".join(problems))) from exc
+            if overwrite:
+                raise RuntimeError("restore failed, the previous app was put back%s: %s"
+                                   % (" and restarted" if restart else "", exc)) from exc
             raise
+        finally:
+            if previous_handler is not None:
+                signal.signal(signal.SIGTERM, previous_handler)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    if aside:
-        shutil.rmtree(aside, ignore_errors=True)   # commit: the old tree is no longer needed
+    cleanup_error = None
+    if aside_moved:
+        # commit: one rename marks the previous tree as no longer needed, so a
+        # crash from here on can never roll a finished restore back
+        os.rename(aside, aside + ".done")
+        cleanup_error = _remove_tree(aside + ".done")
 
     # republish the reverse-proxy site + re-issue SSL (best-effort, never bundle keys)
     ssl_state = False
@@ -735,4 +859,7 @@ def restore(archive_path: str, as_name: Optional[str] = None,
            "status": service.status(target)}
     if ssl_warning:
         out["ssl_warning"] = ssl_warning
+    if cleanup_error:
+        # the restore itself is done; say so instead of leaving credentials behind quietly
+        out["cleanup_warning"] = "previous copy of the app could not be removed (%s)" % cleanup_error
     return out

@@ -72,7 +72,7 @@ them via a custom endpoint.
 
 | Mode | When | What happens |
 |------|------|--------------|
-| **Overwrite** | no new name | The original app is stopped and moved aside, then restored in place with its original port/domain, site and backup schedule. If any step up to starting the restored app fails, the previous app is put back and restarted. Files in the app directory that the backup does not cover (uploads, an embedded database, logs) are kept. **Requires typing `RESTORE`** to confirm. |
+| **Overwrite** | no new name | The original app is stopped and moved aside, then restored in place with its original port/domain, site and backup schedule. If any step up to starting the restored app fails, or the restore task is cancelled, the previous app and its service unit are put back as they were and the app is started again. A restore that is killed outright (power loss) is rolled back the next time the Backups view is opened or a restore runs. Only one restore of an app runs at a time, and an archive of the other app type (JAR versus Tomcat) is refused. Files in the app directory that the backup does not cover (uploads, an embedded database, logs) are kept. **Requires typing `RESTORE`** to confirm. |
 | **Restore as new** | a new name given | A separate app on a **reallocated port** (`server.xml`/`app.env` rewritten); domain remapped only if you supply one. One-click. |
 
 - **UI:** Backups → **Restore** on a row → optional new name + domain. If the archive

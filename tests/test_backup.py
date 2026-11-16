@@ -72,7 +72,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", iroot)
     monkeypatch.setattr(store, "BACKUPS_ROOT", broot)
     # allow safe_rmtree/mark under the tmp roots
-    monkeypatch.setattr(fs, "MANAGED_ROOTS", (iroot, broot))
+    monkeypatch.setattr(fs, "MANAGED_ROOTS", (iroot, broot, str(tmp_path / ".restore-aside")))
     # stub the live boundaries
     monkeypatch.setattr(store.service, "status", lambda app: "inactive")
     monkeypatch.setattr(store.service, "action", lambda app, what: None)
@@ -507,6 +507,9 @@ def test_delete_backup_local_only(env, monkeypatch):
 # --------------------------------------------------------------------------- #
 # in-place restore is transactional: the live app is never lost to a failed one
 # --------------------------------------------------------------------------- #
+import signal
+
+
 def _live_app(iroot, name="live"):
     base = _mk_app(iroot, name, port=8090)
     arc = store.backup_app(name)["archive"]                 # archive says PAYLOAD-OK
@@ -517,57 +520,224 @@ def _live_app(iroot, name="live"):
     return base, arc, payload
 
 
+def _aside_root(iroot):
+    return os.path.join(os.path.dirname(iroot), ".restore-aside")
+
+
 def _no_leftovers(iroot):
-    aside = os.path.join(os.path.dirname(iroot), ".restore-aside")
-    return not os.path.isdir(aside) or os.listdir(aside) == []
+    root = _aside_root(iroot)
+    return not os.path.isdir(root) or [n for n in os.listdir(root) if not n.endswith(".lock")] == []
 
 
 def _assert_live_untouched(base, payload):
     assert open(payload).read() == "LIVE-NEWER"
     assert open(os.path.join(base, "uploads", "user.bin")).read() == "USER-DATA"
     assert open(os.path.join(base, "logs", "catalina.out")).read() == "noise"
+    assert 'JAVA_OPTS="-Xmx512m"' in open(os.path.join(base, "bin", "setenv.sh")).read()
+    assert "s3cret" in open(os.path.join(base, "bin", "app.env")).read()
+    assert 'port="8090"' in open(os.path.join(base, "conf", "server.xml")).read()
     assert fs.is_managed(base)
 
 
+@pytest.fixture
+def svc(env, monkeypatch):
+    """A live systemd-style service: records what the restore does to it."""
+    log = []
+    state = {"status": "active", "unit": ("/etc/systemd/system/javahost-live.service", "OLD-UNIT", 0o644)}
+    monkeypatch.setattr(store.service, "status", lambda app: state["status"])
+    monkeypatch.setattr(store.service, "action", lambda app, what: log.append(what))
+    monkeypatch.setattr(store.service, "snapshot_unit", lambda app: state["unit"])
+    monkeypatch.setattr(store.service, "restore_unit", lambda app, snap: log.append(("restore_unit", snap)))
+    monkeypatch.setattr(store.service, "install_unit", lambda *a, **k: log.append("install_unit"))
+    monkeypatch.setattr(store.service, "enable_start", lambda app: log.append("enable_start"))
+    return log, state
+
+
 @pytest.mark.parametrize("failing", ["install_unit", "write_setenv", "enable_start"])
-def test_failed_overwrite_restore_puts_the_live_app_back(env, monkeypatch, failing):
+def test_failed_overwrite_restore_puts_the_live_app_back(env, svc, monkeypatch, failing):
     iroot, _ = env
+    log, state = svc
     base, arc, payload = _live_app(iroot)
-    calls = {"n": 0}
-    started = []
 
-    def flaky(*a, **k):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("%s blew up" % failing)
-        return "/unit"
-    monkeypatch.setattr(store.service, failing, flaky)
-    if failing != "enable_start":
-        monkeypatch.setattr(store.service, "enable_start", lambda app: started.append(app))
+    def boom(*a, **k):
+        raise RuntimeError("%s blew up" % failing)
+    monkeypatch.setattr(store.service, failing, boom)
 
-    with pytest.raises(RuntimeError, match="previous app was put back"):
+    with pytest.raises(RuntimeError, match="previous app was put back and restarted"):
         store.restore(arc)
 
     _assert_live_untouched(base, payload)
-    assert calls["n"] == 2 or started == ["live"]             # old service was re-installed/started
+    # the unit that was there is written back as it was; nothing is re-rendered,
+    # so a cause that broke the restore cannot also break the rollback
+    assert ("restore_unit", state["unit"]) in log
+    assert log.count("install_unit") <= 1 and log[-1] == "start"
     assert _no_leftovers(iroot)
 
 
-def test_overwrite_restore_aborts_when_the_app_cannot_be_stopped(env, monkeypatch):
+def test_rollback_that_cannot_restart_says_so_but_still_restores_the_files(env, svc, monkeypatch):
+    iroot, _ = env
+    log, _state = svc
+    base, arc, payload = _live_app(iroot)
+    monkeypatch.setattr(store.service, "enable_start",
+                        lambda app: (_ for _ in ()).throw(RuntimeError("203/EXEC blocked")))
+
+    def action(app, what):
+        if what == "start":
+            raise RuntimeError("203/EXEC blocked")
+    monkeypatch.setattr(store.service, "action", action)
+    with pytest.raises(RuntimeError, match="rollback incomplete: restart previous app"):
+        store.restore(arc)
+    _assert_live_untouched(base, payload)
+
+
+def test_overwrite_restore_aborts_when_the_app_cannot_be_stopped(env, svc, monkeypatch):
     iroot, _ = env
     base, arc, payload = _live_app(iroot)
 
     def cannot_stop(app, what):
-        raise RuntimeError("systemctl stop timed out")
-    monkeypatch.setattr(store.service, "action", cannot_stop)
+        if what == "stop":
+            raise RuntimeError("systemctl stop timed out")
+    monkeypatch.setattr(store.service, "action", cannot_stop)       # status stays "active"
     with pytest.raises(RuntimeError, match="restore aborted"):
         store.restore(arc)
     _assert_live_untouched(base, payload)
     assert _no_leftovers(iroot)
 
 
-def test_unusable_archive_is_rejected_before_the_live_app_is_stopped(env, monkeypatch):
+def test_an_app_that_is_already_down_or_has_no_unit_can_be_restored(env, svc, monkeypatch):
     iroot, _ = env
+    log, state = svc
+    base, arc, payload = _live_app(iroot)
+    state["status"] = "absent"                                      # no unit at all
+    state["unit"] = None
+    monkeypatch.setattr(store.service, "action",
+                        lambda app, what: (_ for _ in ()).throw(RuntimeError("no service installed")))
+    assert store.restore(arc)["restored"]
+    assert open(payload).read() == "PAYLOAD-OK"
+
+    open(payload, "w").write("LIVE-NEWER")
+    state["status"] = "inactive"                                    # init.d: stop of a stopped app fails
+    assert store.restore(arc)["restored"]
+    assert open(payload).read() == "PAYLOAD-OK"
+
+
+def test_failure_between_stop_and_the_move_restarts_the_app(env, svc, monkeypatch):
+    iroot, _ = env
+    log, _state = svc
+    base, arc, payload = _live_app(iroot)
+    real = os.rename
+
+    def exdev(src, dst):
+        if dst.endswith(os.path.join(".restore-aside", "live")):
+            raise OSError(18, "Invalid cross-device link")
+        return real(src, dst)
+    monkeypatch.setattr(store.os, "rename", exdev)
+    with pytest.raises(RuntimeError, match="previous app was put back and restarted"):
+        store.restore(arc)
+    _assert_live_untouched(base, payload)
+    assert log == ["stop", ("restore_unit", _state["unit"]), "start"]
+
+
+def test_cancelling_the_job_rolls_back_instead_of_stranding_the_app(env, svc, monkeypatch):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    # the Cancel button sends SIGTERM to the job while it is starting the restored app
+    monkeypatch.setattr(store.service, "enable_start",
+                        lambda app: os.kill(os.getpid(), signal.SIGTERM))
+    before = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(RuntimeError, match="cancelled"):
+        store.restore(arc)
+    _assert_live_untouched(base, payload)
+    assert _no_leftovers(iroot)
+    assert signal.getsignal(signal.SIGTERM) is before               # handler put back
+
+
+def _simulate_killed_restore(iroot, base):
+    """What SIGKILL / power loss leaves: the live tree in the aside dir and a
+    half-built replacement in its place."""
+    root = _aside_root(iroot)
+    os.makedirs(root, exist_ok=True)
+    os.rename(base, os.path.join(root, "live"))
+    os.makedirs(os.path.join(base, "conf"))
+    open(os.path.join(base, "conf", "server.xml"), "w").write("<half/>")
+
+
+def test_a_killed_restore_is_rolled_back_when_backups_are_next_listed(env, svc):
+    iroot, _ = env
+    log, _state = svc
+    base, _arc, payload = _live_app(iroot)
+    _simulate_killed_restore(iroot, base)
+    store.list_backups()
+    _assert_live_untouched(base, payload)
+    assert "start" in log and _no_leftovers(iroot)
+
+
+def test_the_next_restore_first_undoes_a_killed_one(env, svc):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    _simulate_killed_restore(iroot, base)
+    res = store.restore(arc)
+    assert res["restored"] and "interrupted restore of live was rolled back first" in res["note"]
+    # the restore then ran against the real previous app, so its data carried over
+    assert open(os.path.join(base, "uploads", "user.bin")).read() == "USER-DATA"
+    assert open(payload).read() == "PAYLOAD-OK"
+
+
+def test_a_committed_restore_is_never_rolled_back(env, svc):
+    iroot, _ = env
+    base, _arc, payload = _live_app(iroot)
+    # crashed after the commit rename, before the old tree was deleted
+    done = os.path.join(_aside_root(iroot), "live.done")
+    os.makedirs(os.path.join(done, "webapps"))
+    open(os.path.join(done, "webapps", "old.txt"), "w").write("superseded")
+    assert store.recover_interrupted_restores() == []
+    with store._restore_lock("live"):
+        assert store._recover_interrupted("live") is None
+    _assert_live_untouched(base, payload)
+    assert not os.path.exists(done)
+
+
+def test_only_one_restore_of_an_app_at_a_time(env, svc):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    with store._restore_lock("live"):
+        with pytest.raises(RuntimeError, match="already running"):
+            store.restore(arc)
+    _assert_live_untouched(base, payload)
+
+
+def test_archive_of_the_other_app_type_is_refused_untouched(env, svc, monkeypatch):
+    iroot, _ = env
+    log, _state = svc
+    base, arc, payload = _live_app(iroot)
+    man = dict(store._read_manifest_file(arc), type="jar")
+    monkeypatch.setattr(store, "_read_manifest_file", lambda p: man)
+    with pytest.raises(RuntimeError, match="is a Tomcat app but the archive holds a JAR app"):
+        store.restore(arc)
+    assert log == []
+    _assert_live_untouched(base, payload)
+
+
+def test_late_failure_does_not_destroy_data_carried_over(env, svc, monkeypatch):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    real = store._secure_restored_secrets
+    calls = {"n": 0}
+
+    def third_call_fails(b, a=None):
+        calls["n"] += 1
+        if calls["n"] == 3:                      # the pass after uploads/ was carried in
+            raise PermissionError("chmod denied")
+        return real(b, a)
+    monkeypatch.setattr(store, "_secure_restored_secrets", third_call_fails)
+    with pytest.raises(RuntimeError, match="previous app was put back"):
+        store.restore(arc)
+    _assert_live_untouched(base, payload)
+
+
+def test_unusable_archive_is_rejected_before_the_live_app_is_stopped(env, svc, monkeypatch):
+    iroot, _ = env
+    log, _state = svc
     base, _arc, payload = _live_app(iroot)
     # an archive of the same app whose setenv lost JAVA_HOME / CATALINA_HOME
     other = _mk_app(iroot, "donor", port=8091)
@@ -576,15 +746,13 @@ def test_unusable_archive_is_rejected_before_the_live_app_is_stopped(env, monkey
     man = store._read_manifest_file(bad)
     man["app"] = "live"
     monkeypatch.setattr(store, "_read_manifest_file", lambda p: man)
-    stops = []
-    monkeypatch.setattr(store.service, "action", lambda app, what: stops.append((app, what)))
     with pytest.raises(RuntimeError, match="nothing was changed"):
         store.restore(bad)
-    assert stops == []
+    assert log == []
     _assert_live_untouched(base, payload)
 
 
-def test_archive_with_an_ajp_connector_is_rejected_before_cutover(env, monkeypatch):
+def test_archive_with_an_ajp_connector_is_rejected_before_cutover(env, svc, monkeypatch):
     iroot, _ = env
     base, _arc, payload = _live_app(iroot)
     donor = _mk_app(iroot, "donor", port=8091)
@@ -600,7 +768,7 @@ def test_archive_with_an_ajp_connector_is_rejected_before_cutover(env, monkeypat
     _assert_live_untouched(base, payload)
 
 
-def test_successful_overwrite_restore_keeps_data_the_backup_does_not_cover(env, monkeypatch):
+def test_successful_overwrite_restore_keeps_data_the_backup_does_not_cover(env, svc, monkeypatch):
     iroot, _ = env
     base, arc, payload = _live_app(iroot)
     open(os.path.join(base, "work", "cache.bin"), "w").write("stale compiled jsp")
@@ -616,6 +784,7 @@ def test_successful_overwrite_restore_keeps_data_the_backup_does_not_cover(env, 
 
     res = store.restore(arc)
     assert res["restored"] and res["mode"] == "overwrite" and res["port"] == 8090
+    assert "cleanup_warning" not in res
     assert open(payload).read() == "PAYLOAD-OK"                                  # from the archive
     assert open(os.path.join(base, "uploads", "user.bin")).read() == "USER-DATA"  # carried over
     assert open(os.path.join(base, "logs", "catalina.out")).read() == "noise"     # carried over
@@ -639,7 +808,7 @@ def test_restore_never_falls_back_to_unsanitized_java_opts(env, monkeypatch):
     assert seen == [[]]
 
 
-def test_overwrite_restore_does_not_carry_over_planted_links(env, tmp_path):
+def test_overwrite_restore_does_not_carry_over_planted_links(env, svc, tmp_path):
     iroot, _ = env
     base, arc, _payload = _live_app(iroot)
     victim = tmp_path / "etc"
@@ -653,3 +822,38 @@ def test_overwrite_restore_does_not_carry_over_planted_links(env, tmp_path):
     assert os.path.isdir(os.path.join(base, "logs")) and not os.path.islink(os.path.join(base, "logs"))
     assert not os.path.lexists(os.path.join(base, "data"))
     assert os.listdir(str(victim)) == []
+
+
+# ---- service.snapshot_unit / restore_unit ------------------------------------ #
+def test_restore_unit_writes_back_exactly_what_was_there(tmp_path, monkeypatch):
+    from core.tomcat import service
+    sysd, initd = tmp_path / "systemd", tmp_path / "init.d"
+    sysd.mkdir(); initd.mkdir()
+    monkeypatch.setattr(service, "SYSTEMD_DIR", str(sysd))
+    monkeypatch.setattr(service, "INITD_DIR", str(initd))
+    monkeypatch.setattr(service, "_manage", lambda: False)
+    ran = []
+    monkeypatch.setattr(service.shell, "run", lambda argv, **k: ran.append(argv) or (0, "", ""))
+
+    assert service.snapshot_unit("shop") is None
+    unit = sysd / "javahost-shop.service"
+    unit.write_text("[Service]\nEnvironment=CUSTOM=1\n")
+    snap = service.snapshot_unit("shop")
+    unit.write_text("[Service]\n# re-rendered by a restore\n")
+    service.restore_unit("shop", snap)
+    assert unit.read_text() == "[Service]\nEnvironment=CUSTOM=1\n"
+    assert ["systemctl", "daemon-reload"] in ran
+
+    # a unit the restore created where there was none is removed again
+    service.restore_unit("shop", None)
+    assert not unit.exists()
+
+    # an init.d app keeps its script and does not gain a systemd unit
+    script = initd / "javahost-old"
+    script.write_text("#!/bin/sh\n# original\n")
+    os.chmod(str(script), 0o755)
+    snap = service.snapshot_unit("old")
+    (sysd / "javahost-old.service").write_text("[Service]\n")
+    service.restore_unit("old", snap)
+    assert not (sysd / "javahost-old.service").exists()
+    assert script.read_text() == "#!/bin/sh\n# original\n" and os.stat(str(script)).st_mode & 0o777 == 0o755
