@@ -26,6 +26,13 @@ install_javahost() {
     mkdir -p "${DATA_ROOT}"/{runtimes,tomcat,instances,vhost/nginx,.keys,logs}
     chmod 700 "${DATA_ROOT}/.keys"
     register_icon
+    # Tomcat downloads are refused unless their OpenPGP signature can be checked,
+    # so make sure gpg is there (best-effort: a failure only surfaces later as a
+    # clear "gpg is not installed" error on Install Tomcat).
+    if ! command -v gpg >/dev/null 2>&1; then
+        { apt-get install -y gnupg || dnf install -y gnupg2 || yum install -y gnupg2; } \
+            >/dev/null 2>&1 || true
+    fi
     # Install the managed log-rotation cron from default config (best-effort; a
     # missing /etc/cron.d or no python just leaves it inert until Settings → Save).
     pybin="$(command -v /www/server/panel/pyenv/bin/python 2>/dev/null \
