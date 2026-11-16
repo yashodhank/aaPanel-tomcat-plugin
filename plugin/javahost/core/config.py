@@ -137,6 +137,40 @@ def log_purge_days(default: int = 30) -> int:
     return _int("log_purge_days", default, 0)       # 0 = purge every rotation
 
 
+# Backup size limits an operator may save, as (lowest, highest) accepted value.
+# Unset means "use the built-in default" (core/backup/archive.py).
+BACKUP_LIMIT_RANGES = {
+    "backup_max_files": (1000, 5000000),
+    "backup_max_file_gb": (1, 1024),
+    "backup_max_total_gb": (1, 4096),
+    "backup_max_archive_gb": (1, 4096),
+}
+
+
+def backup_limit(key: str):
+    """A saved backup limit, or None when unset or outside its accepted range."""
+    lo, hi = BACKUP_LIMIT_RANGES[key]
+    v = get(key)
+    if isinstance(v, bool) or not isinstance(v, int):
+        return None
+    return v if lo <= v <= hi else None
+
+
+def set_backup_limits(values: dict) -> dict:
+    """Validate and save backup limits. `values` maps config key -> int, or None
+    to go back to the default. Rejects anything out of range; saves nothing then."""
+    clean = {}
+    for key, v in values.items():
+        lo, hi = BACKUP_LIMIT_RANGES[key]
+        if v is None:
+            clean[key] = None
+            continue
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ValueError("%s must be a whole number from %d to %d" % (key, lo, hi))
+        clean[key] = v
+    return update(clean)
+
+
 def aapanel_api_key():
     """aaPanel interface API key (api_sk) for the native HTTP API, if the operator
     chose to mirror it into the plugin config. Returns None when unset — the SSL
