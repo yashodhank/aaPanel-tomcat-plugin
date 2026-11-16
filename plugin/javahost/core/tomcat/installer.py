@@ -12,8 +12,10 @@ and the rollback gap (audit §8).
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import sys
+from contextlib import contextmanager
 from typing import Optional
 
 from . import registry, hardening
@@ -51,10 +53,35 @@ def ensure_java(major: str, prefer: Optional[int] = None) -> str:
     return java.install_temurin(want)
 
 
-def install(major: str, *, patch: Optional[str] = None, prefer_java: Optional[int] = None,
-            keep_manager: bool = False, local_tarball: Optional[str] = None,
-            local_sha512: Optional[str] = None) -> dict:
+@contextmanager
+def _major_lock(major: str):
+    """Fail-fast cross-process lock for one Tomcat major (mirrors the JDK lock).
+
+    Install, update and uninstall of one major all work on <home>.staging and
+    swap <home> by rename; two of them at once delete each other's staging tree
+    or leave the shared home missing."""
+    fs.ensure_dir(HOME_ROOT)
+    fd = os.open(os.path.join(HOME_ROOT, ".tomcat-%s.lock" % major),
+                 os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError("Tomcat %s operation already in progress" % major) from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def install(major: str, **kwargs) -> dict:
     major = registry.get_line(major).major  # validates
+    with _major_lock(major):
+        return _install_locked(major, **kwargs)
+
+
+def _install_locked(major: str, *, patch: Optional[str] = None, prefer_java: Optional[int] = None,
+                    keep_manager: bool = False, local_tarball: Optional[str] = None,
+                    local_sha512: Optional[str] = None) -> dict:
     java_home = ensure_java(major, prefer=prefer_java)
     art = registry.artifact(major, patch)
 
@@ -162,6 +189,11 @@ def uninstall(major: str, force: bool = False) -> dict:
     cleanly DOWN instead of lingering on a deleted shared home.
     """
     major = registry.get_line(major).major
+    with _major_lock(major):
+        return _uninstall_locked(major, force)
+
+
+def _uninstall_locked(major: str, force: bool = False) -> dict:
     dest = home_path(major)
     in_use = usage(major)
     if in_use and not force:
