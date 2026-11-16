@@ -9,6 +9,7 @@ CATALINA_HOME (see installer.py). All removals are marker-gated (fs.safe_rmtree)
 from __future__ import annotations
 
 import os
+import stat
 import re
 import shutil
 import socket
@@ -862,22 +863,35 @@ def tail_log(app: str, lines: int = 200) -> str:
     app = validate.identifier(app, "app")
     base = base_path(app)
     n = max(1, min(int(lines), 2000))
-    log_dir = os.path.join(base, "logs")
-    # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
-    if _instance_type(base) == "jar":
-        app_out = os.path.join(log_dir, "app.out")
-        if os.path.isfile(app_out):
-            return _tail(app_out, n)
+    # logs/ belongs to the app user and this read runs as root: go through a
+    # descriptor on the directory and refuse links, so a planted
+    # `catalina.out -> /etc/shadow` is not tailed into the panel.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = os.open(os.path.join(base, "logs"),
+                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow)
+    except OSError:
         return ""
-    candidates = ["catalina.out"] + [
-        f for f in (os.listdir(log_dir) if os.path.isdir(log_dir) else [])
-        if f.startswith("catalina") and f.endswith(".log")
-    ]
-    for name in candidates:
-        path = os.path.join(log_dir, name)
-        if os.path.isfile(path):
-            return _tail(path, n)
-    return ""
+    try:
+        # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
+        if _instance_type(base) == "jar":
+            candidates = ["app.out"]
+        else:
+            candidates = ["catalina.out"] + [
+                f for f in os.listdir(dir_fd)
+                if f.startswith("catalina") and f.endswith(".log")]
+        for name in candidates:
+            try:
+                fd = os.open(name, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0),
+                             dir_fd=dir_fd)
+            except OSError:
+                continue
+            with os.fdopen(fd, "rb") as f:
+                if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    return _tail_file(f, n)
+        return ""
+    finally:
+        os.close(dir_fd)
 
 
 # --- helpers ---
@@ -918,16 +932,20 @@ def _read_port(base: str) -> Optional[int]:
 
 
 def _tail(path: str, lines: int) -> str:
-    # memory-safe tail without reading the whole file
     with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        end = f.tell()
-        block, data, found = 4096, b"", 0
-        pos = end
-        while pos > 0 and found <= lines:
-            step = min(block, pos)
-            pos -= step
-            f.seek(pos)
-            data = f.read(step) + data
-            found = data.count(b"\n")
-        return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
+        return _tail_file(f, lines)
+
+
+def _tail_file(f, lines: int) -> str:
+    # memory-safe tail without reading the whole file
+    f.seek(0, os.SEEK_END)
+    end = f.tell()
+    block, data, found = 4096, b"", 0
+    pos = end
+    while pos > 0 and found <= lines:
+        step = min(block, pos)
+        pos -= step
+        f.seek(pos)
+        data = f.read(step) + data
+        found = data.count(b"\n")
+    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
