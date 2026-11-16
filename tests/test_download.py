@@ -120,6 +120,17 @@ def test_local_file_mismatch_is_refused_but_not_deleted(tmp_path, monkeypatch):
     assert local.read_bytes() == b"operator supplied"     # never delete the operator's file
 
 
+def test_local_file_is_verified_as_a_private_copy(tmp_path, monkeypatch):
+    # the path returned is the verified copy, never the caller's (swappable) file
+    local = tmp_path / "offline.tar.gz"
+    local.write_bytes(GOOD)
+    _serve(monkeypatch, {})
+    out = download.fetch_verified(URL, str(tmp_path / "d"), sha512=GOOD_SHA, local_file=str(local))
+    assert out == str(tmp_path / "d" / "thing-1.0.tar.gz") and out != str(local)
+    local.write_bytes(b"swapped after verification")
+    assert open(out, "rb").read() == GOOD
+
+
 @pytest.mark.parametrize("url", ["http://example.invalid/x", "file:///etc/passwd", "ftp://h/x", ""])
 def test_http_get_refuses_non_https(tmp_path, url):
     with pytest.raises(ValueError):

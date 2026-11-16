@@ -90,7 +90,7 @@ def fetch_verified(
     """Obtain an artifact and verify it. Returns the local path.
 
     Resolution order for the artifact:
-      1. local_file (offline mode), else
+      1. local_file (offline mode; a private copy is verified and returned), else
       2. download from url.
     Verification (must satisfy at least SHA-512):
       - sha512 (explicit hex) OR sha512_url (download the .sha512), required.
@@ -112,8 +112,12 @@ def fetch_verified(
 
     work = fs.mkdtemp_in(dest_dir, ".fetch-")
     try:
-        path = local_file or os.path.join(work, name)
-        if not local_file:
+        # A local file is copied in first, so the bytes that get verified are the
+        # bytes that get used: the caller's path could be swapped after the check.
+        path = os.path.join(work, name)
+        if local_file:
+            shutil.copyfile(local_file, path)
+        else:
             _http_get(url, path)
 
         expected = sha512
@@ -129,8 +133,6 @@ def fetch_verified(
             _http_get(sig_url, sig)
             verify_gpg(path, sig, keyring)
 
-        if local_file:
-            return local_file
         dest = os.path.join(dest_dir, name)
         os.replace(path, dest)
         return dest
