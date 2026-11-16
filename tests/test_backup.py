@@ -637,3 +637,19 @@ def test_restore_never_falls_back_to_unsanitized_java_opts(env, monkeypatch):
     monkeypatch.setattr(store.service, "write_setenv", lambda *a, **k: seen.append(a[4]))
     store.restore(arc, as_name="clone")
     assert seen == [[]]
+
+
+def test_overwrite_restore_does_not_carry_over_planted_links(env, tmp_path):
+    iroot, _ = env
+    base, arc, _payload = _live_app(iroot)
+    victim = tmp_path / "etc"
+    victim.mkdir(mode=0o700)
+    import shutil as _sh
+    _sh.rmtree(os.path.join(base, "logs"))
+    os.symlink(str(victim), os.path.join(base, "logs"))        # app user swapped logs for a link
+    os.symlink(str(victim), os.path.join(base, "data"))
+    store.restore(arc)
+    assert os.stat(str(victim)).st_mode & 0o777 == 0o700       # not chmod-ed through the link
+    assert os.path.isdir(os.path.join(base, "logs")) and not os.path.islink(os.path.join(base, "logs"))
+    assert not os.path.lexists(os.path.join(base, "data"))
+    assert os.listdir(str(victim)) == []

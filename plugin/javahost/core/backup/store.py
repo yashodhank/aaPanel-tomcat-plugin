@@ -595,6 +595,10 @@ def _carry_over(aside: str, base: str, moved: List[str]) -> None:
     for name in sorted(os.listdir(aside)):
         if name in _REGENERATED or os.path.lexists(os.path.join(base, name)):
             continue
+        if os.path.islink(os.path.join(aside, name)):
+            # the old tree was writable by the app user; a link carried in here
+            # (say logs -> /etc) would have root chmod/create through it below
+            continue
         os.rename(os.path.join(aside, name), os.path.join(base, name))
         moved.append(name)       # recorded as it happens, so a rollback can undo it
 
