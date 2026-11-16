@@ -361,6 +361,11 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
 
     if _cert_exists(domain):
         not_after = _cert_not_after(domain)
+        if not via and not_after and not_after < time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()):
+            # nothing was issued just now, and what is on disk is out of date
+            return {"ssl": False, "error":
+                    "the existing certificate expired on %s and a new one could not "
+                    "be issued%s" % (not_after, ": " + certbot_err if certbot_err else "")}
         if owner != "aapanel":
             err = _activate_plugin_vhost(app, domain, port, ssl_on=True)
             if err:
@@ -369,17 +374,20 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
                 proxy._store_owner(app, "javahost")
             except Exception:
                 pass
-        elif via == "certbot":
-            # Cert issued into LE live dir but aaPanel site still owns HTTP —
-            # require panel to flip HTTPS before we mark ssl=true.
+        else:
+            # The aaPanel site owns the vhost, so a cert on disk (just issued by
+            # certbot, or left from an earlier enable) serves nothing until the
+            # panel switches the site to HTTPS. Require that before ssl=true.
             if not panel_api.http_enable_site_ssl(domain):
                 return {"ssl": False, "error":
-                        "certbot issued a cert but aaPanel HTTPS enable failed",
-                        "owner": "aapanel", "via": "certbot"}
+                        "a certificate is present but aaPanel did not enable HTTPS "
+                        "for the site%s" % ("" if panel_api.api_key_configured() else
+                                            " (set the aaPanel API key in Settings)"),
+                        "owner": "aapanel", "via": via or "existing-cert"}
         _install_renewal_hook()
         _mark_ssl(app, True, not_after=not_after)
         res = {"ssl": True, "url": "https://%s/" % domain,
-               "via": via or "unknown", "owner": owner}
+               "via": via or "existing-cert", "owner": owner}
         if not_after:
             res["not_after"] = not_after
         return res

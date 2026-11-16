@@ -773,7 +773,10 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
         if rc != 0:
             detail = ((err or "") + (out or "")).strip()[-400:]
             return _rollback("nginx -t failed after proxy write: %s" % detail)
-        run([nginx, "-s", "reload"], check=False, timeout=15)
+        rc, out, err = run([nginx, "-s", "reload"], check=False, timeout=15)
+        if rc != 0:
+            detail = ((err or "") + (out or "")).strip()[-400:]
+            return _rollback("nginx reload failed: %s" % detail)
     except Exception as e:
         return _rollback("nginx reload failed: %s" % e)
     return True, ""
