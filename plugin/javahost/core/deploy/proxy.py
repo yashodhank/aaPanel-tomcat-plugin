@@ -438,10 +438,17 @@ def aapanel_add_site(domain: str, port: int) -> Dict:
 def aapanel_remove_site(domain: str) -> bool:
     """Remove a site from aaPanel records (HTTP API first, then class API).
 
-    Returns True if site was found and removed from any aaPanel path, False if
-    it was not registered in aaPanel at all.
+    Only a site JavaHost created is ever deleted (see panel_api.site_ownership).
+    Returns True when the site is gone: removed here, or not there to begin
+    with. Returns False when it could not be removed, including when it is not
+    ours or its ownership could not be checked.
     """
     domain = validate.domain(domain)
+    state = panel_api.site_ownership(domain)
+    if state == "absent":
+        return True
+    if state != "javahost":
+        return False
     removed = False
 
     # Path 1: HTTP API (most reliable — uses aaPanel's REST layer)
@@ -551,9 +558,10 @@ def read_domain(app: str) -> Optional[str]:
         return None
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            d = f.read().strip()
-        return d or None
-    except OSError:
+            # The marker sits in a dir the app user can write, and its value is
+            # used to build URLs, cert paths and aaPanel API calls.
+            return validate.domain(f.read(512))
+    except (OSError, ValueError):
         return None
 
 
@@ -661,6 +669,12 @@ def remove_site(app: str) -> Dict:
 
     aapanel_removed = False
     aapanel_error = None
+    left_in_place = None
+    if domain and panel_api.site_ownership(domain) == "foreign":
+        # The site was created by the operator (JavaHost only attached a proxy to
+        # it), so it is not ours to delete, and it must not block removing the app.
+        left_in_place = domain
+        domain = None
     if domain:
         try:
             aapanel_removed = bool(aapanel_remove_site(domain))
@@ -693,5 +707,10 @@ def remove_site(app: str) -> Dict:
         sslmod._mark_ssl(app, False)
     except Exception:
         pass
-    return {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed,
-            "domain": domain}
+    out = {"app": app, "removed": True, "aapanel_cleaned": aapanel_removed,
+           "domain": domain or left_in_place}
+    if left_in_place:
+        out["note"] = ("aaPanel site %s was not created by JavaHost and was left in "
+                       "place; remove it or its reverse proxy under Website if it is "
+                       "no longer needed" % left_in_place)
+    return out
