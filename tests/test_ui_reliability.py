@@ -63,6 +63,7 @@ def test_stage_upload_behavior_rejects_failed_and_pathless_responses(html):
         function failed(r){ return !r || r.status === false; }
         function errText(p){ return typeof p === 'string' ? p : ''; }
         function looksLikeLoginHtml(){ return false; } function sessionExpired(){}
+        function tokenHeaders(h){ return h || {}; }
         """ + function + """
         function run(){ return new Promise(resolve => stageUpload(
           {files:[{name:'client-name.war', size:10}]}, (path,error)=>resolve({path,error})));
@@ -772,6 +773,7 @@ def test_stage_upload_timeout_settles_once_and_ignores_late_response(html):
         function setTimeout(fn){deadline=fn;return 1;} function clearTimeout(){}
         function fetch(){return new Promise(resolve=>{resolveFetch=resolve;});}
         function looksLikeLoginHtml(){return false;} function sessionExpired(){}
+        function tokenHeaders(h){ return h || {}; }
         function payload(r){return r.msg||r;} function failed(r){return !r||r.status===false;}
         function errText(p){return typeof p==='string'?p:'';}
         """ + source + """
