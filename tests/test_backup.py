@@ -500,3 +500,94 @@ def test_delete_backup_local_only(env, monkeypatch):
     assert out["removed"] is True
     assert not os.path.isfile(res["archive"]) and not os.path.isfile(res["archive"] + ".json")
     assert called["n"] == 0                                   # remote delete NOT called for local-only
+
+
+# --------------------------------------------------------------------------- #
+# a backup holds the whole app, and is always something restore will accept
+# --------------------------------------------------------------------------- #
+def _names(path):
+    with tarfile.open(path) as tf:
+        return tf.getnames()
+
+
+def test_backup_includes_the_apps_own_data_next_to_conf_and_webapps(env):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    os.makedirs(os.path.join(base, "uploads", "2026"))
+    open(os.path.join(base, "uploads", "2026", "invoice.pdf"), "w").write("USER-DATA")
+    open(os.path.join(base, "data.mv.db"), "w").write("EMBEDDED-DB")
+    open(os.path.join(base, "work", "compiled.class"), "w").write("cache")
+    open(os.path.join(base, "temp", "upload.tmp"), "w").write("cache")
+    res = store.backup_app("shop")
+    names = _names(res["archive"])
+    assert "base/uploads/2026/invoice.pdf" in names and "base/data.mv.db" in names
+    assert not any(n.startswith(("base/logs", "base/work", "base/temp")) for n in names)
+    assert "base/.javahost-managed" not in names
+    assert "warning" not in res
+
+    clone = store.restore(res["archive"], as_name="shop2")
+    cbase = instance.base_path("shop2")
+    assert clone["restored"]
+    assert open(os.path.join(cbase, "uploads", "2026", "invoice.pdf")).read() == "USER-DATA"
+    assert open(os.path.join(cbase, "data.mv.db")).read() == "EMBEDDED-DB"
+
+
+def test_backup_leaves_links_out_and_says_so(env, tmp_path):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.key").write_text("NOT-THE-APPS")
+    os.symlink(str(outside), os.path.join(base, "webapps", "ROOT", "shared"))
+    os.symlink(str(outside / "secret.key"), os.path.join(base, "leak"))
+    os.link(os.path.join(base, "webapps", "ROOT", "index.jsp"),
+            os.path.join(base, "webapps", "ROOT", "hard.jsp"))
+    res = store.backup_app("shop")
+    with tarfile.open(res["archive"]) as tf:
+        members = tf.getmembers()
+        body = b"".join(tf.extractfile(m).read() for m in members if m.isreg())
+    assert all(m.isreg() or m.isdir() for m in members)      # nothing restore would reject
+    assert b"NOT-THE-APPS" not in body                         # root did not follow the link
+    assert sorted(res["skipped"]) == ["leak", "webapps/ROOT/shared"]
+    # two names for one file are both stored, each with the content
+    stored = {m.name: m for m in members}
+    assert stored["base/webapps/ROOT/index.jsp"].isreg() and stored["base/webapps/ROOT/hard.jsp"].isreg()
+    assert body.count(b"PAYLOAD-OK") == 2
+    assert "left out of the backup" in res["warning"]
+    # and the archive it produced restores
+    assert store.restore(res["archive"], as_name="shop2")["restored"]
+
+
+@pytest.mark.parametrize("limit,value,needle", [
+    ("MAX_ARCHIVE_MEMBERS", 3, "files"),
+    ("MAX_MEMBER_BYTES", 4, "per file"),
+    ("MAX_TOTAL_EXTRACTED_BYTES", 8, "of data"),
+])
+def test_backup_fails_now_when_restore_would_refuse_it_later(env, monkeypatch, limit, value, needle):
+    iroot, broot = env
+    _mk_app(iroot, "big", port=8090)
+    monkeypatch.setattr(archive, limit, value)
+    with pytest.raises(archive.UnrestorableBackup, match=needle):
+        store.backup_app("big")
+    assert [f for f in os.listdir(broot) if f.startswith("backup-")] == []   # nothing half-written
+
+
+def test_archive_is_never_readable_by_others_while_being_written(env, monkeypatch):
+    iroot, _ = env
+    _mk_app(iroot, "shop", port=8090)
+    seen = []
+    real_open = tarfile.open
+
+    def spy(*a, **k):
+        fileobj = k.get("fileobj")
+        if fileobj is not None and k.get("mode", "").startswith("w"):
+            seen.append(os.fstat(fileobj.fileno()).st_mode & 0o777)
+        return real_open(*a, **k)
+    monkeypatch.setattr(archive.tarfile, "open", spy)
+    old = os.umask(0)
+    try:
+        res = store.backup_app("shop")
+    finally:
+        os.umask(old)
+    assert seen == [0o600]
+    assert os.stat(res["archive"]).st_mode & 0o777 == 0o600

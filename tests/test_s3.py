@@ -94,3 +94,55 @@ def test_listobjects_pagination_follows_continuation(monkeypatch):
 
 
 # (Profile registry config/secret-safety is covered by tests/test_remote_profiles.py)
+
+
+# ---- downloads --------------------------------------------------------------- #
+class _Resp:
+    def __init__(self, body, length=None, status=200):
+        self.status, self._body, self._length = status, body, length
+
+    def getheader(self, name, default=None):
+        return self._length if name == "Content-Length" else default
+
+    def read(self, n=-1):
+        chunk, self._body = self._body[:n], self._body[n:]
+        return chunk
+
+
+def _client(monkeypatch, resp):
+    c = s3.S3Client("https://s3.wasabisys.com", "us-east-1", "b", "AK", "SK", prefix="javahost")
+
+    class _Conn:
+        def request(self, *a, **k): pass
+        def getresponse(self): return resp
+        def close(self): pass
+    monkeypatch.setattr(c, "_conn", lambda: _Conn())
+    return c
+
+
+def test_get_object_publishes_a_complete_download(tmp_path, monkeypatch):
+    import os
+    dest = tmp_path / "backup-app-20260101T000000Z.tar.gz"
+    _client(monkeypatch, _Resp(b"x" * 1000, "1000")).get_object(dest.name, str(dest))
+    assert dest.read_bytes() == b"x" * 1000
+    assert os.stat(str(dest)).st_mode & 0o777 == 0o600
+    assert os.listdir(str(tmp_path)) == [dest.name]
+
+
+def test_get_object_does_not_leave_a_truncated_file(tmp_path, monkeypatch):
+    import os
+    # the connection dropped: read() just ends early, it does not raise
+    dest = tmp_path / "backup-app-20260101T000000Z.tar.gz"
+    c = _client(monkeypatch, _Resp(b"x" * 50, "1000"))
+    with pytest.raises(s3.S3Error, match="incomplete: got 50 of 1000"):
+        c.get_object(dest.name, str(dest))
+    assert os.listdir(str(tmp_path)) == []
+
+
+def test_get_object_failure_keeps_an_existing_good_copy(tmp_path, monkeypatch):
+    dest = tmp_path / "backup-app-20260101T000000Z.tar.gz"
+    dest.write_bytes(b"good")
+    c = _client(monkeypatch, _Resp(b"x" * 50, "1000"))
+    with pytest.raises(s3.S3Error):
+        c.get_object(dest.name, str(dest))
+    assert dest.read_bytes() == b"good"
