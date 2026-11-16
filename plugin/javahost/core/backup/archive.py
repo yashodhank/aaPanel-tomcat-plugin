@@ -20,13 +20,18 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import tarfile
-from typing import Iterable, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 # Re-use the same exception name/contract as deploy/war.py for consistency.
 from ..deploy.war import UnsafeArchive
 
 _CHUNK = 1 << 16
+
+
+class UnrestorableBackup(RuntimeError):
+    """The app is too large (files, bytes) for an archive restore would accept."""
 
 # Resource ceilings for operator-supplied restore archives.  These are module
 # constants on purpose: deployments with unusually large applications can
@@ -53,20 +58,159 @@ def _safe_target(base_real: str, name: str) -> str:
     return target
 
 
-def pack(members: Iterable[Tuple[str, str]], dest_targz: str) -> str:
+def _restorable_name(name: str) -> bool:
+    """Whether safe_extract_tar would take a member with this name (the same
+    rules as _safe_target, minus the realpath containment it adds)."""
+    if name.startswith("/") or name.startswith("\\") or (len(name) > 1 and name[1] == ":"):
+        return False
+    return ".." not in name.replace("\\", "/").split("/")
+
+
+class _Exactly(object):
+    """Reads exactly `size` bytes from a file for tarfile.addfile. A file that
+    shrank after it was measured is padded with zeros (the member header is
+    already written by then) and reported through `on_short`."""
+
+    def __init__(self, f, size: int, on_short):
+        self._f, self._left, self._on_short, self._short = f, size, on_short, False
+
+    def read(self, n: int = -1) -> bytes:
+        if self._left <= 0:
+            return b""
+        want = self._left if n is None or n < 0 else min(n, self._left)
+        data = self._f.read(want)
+        if len(data) < want:
+            if not self._short:
+                self._short = True
+                self._on_short()
+            data += b"\0" * (want - len(data))
+        self._left -= len(data)
+        return data
+
+
+def pack(members: Iterable[Tuple[str, str]], dest_targz: str,
+         skipped: Optional[List[str]] = None,
+         changed: Optional[List[str]] = None) -> str:
     """Write a gzip tarball at <dest_targz> from (src_path, arcname) pairs.
 
-    The caller controls EXACTLY what is included (exclusion of logs/work/temp etc.
-    is the caller's job). Written atomically (temp + rename) with mode 0600 since
-    the archive may carry the app's DB credentials. Missing sources are skipped."""
+    The caller controls what is included (exclusion of logs/work/temp etc. is the
+    caller's job). Missing sources are skipped.
+
+    The sources are an app's own files, in a tree its user can write while this
+    runs as root. So nothing is reached by path after it has been checked: each
+    directory is walked through a descriptor, each file is opened O_NOFOLLOW and
+    then judged by fstat, and only regular files and directories are stored. A
+    link, fifo, socket or device is left out, as is a file that vanished or a
+    name restore would refuse; their archive names go to `skipped`. A file that
+    shrank while being read is stored padded and named in `changed`.
+
+    What comes out is always something safe_extract_tar will take back: the
+    restore-side limits on member count and sizes are enforced here, so an
+    oversized app fails its backup now, not its restore later.
+
+    The file is created 0600 and never has a wider mode, since it carries the
+    app's DB credentials. Published atomically (temp + rename)."""
     os.makedirs(os.path.dirname(dest_targz), exist_ok=True)
     tmp = dest_targz + ".tmp"
+    count = [0]
+    total = [0]
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0)   # never block on a fifo
+
+    def skip(arcname: str) -> None:
+        if skipped is not None:
+            skipped.append(arcname)
+
+    def account(ti: tarfile.TarInfo) -> None:
+        count[0] += 1
+        if ti.isreg():
+            total[0] += ti.size
+            if ti.size > MAX_MEMBER_BYTES:
+                raise UnrestorableBackup("%s is %d MB; restore accepts at most %d MB per file"
+                                         % (ti.name, ti.size >> 20, MAX_MEMBER_BYTES >> 20))
+        if count[0] > MAX_ARCHIVE_MEMBERS:
+            raise UnrestorableBackup("more than %d files; restore would refuse this archive"
+                                     % MAX_ARCHIVE_MEMBERS)
+        if total[0] > MAX_TOTAL_EXTRACTED_BYTES:
+            raise UnrestorableBackup("more than %d MB of data; restore would refuse this archive"
+                                     % (MAX_TOTAL_EXTRACTED_BYTES >> 20))
+
+    def info(arcname: str, st: os.stat_result, kind: bytes) -> tarfile.TarInfo:
+        ti = tarfile.TarInfo(arcname)
+        ti.type = kind
+        ti.mode = stat.S_IMODE(st.st_mode)
+        ti.mtime = int(st.st_mtime)
+        ti.size = st.st_size if kind == tarfile.REGTYPE else 0
+        return ti
+
+    def add_file(tf: tarfile.TarFile, dir_fd: int, name: str, arcname: str) -> None:
+        if not _restorable_name(arcname):
+            return skip(arcname)
+        try:
+            fd = os.open(name, file_flags, dir_fd=dir_fd)
+        except OSError:
+            return skip(arcname)                 # a link, or gone since it was listed
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return skip(arcname)
+            ti = info(arcname, st, tarfile.REGTYPE)
+            account(ti)
+            tf.addfile(ti, _Exactly(f, ti.size, lambda: changed is not None and changed.append(arcname)))
+
+    def add_dir(tf: tarfile.TarFile, src: str, arc: str) -> None:
+        # fwalk hands back a descriptor per directory and will not descend
+        # through a symlink (it compares lstat with what it actually opened)
+        for root, dirs, files, dir_fd in os.fwalk(src, follow_symlinks=False):
+            rel = os.path.relpath(root, src)
+            arcdir = arc if rel == "." else "%s/%s" % (arc, rel.replace(os.sep, "/"))
+            if not _restorable_name(arcdir):
+                skip(arcdir)
+                dirs[:] = []
+                continue
+            ti = info(arcdir, os.fstat(dir_fd), tarfile.DIRTYPE)
+            account(ti)
+            tf.addfile(ti)
+            for d in list(dirs):
+                try:
+                    is_link = stat.S_ISLNK(os.stat(d, dir_fd=dir_fd, follow_symlinks=False).st_mode)
+                except OSError:
+                    is_link = True
+                if is_link:                      # listed as a directory, never walked
+                    dirs.remove(d)
+                    skip("%s/%s" % (arcdir, d))
+            dirs.sort()
+            for name in sorted(files):
+                add_file(tf, dir_fd, name, "%s/%s" % (arcdir, name))
+
     try:
-        with tarfile.open(tmp, "w:gz") as tf:
-            for src, arc in members:
-                if src and os.path.exists(src):
-                    tf.add(src, arcname=arc, recursive=True)
-        os.chmod(tmp, 0o600)
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+        with os.fdopen(fd, "wb") as raw:
+            os.fchmod(raw.fileno(), 0o600)       # O_CREAT mode is masked by umask
+            with tarfile.open(fileobj=raw, mode="w:gz") as tf:
+                for src, arc in members:
+                    if not src:
+                        continue
+                    try:
+                        st = os.lstat(src)
+                    except OSError:
+                        continue                 # missing source
+                    if stat.S_ISDIR(st.st_mode):
+                        add_dir(tf, src, arc)
+                    elif stat.S_ISREG(st.st_mode):
+                        parent = os.open(os.path.dirname(src) or ".",
+                                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                        try:
+                            add_file(tf, parent, os.path.basename(src), arc)
+                        finally:
+                            os.close(parent)
+                    else:
+                        skip(arc)
+        if os.path.getsize(tmp) > MAX_COMPRESSED_ARCHIVE_BYTES:
+            raise UnrestorableBackup("archive is larger than %d MB; restore would refuse it"
+                                     % (MAX_COMPRESSED_ARCHIVE_BYTES >> 20))
         os.replace(tmp, dest_targz)
     except BaseException:
         try:

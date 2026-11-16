@@ -857,3 +857,196 @@ def test_restore_unit_writes_back_exactly_what_was_there(tmp_path, monkeypatch):
     service.restore_unit("old", snap)
     assert not (sysd / "javahost-old.service").exists()
     assert script.read_text() == "#!/bin/sh\n# original\n" and os.stat(str(script)).st_mode & 0o777 == 0o755
+
+
+# a backup holds the whole app, and is always something restore will accept
+# --------------------------------------------------------------------------- #
+def _names(path):
+    with tarfile.open(path) as tf:
+        return tf.getnames()
+
+
+def test_backup_includes_the_apps_own_data_next_to_conf_and_webapps(env):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    os.makedirs(os.path.join(base, "uploads", "2026"))
+    open(os.path.join(base, "uploads", "2026", "invoice.pdf"), "w").write("USER-DATA")
+    open(os.path.join(base, "data.mv.db"), "w").write("EMBEDDED-DB")
+    open(os.path.join(base, "work", "compiled.class"), "w").write("cache")
+    open(os.path.join(base, "temp", "upload.tmp"), "w").write("cache")
+    res = store.backup_app("shop")
+    names = _names(res["archive"])
+    assert "base/uploads/2026/invoice.pdf" in names and "base/data.mv.db" in names
+    assert not any(n.startswith(("base/logs", "base/work", "base/temp")) for n in names)
+    assert "base/.javahost-managed" not in names
+    assert "warning" not in res
+
+    clone = store.restore(res["archive"], as_name="shop2")
+    cbase = instance.base_path("shop2")
+    assert clone["restored"]
+    assert open(os.path.join(cbase, "uploads", "2026", "invoice.pdf")).read() == "USER-DATA"
+    assert open(os.path.join(cbase, "data.mv.db")).read() == "EMBEDDED-DB"
+
+
+def test_backup_leaves_links_out_and_says_so(env, tmp_path):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.key").write_text("NOT-THE-APPS")
+    os.symlink(str(outside), os.path.join(base, "webapps", "ROOT", "shared"))
+    os.symlink(str(outside / "secret.key"), os.path.join(base, "leak"))
+    os.link(os.path.join(base, "webapps", "ROOT", "index.jsp"),
+            os.path.join(base, "webapps", "ROOT", "hard.jsp"))
+    res = store.backup_app("shop")
+    with tarfile.open(res["archive"]) as tf:
+        members = tf.getmembers()
+        body = b"".join(tf.extractfile(m).read() for m in members if m.isreg())
+    assert all(m.isreg() or m.isdir() for m in members)      # nothing restore would reject
+    assert b"NOT-THE-APPS" not in body                         # root did not follow the link
+    assert sorted(res["skipped"]) == ["leak", "webapps/ROOT/shared"]
+    # two names for one file are both stored, each with the content
+    stored = {m.name: m for m in members}
+    assert stored["base/webapps/ROOT/index.jsp"].isreg() and stored["base/webapps/ROOT/hard.jsp"].isreg()
+    assert body.count(b"PAYLOAD-OK") == 2
+    assert "left out of the backup" in res["warning"]
+    # and the archive it produced restores
+    assert store.restore(res["archive"], as_name="shop2")["restored"]
+
+
+@pytest.mark.parametrize("limit,value,needle", [
+    ("MAX_ARCHIVE_MEMBERS", 3, "files"),
+    ("MAX_MEMBER_BYTES", 4, "per file"),
+    ("MAX_TOTAL_EXTRACTED_BYTES", 8, "of data"),
+])
+def test_backup_fails_now_when_restore_would_refuse_it_later(env, monkeypatch, limit, value, needle):
+    iroot, broot = env
+    _mk_app(iroot, "big", port=8090)
+    monkeypatch.setattr(archive, limit, value)
+    with pytest.raises(archive.UnrestorableBackup, match=needle):
+        store.backup_app("big")
+    assert [f for f in os.listdir(broot) if f.startswith("backup-")] == []   # nothing half-written
+
+
+def test_archive_is_never_readable_by_others_while_being_written(env, monkeypatch):
+    iroot, _ = env
+    _mk_app(iroot, "shop", port=8090)
+    seen = []
+    real_open = tarfile.open
+
+    def spy(*a, **k):
+        fileobj = k.get("fileobj")
+        if fileobj is not None and k.get("mode", "").startswith("w"):
+            seen.append(os.fstat(fileobj.fileno()).st_mode & 0o777)
+        return real_open(*a, **k)
+    monkeypatch.setattr(archive.tarfile, "open", spy)
+    old = os.umask(0)
+    try:
+        res = store.backup_app("shop")
+    finally:
+        os.umask(old)
+    assert seen == [0o600]
+    assert os.stat(res["archive"]).st_mode & 0o777 == 0o600
+
+
+def test_backup_reads_files_through_descriptors_it_has_checked(env, tmp_path, monkeypatch):
+    # the app user swaps a file for a link after it was listed; root must not
+    # then read whatever the link points to into the archive
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    secret = tmp_path / "root-only.key"
+    secret.write_text("ROOT-SECRET")
+    target = os.path.join(base, "webapps", "ROOT", "index.jsp")
+    real_open = os.open
+
+    def swap_then_open(path, flags, mode=0o777, dir_fd=None):
+        if path == "index.jsp" and dir_fd is not None:
+            os.unlink(target)
+            os.symlink(str(secret), target)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(archive.os, "open", swap_then_open)
+    res = store.backup_app("shop")
+    monkeypatch.setattr(archive.os, "open", real_open)
+    with tarfile.open(res["archive"]) as tf:
+        body = b"".join(tf.extractfile(m).read() for m in tf.getmembers() if m.isreg())
+    assert b"ROOT-SECRET" not in body
+    assert "webapps/ROOT/index.jsp" in res["skipped"]
+
+
+def test_backup_does_not_block_on_a_fifo_or_fail_on_odd_files(env):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    os.mkfifo(os.path.join(base, "webapps", "ROOT", "pipe"))        # open() would hang forever
+    odd = "a\\..\\b.txt"                                           # restore would call this traversal
+    open(os.path.join(base, odd), "w").write("x")
+    res = store.backup_app("shop")
+    assert sorted(res["skipped"]) == [odd, "webapps/ROOT/pipe"]
+    assert store.restore(res["archive"], as_name="shop2")["restored"]
+
+
+def test_file_that_shrinks_while_being_read_is_reported_not_fatal(env, monkeypatch):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    log = os.path.join(base, "data.log")
+    open(log, "w").write("x" * 5000)
+    real_fstat = os.fstat
+    seen = {"done": False}
+
+    def truncate_after_measuring(fd):
+        st = real_fstat(fd)
+        # a directory is 4096 bytes too on ext4: only react to the file itself
+        if not seen["done"] and st.st_size == 5000 and (st.st_mode & 0o170000) == 0o100000:
+            seen["done"] = True
+            os.truncate(log, 10)                 # logrotate copytruncate, mid-backup
+        return st
+    monkeypatch.setattr(archive.os, "fstat", truncate_after_measuring)
+    res = store.backup_app("shop")
+    monkeypatch.setattr(archive.os, "fstat", real_fstat)
+    assert res["changed"] == ["data.log"] and "changed while being read" in res["warning"]
+    with tarfile.open(res["archive"]) as tf:
+        assert tf.getmember("base/data.log").size == 5000          # still a valid archive
+        assert tf.getmember("base/conf/server.xml").isreg()
+    assert store.list_backups("shop")[0].get("changed") == ["data.log"]   # visible wherever it is listed
+
+
+def test_file_that_vanishes_mid_backup_is_skipped(env, monkeypatch):
+    iroot, _ = env
+    base = _mk_app(iroot, "shop", port=8090)
+    tmpf = os.path.join(base, "upload.part")
+    open(tmpf, "w").write("x")
+    real_open = os.open
+
+    def vanish(path, flags, mode=0o777, dir_fd=None):
+        if path == "upload.part":
+            os.unlink(tmpf)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(archive.os, "open", vanish)
+    res = store.backup_app("shop")
+    monkeypatch.setattr(archive.os, "open", real_open)
+    assert res["skipped"] == ["upload.part"]
+
+
+@pytest.mark.parametrize("core", ["app.jar", os.path.join("webapps", "ROOT"), "conf"])
+def test_backup_refuses_when_the_app_itself_is_behind_a_link(env, tmp_path, core):
+    # blue/green deploys: without this the backup "succeeded" with no app in it,
+    # and the restore then started an empty service
+    iroot, broot = env
+    base = _mk_app(iroot, "shop", port=8090)
+    real = tmp_path / "releases"
+    real.mkdir()
+    path = os.path.join(base, core)
+    if os.path.isdir(path):
+        import shutil as _sh
+        _sh.rmtree(path)
+    os.symlink(str(real), path)
+    with pytest.raises(RuntimeError, match="is a symbolic link"):
+        store.backup_app("shop")
+    assert [f for f in os.listdir(broot) if f.startswith("backup-")] == []
+
+
+def test_pid_file_is_not_carried_into_a_restored_copy(env):
+    iroot, _ = env
+    base = _mk_app(iroot, "svc", port=8090)
+    open(os.path.join(base, "app.pid"), "w").write("4242")
+    res = store.backup_app("svc")
+    assert "base/app.pid" not in _names(res["archive"])

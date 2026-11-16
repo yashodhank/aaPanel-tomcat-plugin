@@ -767,6 +767,7 @@ class javahost_main(object):
             body = ("from core.backup import store\n"
                     "r = store.backup_app(%r, remotes=%r)\n"
                     "print('backup:', r['name'], r['size_mb'], 'MB', 'uploaded_to=' + str(r.get('uploaded_to')))\n"
+                    "if r.get('warning'): print('warning:', r['warning'] + ':', ', '.join(r.get('skipped') or []))\n"
                     "[print('upload FAILED', k, v.get('detail')) for k, v in (r.get('upload_results') or {}).items() if not v.get('ok')]\n"
                     % (app, remotes))
             job_id = jobs.start("backup", app, jobs.python_work(body))

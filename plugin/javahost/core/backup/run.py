@@ -28,6 +28,8 @@ def main(argv=None) -> int:
     remotes = a.remotes or ("all" if a.remote else None)
     res = store.backup_app(a.app, remotes=remotes)
     print("backup: %s %s MB uploaded_to=%s" % (res["name"], res["size_mb"], res.get("uploaded_to")))
+    if res.get("warning"):
+        print("warning: %s: %s" % (res["warning"], ", ".join(res.get("skipped") or [])))
     if a.keep and a.keep > 0:
         pr = store.prune_backups(a.app, a.keep)
         print("pruned: %s" % pr.get("removed"))
