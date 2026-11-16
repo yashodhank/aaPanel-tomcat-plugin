@@ -103,7 +103,7 @@ job flow, SSL decision, and the status-semantics model).
 | Dashboard | Live operational aggregates (`GetDashboard`, lazy-loaded): apps running / down / **runtime-missing**, aggregate **CPU % + RSS**, **certs expiring <30 days**, instances/backups **disk usage**, and recent tasks |
 | Observability | A single **Activity** tab: background-task status (install/uninstall/lifecycle — running/done/failed/cancelled, with inline **View log**) plus a **unified log viewer** over app logs and task output |
 | Maintenance | **Settings → Danger zone:** granular wipe (apps / jdks / tomcats / sites / full) with dry-run preview + typed `WIPE` confirm; wipe **skips runtimes still in use**; `install.sh uninstall` honors a saved plan (default keep-data) |
-| Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall; runs safely under aaPanel System Hardening (lift/re-lock the immutable bit) |
+| Lifecycle | idempotent install, atomic staging + rollback, disk precheck, managed-marker uninstall; works with aaPanel System Hardening through the panel's own pause, never by unlocking directories itself |
 
 ## Documentation
 
@@ -128,9 +128,9 @@ links working.
   uninstall, dependency rules, the self-contained `runtimes/` model.
 - [Connecting Java apps to databases](plugin/javahost/docs/databases-java-apps.md) — engines,
   drivers, the secret-safe `app.env`, `SetDbEnv`/`GetDbEnv`.
-- [System Hardening](plugin/javahost/docs/system-hardening.md) — runs safely under aaPanel
-  System Hardening; auto lift/re-lock with the `manage_hardening` toggle; the
-  three-layer model and `AllowServices`.
+- [System Hardening](plugin/javahost/docs/system-hardening.md) — how JavaHost works with
+  aaPanel System Hardening, the `manage_hardening` setting, and what to do when a
+  service is blocked.
 - [Single-host vs. multi-server](plugin/javahost/docs/single-vs-multi-mode.md) — JavaHost is
   host-local; install it on each host that should run Java apps.
 - [Testing runbook](docs/testing.md) and the full on-box

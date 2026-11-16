@@ -89,8 +89,8 @@ without the panel) to exercise the real path, and a Playwright pass for UI.
   → search with **python** or `grep -F`.
 - The aaPanel `get` is an **attribute namespace** (`panel.attr` = `getattr`), not
   a dict → endpoint tests pass a `SimpleNamespace`, never `{...}`.
-- A managed `/etc/cron.d/*` writer must **only relock `chattr +i` if the dir was
-  already immutable** — never harden a dir that wasn't (use `util.immutable.writable`
-  in Python; check `was_locked` in shell).
+- Never unlock a system directory or edit System Hardening's config from the
+  plugin. A blocked write goes through `compat.aapanel.hardening_paused` (the
+  panel's own pause) or fails with a message for the operator.
 - After `make deploy`, the panel **must** be restarted (`make deploy` does it) or
   it serves the stale module.

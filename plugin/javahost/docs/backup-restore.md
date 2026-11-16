@@ -107,8 +107,8 @@ Backups → **Schedules** → **Add schedule**: pick an app, a frequency (daily 
 to upload to.
 
 - Stored in `schedules.json`; the managed `/etc/cron.d/javahost-backups` is
-  regenerated from it (hardening-aware — the immutable bit on `/etc/cron.d` is briefly
-  lifted/re-locked, like service units). Each run invokes `core/backup/run.py`.
+  regenerated from it (on a hardened host the panel pauses System Hardening for
+  the write, like service units). Each run invokes `core/backup/run.py`.
 - **Retention** keeps the newest *N* backups **per destination** (local and each
   remote), independently.
 - Cron expressions are validated to 5 fields of `[0-9*/,-]` only (no shell surface).
