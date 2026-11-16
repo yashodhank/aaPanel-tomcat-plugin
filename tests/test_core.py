@@ -2418,6 +2418,7 @@ def test_aapanel_remove_site_falls_to_class_api(monkeypatch):
     """HTTP fails, class API succeeds via panelSite.DeleteSite."""
     import sys
     import types
+    monkeypatch.setattr(proxy.panel_api, "site_ownership", lambda d: "javahost")
     monkeypatch.setattr(proxy, "_aapanel_http_remove_site", lambda d: False)
     monkeypatch.setattr(proxy, "AAPANEL_PANEL_CLASS", "/fake/panel/class")
     monkeypatch.setattr(sys, "path", list(sys.path) + ["/fake/panel/class"])

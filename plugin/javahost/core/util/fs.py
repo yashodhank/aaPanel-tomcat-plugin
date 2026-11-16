@@ -6,6 +6,8 @@ roots or anything not carrying our managed-marker (F14/R3).
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import shutil
 import tempfile
@@ -28,6 +30,12 @@ def mkdtemp(prefix: str = "javahost-") -> str:
     return path
 
 
+def mkdtemp_in(parent: str, prefix: str = ".tmp-") -> str:
+    """A private 0700 work dir inside `parent` (same filesystem, so a file in it
+    can be renamed into `parent` atomically)."""
+    return tempfile.mkdtemp(dir=parent, prefix=prefix)
+
+
 def atomic_write(path: str, content: str, mode: int = 0o640) -> None:
     """Write file atomically (temp + rename) with explicit permissions."""
     d = os.path.dirname(path) or "."
@@ -47,6 +55,20 @@ def ensure_dir(path: str, mode: int = 0o755) -> str:
     os.makedirs(path, exist_ok=True)
     os.chmod(path, mode)
     return path
+
+
+@contextlib.contextmanager
+def locked(path: str):
+    """Hold an exclusive advisory lock on `path` + ".lock" for the duration of a
+    read-modify-write. The lock file is separate from the data file because the
+    data file is replaced (new inode) by every atomic write."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd = os.open(path + ".lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)        # closing releases the lock
 
 
 def mark_managed(path: str) -> None:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import fcntl
 import os
-import sys
+import shutil
 from contextlib import contextmanager
 from typing import Optional
 
@@ -98,7 +98,8 @@ def _install_locked(major: str, *, patch: Optional[str] = None, prefer_java: Opt
             sha512=local_sha512,
             sha512_url=None if local_tarball else art.sha512_url,
             sig_url=None if local_tarball else art.sig_url,
-            keyring=_keyring(major, art.keys_url),
+            # offline: the operator vouches for the tarball with local_sha512
+            keyring=None if local_tarball else _keyring(major, art.keys_url),
             local_file=local_tarball,
         )
 
@@ -123,7 +124,11 @@ def _install_locked(major: str, *, patch: Optional[str] = None, prefer_java: Opt
             if os.path.isdir(old):
                 fs.safe_rmtree(old, require_marker=False)
             os.rename(dest, old)
-            os.rename(staging, dest)
+            try:
+                os.rename(staging, dest)
+            except Exception:
+                os.rename(old, dest)   # never leave apps without their shared home
+                raise
             fs.safe_rmtree(old, require_marker=False)
         else:
             os.rename(staging, dest)
@@ -135,11 +140,8 @@ def _install_locked(major: str, *, patch: Optional[str] = None, prefer_java: Opt
                 pass
         raise
     finally:
-        if tmp.startswith("/tmp"):
-            try:
-                fs.safe_rmtree(tmp, require_marker=False)
-            except Exception:
-                pass
+        # our own mkdtemp dir; safe_rmtree refuses it (outside the managed roots)
+        shutil.rmtree(tmp, ignore_errors=True)
     return {"major": major, "patch": art.patch, "home": dest, "java_home": java_home}
 
 
@@ -226,24 +228,24 @@ def _uninstall_locked(major: str, force: bool = False) -> dict:
             "in_use_by": in_use, "forced": bool(force)}
 
 
-def _keyring(major: str, keys_url: str) -> Optional[str]:
-    """Build a GPG keyring from Apache KEYS for this major. Returns path or None.
+def _keyring(major: str, keys_url: str) -> str:
+    """Build a GPG keyring from Apache KEYS for this major and return its path.
 
-    None makes the verifier skip the *signature* step but SHA-512 stays mandatory
-    (fetch_verified always requires a checksum). The skip is logged explicitly —
-    never silent — so a downgrade to checksum-only is visible. A present-but-bad
-    signature still hard-fails in download.verify_gpg (not here)."""
+    Fails closed: without gpg, or without the KEYS file, the tarball's signature
+    cannot be checked, and its SHA-512 comes from the same server as the tarball
+    itself, so the install is refused rather than downgraded to checksum-only."""
     gpg = shell.which("gpg")
     if not gpg:
-        sys.stderr.write("[javahost] gpg not installed; using SHA-512-only verification\n")
-        return None
+        raise RuntimeError(
+            "gpg is not installed, so the Tomcat download cannot be verified. "
+            "Install it (apt-get install gnupg / yum install gnupg2) and retry.")
     keys = os.path.join(KEYRING_DIR, "tomcat-%s-KEYS" % major)
     keyring = os.path.join(KEYRING_DIR, "tomcat-%s.gpg" % major)
     try:
         download._http_get(keys_url, keys)
         shell.run([gpg, "--no-default-keyring", "--keyring", keyring, "--import", keys])
-        return keyring
     except Exception as e:
-        sys.stderr.write("[javahost] WARNING: could not build Apache KEYS keyring "
-                         "(%s); proceeding with SHA-512-only verification\n" % e)
-        return None
+        raise RuntimeError("could not build the Apache KEYS keyring to verify the "
+                           "Tomcat download (needs outbound HTTPS to downloads.apache.org "
+                           "and a working gpg for this user): %s" % e) from e
+    return keyring
