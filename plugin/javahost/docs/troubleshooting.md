@@ -17,11 +17,17 @@ skips verification (`core/util/download.py`).
   The downloaded (or local) file does not match the expected hash. Re-download,
   or confirm the `--sha512` you passed matches the tarball. A mismatch is always
   treated as an error.
-- **`gpg not installed; cannot verify OpenPGP signature`**
-  Signature verification was requested but `gpg` is missing. Install `gpg`, or
-  proceed with SHA-512 only — when no keyring can be built the installer skips
-  the signature step but still enforces SHA-512 (`installer._keyring` returns
-  `None` if gpg/keys are unavailable).
+- **`gpg is not installed, so the Tomcat download cannot be verified`**
+  Tomcat tarballs are checked against Apache's OpenPGP signature as well as the
+  SHA-512, and the install is refused when that check cannot run. Install gpg
+  (`apt-get install gnupg` or `yum install gnupg2`) and retry. A host with no
+  internet access can still install from a tarball you verified yourself, which
+  needs no gpg: `tomcat_install.sh install <9|10|11> --local /path/to.tar.gz
+  --sha512 <hex>` from the plugin directory.
+- **`could not build the Apache KEYS keyring`**
+  The Apache KEYS file could not be downloaded or imported, so the signature
+  cannot be checked and the install is refused. Check outbound HTTPS to
+  `downloads.apache.org` and retry.
 - **OpenPGP `--verify` failed**
   The detached signature did not validate against the Apache KEYS keyring. Do not
   bypass this; re-fetch the artifact from an official mirror.

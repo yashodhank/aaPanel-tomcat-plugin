@@ -8,10 +8,13 @@ CATALINA_HOME (see installer.py). All removals are marker-gated (fs.safe_rmtree)
 """
 from __future__ import annotations
 
+import fcntl
 import os
+import stat
 import re
 import shutil
 import socket
+from contextlib import contextmanager
 import urllib.error
 import urllib.request
 from typing import Dict, List, Optional
@@ -73,6 +76,39 @@ def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
             return False
         except OSError:
             return True
+
+
+@contextmanager
+def _create_lock():
+    """Serialize "is the name free, is the port free, claim both" across requests.
+
+    A port only counts as taken once the new app's server.xml / app.env exists,
+    and the name once its directory does, so two creates running together could
+    both be handed the same port (or the same name)."""
+    fs.ensure_dir(INSTANCE_ROOT)
+    fd = os.open(os.path.join(INSTANCE_ROOT, ".create.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _discard_half_built(app: str, base: str) -> None:
+    """A create that failed part-way must not leave a directory that holds the
+    name and the port ("app already exists" on retry) with no working app."""
+    try:
+        service.remove_unit(app)
+    except Exception:
+        pass
+    try:
+        if os.path.isdir(base):
+            # no marker required: the caller made this directory itself, under the
+            # create lock, after checking the name was free; a failure while
+            # scaffolding can leave it without the marker
+            fs.safe_rmtree(base, require_marker=False)
+    except Exception:
+        pass
 
 
 def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = PORT_HI) -> int:
@@ -366,29 +402,46 @@ def create(app: str, major: str, port: int, memory_mb: int,
         raise RuntimeError("Tomcat %s is not installed" % major)
     if exists(app):
         raise RuntimeError("app already exists: %s" % app)
-    # allocate_port honors a requested port (and rejects conflicts) or picks a free one
-    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
     home = installer.home_path(major)
     # Default the JDK to the Tomcat line's baseline (min_java) instead of the
     # newest installed — otherwise every app silently lands on the highest JDK
     # (e.g. 21) regardless of Tomcat. Callers can still pin any JDK via prefer_java.
     if prefer_java in (None, "", 0, "0"):
         prefer_java = registry.get_line(major).min_java
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
+    # may download a JDK for minutes: done before the name and port are claimed
     java_home = installer.ensure_java(major, prefer=prefer_java)
     major_java = java.probe(java_home) or registry.get_line(major).min_java
     base = base_path(app)
-    _scaffold(base)
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), major_java)
-    service.write_setenv(base, app, java_home, home, opts, [])
-    _render_conf(base, app, port, catalina_home=home)
     from . import hardening
-    hardening.assert_no_ajp(os.path.join(base, "conf", "server.xml"))
-    hardening.secure_perms(base, user=user)
-    # The service runs as `user` (default www); give it ownership of CATALINA_BASE
-    # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
     from ..util import shell
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-    service.install_unit(app, java_home, home, base, user=user)
+    with _create_lock():
+        if exists(app):
+            raise RuntimeError("app already exists: %s" % app)
+        # allocate_port honors a requested port (and rejects conflicts) or picks a free one
+        port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+        try:                            # from here on the directory is ours to remove
+            _scaffold(base)
+            service.write_setenv(base, app, java_home, home, opts, [])
+            _render_conf(base, app, port, catalina_home=home)   # server.xml claims the port
+        except Exception:
+            _discard_half_built(app, base)
+            raise
+    try:
+        hardening.assert_no_ajp(os.path.join(base, "conf", "server.xml"))
+        hardening.secure_perms(base, user=user)
+        # The service runs as `user` (default www); give it ownership of CATALINA_BASE
+        # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
+        shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+        service.install_unit(app, java_home, home, base, user=user)
+    except Exception:
+        _discard_half_built(app, base)
+        raise
+    # The app is complete from here. A start that fails (aaPanel's process
+    # protection blocking exec, a bad JVM option) leaves it in place: the error
+    # tells the operator to fix the cause and Repair, and the logs say why.
     service.enable_start(app)
     return {"app": app, "tomcat": major, "port": port, "java": major_java,
             "status": service.status(app), "warnings": warns}
@@ -411,18 +464,17 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
         raise RuntimeError("not an executable jar (no Main-Class in MANIFEST): %s" % jar_src)
     if exists(app):
         raise RuntimeError("app already exists: %s" % app)
-    java_home = java.resolve(java_major, prefer=java_major) or java.install_temurin(java_major)
-    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+    # The JDK that was asked for, not "that or anything newer": resolve() treats
+    # the major as a minimum, so a Java 8 app on a host with 21 ran on 21 while
+    # the response said 8.
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
+    java_home = java.detect().get(java_major) or java.install_temurin(java_major)
     base = base_path(app)
-    for sub in ("bin", "logs"):
-        fs.ensure_dir(os.path.join(base, sub))
-    fs.mark_managed(base)
-    shutil.copyfile(jar_src, os.path.join(base, "app.jar"))
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
     # app.env carries SERVER_PORT (Spring Boot honors it) — also the port marker for health()
     from ..util import fs as _fs
     env_lines = [
-        "SERVER_PORT=%d" % port,
         # Bind to loopback ONLY: like the Tomcat connector, JAR apps must not face
         # the public interface — they are reached through the reverse proxy. Spring
         # Boot honors SERVER_ADDRESS (server.address); generic apps honor SERVER_HOST.
@@ -441,10 +493,33 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
     # Persist JVM opts so RepairApp can rebuild a missing unit without
     # silently dropping -Xmx/-Xms (unit file alone is not durable).
     env_lines.append('JAVA_OPTS="%s"' % " ".join(opts))
-    _fs.atomic_write(os.path.join(base, "bin", "app.env"),
-                     "\n".join(env_lines) + "\n", mode=0o640)
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-    service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
+    with _create_lock():
+        if exists(app):
+            raise RuntimeError("app already exists: %s" % app)
+        port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+        try:                            # from here on the directory is ours to remove
+            for sub in ("bin", "logs"):
+                fs.ensure_dir(os.path.join(base, sub))
+            fs.mark_managed(base)
+            # app.env carries SERVER_PORT and an app.jar marks the directory as a
+            # JAR app: together they claim the port. The jar itself (possibly
+            # hundreds of MB) is copied after the lock is released.
+            _fs.atomic_write(os.path.join(base, "bin", "app.env"),
+                             "\n".join(["SERVER_PORT=%d" % port] + env_lines) + "\n", mode=0o640)
+            open(os.path.join(base, "app.jar"), "wb").close()
+        except Exception:
+            _discard_half_built(app, base)
+            raise
+    try:
+        tmp_jar = os.path.join(base, ".app.jar.part")
+        shutil.copyfile(jar_src, tmp_jar)
+        os.replace(tmp_jar, os.path.join(base, "app.jar"))
+        shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+        service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
+    except Exception:
+        _discard_half_built(app, base)
+        raise
+    # complete from here: a failed start leaves the app in place to be repaired
     service.enable_start(app)
     return {"app": app, "type": "jar", "port": port, "java": java_major,
             "springboot": jarmod.detect_springboot(jar_src), "profiles": profiles or "",
@@ -686,7 +761,11 @@ def metrics_all(names) -> Dict[str, Dict]:
     return out
 
 
-def delete(app: str, *, purge: bool = True) -> Dict:
+def delete(app: str, *, purge: bool = True, force: bool = False) -> Dict:
+    """Remove an app. When its aaPanel site cannot be removed the app is left
+    whole so the delete can be retried, unless `force`: then the app goes and
+    the site is reported as possibly left behind. That is the way out when the
+    panel cannot be reached at all (plugin uninstall, no API key)."""
     app = validate.identifier(app, "app")
     site_cleanup = None
     # Clean up the reverse-proxy site in aaPanel before removing the instance
@@ -695,13 +774,6 @@ def delete(app: str, *, purge: bool = True) -> Dict:
         site_cleanup = proxy.remove_site(app)
     except Exception as e:
         site_cleanup = {"removed": False, "error": str(e)}
-    # Drop any backup schedule/cron entry for this app (partial wipe + DeleteApp).
-    try:
-        from ..backup import schedule as backupschedule
-        backupschedule.remove_schedule(app)
-    except Exception:
-        pass
-    service.remove_unit(app)
     base = base_path(app)
     removed = False
     # If aaPanel delete failed, keep the instance tree (incl. site.domain marker)
@@ -709,9 +781,21 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     site_blocked = (isinstance(site_cleanup, dict)
                     and site_cleanup.get("removed") is False
                     and site_cleanup.get("domain"))
-    if purge and os.path.isdir(base) and not site_blocked:
-        fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
-        removed = True
+    if force or not (site_blocked and purge):
+        # Only past this point is the app being taken apart. A blocked delete
+        # leaves it whole and running, not stopped with its unit and schedule
+        # gone but its files and site still there.
+        try:
+            from ..backup import schedule as backupschedule
+            backupschedule.remove_schedule(app)
+        except Exception:
+            pass
+        service.remove_unit(app)
+        if purge and os.path.isdir(base):
+            fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
+        # gone is gone: a leftover unit or site with no directory (or a second
+        # click) is a finished delete, not a failed one
+        removed = purge and not os.path.isdir(base)
     out = {"app": app, "removed": removed}
     if site_cleanup is not None:
         out["site"] = site_cleanup
@@ -720,9 +804,9 @@ def delete(app: str, *, purge: bool = True) -> Dict:
                 site_cleanup.get("error")
                 or "reverse-proxy site may still exist in aaPanel — remove it manually"
             )
-            if site_blocked and purge:
+            if site_blocked and purge and not force:
                 out["site_warning"] += (
-                    "; instance kept so domain marker remains for retry"
+                    "; the app was left unchanged so the delete can be retried"
                 )
     return out
 
@@ -862,22 +946,35 @@ def tail_log(app: str, lines: int = 200) -> str:
     app = validate.identifier(app, "app")
     base = base_path(app)
     n = max(1, min(int(lines), 2000))
-    log_dir = os.path.join(base, "logs")
-    # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
-    if _instance_type(base) == "jar":
-        app_out = os.path.join(log_dir, "app.out")
-        if os.path.isfile(app_out):
-            return _tail(app_out, n)
+    # logs/ belongs to the app user and this read runs as root: go through a
+    # descriptor on the directory and refuse links, so a planted
+    # `catalina.out -> /etc/shadow` is not tailed into the panel.
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = os.open(os.path.join(base, "logs"),
+                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow)
+    except OSError:
         return ""
-    candidates = ["catalina.out"] + [
-        f for f in (os.listdir(log_dir) if os.path.isdir(log_dir) else [])
-        if f.startswith("catalina") and f.endswith(".log")
-    ]
-    for name in candidates:
-        path = os.path.join(log_dir, name)
-        if os.path.isfile(path):
-            return _tail(path, n)
-    return ""
+    try:
+        # JAR services redirect stdout/stderr to logs/app.out (systemd + init.d).
+        if _instance_type(base) == "jar":
+            candidates = ["app.out"]
+        else:
+            candidates = ["catalina.out"] + [
+                f for f in os.listdir(dir_fd)
+                if f.startswith("catalina") and f.endswith(".log")]
+        for name in candidates:
+            try:
+                fd = os.open(name, os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0),
+                             dir_fd=dir_fd)
+            except OSError:
+                continue
+            with os.fdopen(fd, "rb") as f:
+                if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                    return _tail_file(f, n)
+        return ""
+    finally:
+        os.close(dir_fd)
 
 
 # --- helpers ---
@@ -918,16 +1015,20 @@ def _read_port(base: str) -> Optional[int]:
 
 
 def _tail(path: str, lines: int) -> str:
-    # memory-safe tail without reading the whole file
     with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        end = f.tell()
-        block, data, found = 4096, b"", 0
-        pos = end
-        while pos > 0 and found <= lines:
-            step = min(block, pos)
-            pos -= step
-            f.seek(pos)
-            data = f.read(step) + data
-            found = data.count(b"\n")
-        return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")
+        return _tail_file(f, lines)
+
+
+def _tail_file(f, lines: int) -> str:
+    # memory-safe tail without reading the whole file
+    f.seek(0, os.SEEK_END)
+    end = f.tell()
+    block, data, found = 4096, b"", 0
+    pos = end
+    while pos > 0 and found <= lines:
+        step = min(block, pos)
+        pos -= step
+        f.seek(pos)
+        data = f.read(step) + data
+        found = data.count(b"\n")
+    return b"\n".join(data.splitlines()[-lines:]).decode("utf-8", "replace")

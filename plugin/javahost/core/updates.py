@@ -23,6 +23,7 @@ from core.tomcat import registry, installer
 
 CACHE_PATH = "/www/server/javahost/runtime_updates_cache.json"
 TTL_SECONDS = 24 * 3600
+ERROR_TTL_SECONDS = 10 * 60
 
 
 def _read_cache() -> Optional[Dict]:
@@ -69,7 +70,10 @@ def check(force: bool = False, now: float = None) -> Dict:
     now = now if now is not None else time.time()
     if not force:
         c = _read_cache()
-        if c and (now - float(c.get("checked_at", 0))) < TTL_SECONDS:
+        # A result that carries errors (the network was down) is only good for
+        # a few minutes: cached for the full day it reads as "no updates".
+        ttl = ERROR_TTL_SECONDS if c and c.get("errors") else TTL_SECONDS
+        if c and (now - float(c.get("checked_at", 0))) < ttl:
             c["cached"] = True
             return c
 
