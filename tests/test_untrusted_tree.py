@@ -175,3 +175,47 @@ def test_secure_perms_skips_a_symlinked_conf_dir(tmp_path):
     os.symlink(str(elsewhere), str(base / "conf"))
     hardening.secure_perms(str(base))
     assert os.stat(str(victim)).st_mode & 0o777 == 0o600
+
+
+# ---- review follow-ups ------------------------------------------------------ #
+def test_tail_log_does_not_read_through_links(app, tmp_path):
+    secret = tmp_path / "shadow"
+    secret.write_text("root:$6$secret\n")
+    logs = app.parent / "logs"
+    logs.mkdir()
+    os.symlink(str(secret), str(logs / "catalina.out"))
+    assert "secret" not in instance.tail_log("demo", 10)
+    (logs / "catalina.2026.log").write_text("real line\n")
+    assert instance.tail_log("demo", 10) == "real line"
+
+
+def test_tail_log_skips_a_symlinked_logs_dir(app, tmp_path):
+    elsewhere = tmp_path / "var-log"
+    elsewhere.mkdir()
+    (elsewhere / "catalina.out").write_text("not this app's log\n")
+    os.symlink(str(elsewhere), str(app.parent / "logs"))
+    assert instance.tail_log("demo", 10) == ""
+
+
+def test_marker_is_not_written_through_a_symlinked_bin(app, tmp_path):
+    victim = tmp_path / "victim"
+    victim.mkdir(mode=0o700)
+    app.rmdir()
+    os.symlink(str(victim), str(app))
+    with pytest.raises(RuntimeError, match="symlinked"):
+        proxy._store_domain("demo", "demo.example.com")
+    with pytest.raises(RuntimeError, match="symlinked"):
+        proxy._store_owner("demo", "aapanel")
+    assert os.listdir(str(victim)) == [] and os.stat(str(victim)).st_mode & 0o777 == 0o700
+
+
+def test_secure_perms_tolerates_a_missing_conf_and_skips_hardlinks(tmp_path):
+    hardening.secure_perms(str(tmp_path / "nothing-here"))
+    base = tmp_path / "base"
+    (base / "conf").mkdir(parents=True)
+    victim = tmp_path / "victim"
+    victim.write_text("x")
+    os.chmod(str(victim), 0o644)
+    os.link(str(victim), str(base / "conf" / "linked.xml"))
+    hardening.secure_perms(str(base))
+    assert os.stat(str(victim)).st_mode & 0o777 == 0o644

@@ -186,3 +186,20 @@ def test_rotate_keep_zero_discards(tmp_path, monkeypatch):
     big = _make_log(inst, "app1", "catalina.out", BIG)
     assert logrotate.rotate(max_mb=1, keep=0)["count"] == 1
     assert os.listdir(os.path.dirname(big)) == ["catalina.out"] and os.path.getsize(big) == 0
+
+
+def test_purge_sweeps_temps_left_by_a_killed_run(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    live = _make_log(inst, "app1", "catalina.out", 50)
+    ldir = os.path.dirname(live)
+    stale = os.path.join(ldir, ".catalina.out.0123456789abcdef.tmp")
+    fresh = os.path.join(ldir, ".catalina.out.fedcba9876543210.tmp")
+    other = os.path.join(ldir, ".hidden.tmp")
+    for p in (stale, fresh, other):
+        open(p, "wb").write(b"x")
+    old = time.time() - 7200
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    logrotate.purge(days=30)
+    assert not os.path.exists(stale)
+    assert os.path.exists(fresh) and os.path.exists(other) and os.path.exists(live)

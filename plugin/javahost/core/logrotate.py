@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -177,6 +178,23 @@ def rotate(max_mb: int = None, keep: int = None) -> Dict:
 # --------------------------------------------------------------------------- #
 # purge (delete rotated *.gz older than retention)
 # --------------------------------------------------------------------------- #
+_TEMP_RE = re.compile(r"^\..+\.[0-9a-f]{16}\.tmp$")
+
+
+def _sweep_stale_temps(dir_fd: int, older_than: float = 3600.0) -> None:
+    """Remove rotation temp files left by a run that was killed mid-gzip."""
+    now = time.time()
+    for name in os.listdir(dir_fd):
+        if not _TEMP_RE.match(name):
+            continue
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except OSError:
+            continue
+        if _is_plain_file(st) and now - st.st_mtime > older_than:
+            _unlink(dir_fd, name)
+
+
 def purge(days: int = None) -> Dict:
     """Delete rotated `*.gz` older than `days`. Never touches a live log.
     `days <= 0` means purge ALL rotated artifacts (manual 'purge now')."""
@@ -186,6 +204,7 @@ def purge(days: int = None) -> Dict:
     cutoff = time.time() - days * 86400 if days > 0 else None
     removed, freed = 0, 0
     for _path, dir_fd in _log_dirs():
+        _sweep_stale_temps(dir_fd)
         for name, st in _entries(dir_fd, rotated=True):
             if cutoff is not None and st.st_mtime >= cutoff:
                 continue

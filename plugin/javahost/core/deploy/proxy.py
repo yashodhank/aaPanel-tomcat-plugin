@@ -516,9 +516,18 @@ def _owner_marker(app: str) -> str:
     return os.path.join(instance.base_path(app), "bin", "site.owner")
 
 
+def _marker_dir(path: str) -> None:
+    """The marker lives in <app>/bin, inside a tree the app user owns. Refuse to
+    write (and chmod) through a `bin` that has been swapped for a link."""
+    d = os.path.dirname(path)
+    if os.path.islink(d):
+        raise RuntimeError("refusing to write through a symlinked directory: %s" % d)
+    os.makedirs(d, exist_ok=True)
+
+
 def _store_domain(app: str, domain: str) -> None:
     path = _site_marker(app)
-    fs.ensure_dir(os.path.dirname(path))
+    _marker_dir(path)
     fs.atomic_write(path, domain + "\n", mode=0o644)
 
 
@@ -526,7 +535,7 @@ def _store_owner(app: str, owner: str) -> None:
     """Record who owns the public site config: 'aapanel' or 'javahost'."""
     owner = str(owner or "").strip().lower() or "aapanel"
     path = _owner_marker(app)
-    fs.ensure_dir(os.path.dirname(path))
+    _marker_dir(path)
     fs.atomic_write(path, owner + "\n", mode=0o644)
 
 

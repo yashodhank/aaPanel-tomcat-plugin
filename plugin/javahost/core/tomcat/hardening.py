@@ -54,6 +54,8 @@ def secure_perms(catalina_base: str, user: str = "www") -> None:
     # conf/ belongs to the app user and this runs as root: chmod through a
     # descriptor opened O_NOFOLLOW so a planted link cannot redirect it.
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    if not os.path.isdir(conf):
+        return
     for _root, _dirs, fns, dir_fd in os.fwalk(conf, follow_symlinks=False):
         for fn in fns:
             mode = 0o600 if fn in ("tomcat-users.xml",) else 0o640
@@ -62,7 +64,8 @@ def secure_perms(catalina_base: str, user: str = "www") -> None:
             except OSError:
                 continue
             try:
-                if stat.S_ISREG(os.fstat(fd).st_mode):
+                st = os.fstat(fd)
+                if stat.S_ISREG(st.st_mode) and st.st_nlink == 1:   # not a hardlink elsewhere
                     os.fchmod(fd, mode)
             except OSError:
                 pass
