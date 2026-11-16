@@ -79,3 +79,63 @@ def test_prune_keeps_newest_local(tmp_path, monkeypatch):
     assert len(out["removed"]) == 2
     remaining = sorted(os.listdir(broot))
     assert remaining == names[2:]  # two newest kept
+
+
+@pytest.mark.parametrize("bad", [
+    "x;id>/tmp/pwn;#",                       # shell metacharacters
+    "p\n* * * * * root id",                  # a second cron line
+    "a b", "a%b", "$(id)", "`id`", "../x", "a|b", "a&b", "a>b",
+])
+def test_set_schedule_rejects_unsafe_remote_ids(sched, bad):
+    with pytest.raises(ValueError):
+        schedule.set_schedule("app1", "0 2 * * *", remotes=[bad], keep=1)
+    assert schedule.list_schedules() == []           # nothing persisted
+    assert not os.path.exists(schedule.CRON_PATH)    # nothing rendered
+
+
+def test_set_schedule_rejects_unsafe_remote_csv(sched):
+    with pytest.raises(ValueError):
+        schedule.set_schedule("app1", "0 2 * * *", remotes="ok,x;id", keep=1)
+    assert schedule.set_schedule("app1", "0 2 * * *", remotes="all")["remotes"] == ["all"]
+
+
+def test_render_skips_tampered_stored_entries(sched):
+    # schedules.json is re-validated on render: a hostile stored entry must not
+    # reach /etc/cron.d, and must not take the other apps' schedules down with it.
+    schedule._write({
+        "good": {"cron": "0 1 * * *", "remotes": ["s3"], "keep": 2},
+        "evil": {"cron": "0 1 * * *", "remotes": ["x;id>/tmp/pwn;#"], "keep": 1},
+        "bad;app": {"cron": "0 1 * * *", "remotes": [], "keep": 1},
+        "badcron": {"cron": "* * * * * root id", "remotes": [], "keep": 1},
+        "hugekeep": {"cron": "0 1 * * *", "remotes": [], "keep": float("inf")},
+        "strremote": {"cron": "0 4 * * *", "remotes": "s3,minio", "keep": 0},
+    })
+    schedule._regenerate(schedule._read())
+    body = open(schedule.CRON_PATH).read()
+    assert "--app good --remotes s3 --keep 2" in body
+    assert "pwn" not in body and "bad;app" not in body and "root id" not in body
+    assert "--app strremote --remotes s3,minio" in body      # a csv string is not split per character
+    assert "hugekeep" not in body
+    assert len([l for l in body.splitlines() if " root " in l]) == 2
+
+
+@pytest.mark.parametrize("bad", [
+    "99 99 99 99 99", "60 0 * * *", "0 24 * * *", "0 0 0 * *", "0 0 32 * *",
+    "0 0 * 0 *", "0 0 * 13 *", "0 0 * * 8", "*/0 * * * *", "- * * * *",
+    ", * * * *", "9- * * * *", "5-2 * * * *", "1,,2 * * * *", "*/ * * * *",
+    "1/2/3 * * * *",
+    "5/15 * * * *",                 # step after a single number: Debian cron rejects it
+    "\u0660 \u0662 * * *",          # non-ASCII digits pass \d and int() but not cron
+])
+def test_validate_cron_rejects_what_cron_rejects(bad):
+    # one line cron cannot parse makes the daemon ignore the whole shared file
+    with pytest.raises(ValueError):
+        schedule.validate_cron(bad)
+
+
+@pytest.mark.parametrize("good", [
+    "0 2 * * *", "*/15 * * * *", "0 0-23/2 * * 1-5", "59 23 31 12 7",
+    "0,30 8-18 1,15 * 0", "5 4 * * 0",
+])
+def test_validate_cron_accepts_valid(good):
+    assert schedule.validate_cron(good) == good
