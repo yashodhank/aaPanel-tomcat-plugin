@@ -44,8 +44,11 @@ Restore enforces the same limits, so an archive that is created can always be
 restored on the same server.
 
 For larger apps, raise the limits in **Settings → Backup size limits**. Backup
-and restore both read them. Two things to keep in mind:
+and restore both read them. A limit cannot be set below its default. Things to
+keep in mind:
 
+- If you lower a limit again, backups taken above it cannot be restored until
+  you raise it back.
 - To restore a large backup on another server, set the same limits there first.
 - Uploads to S3-compatible storage are single requests, capped at 5 GB by the
   storage service. An archive over 5 GB is kept locally but cannot be uploaded.
