@@ -138,12 +138,14 @@ def log_purge_days(default: int = 30) -> int:
 
 
 # Backup size limits an operator may save, as (lowest, highest) accepted value.
+# The lowest is the built-in default: the setting exists to raise a limit for a
+# large app, and going below the default would strand ordinary backups.
 # Unset means "use the built-in default" (core/backup/archive.py).
 BACKUP_LIMIT_RANGES = {
-    "backup_max_files": (1000, 5000000),
-    "backup_max_file_gb": (1, 1024),
-    "backup_max_total_gb": (1, 4096),
-    "backup_max_archive_gb": (1, 4096),
+    "backup_max_files": (50000, 5000000),
+    "backup_max_file_gb": (2, 1024),
+    "backup_max_total_gb": (8, 4096),
+    "backup_max_archive_gb": (2, 4096),
 }
 
 
@@ -166,7 +168,8 @@ def set_backup_limits(values: dict) -> dict:
             clean[key] = None
             continue
         if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
-            raise ValueError("%s must be a whole number from %d to %d" % (key, lo, hi))
+            raise ValueError("%s must be a whole number from %d to %d"
+                             % (key[len("backup_"):], lo, hi))
         clean[key] = v
     return update(clean)
 

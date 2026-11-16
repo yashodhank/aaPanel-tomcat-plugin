@@ -248,7 +248,7 @@ def pack(members: Iterable[Tuple[str, str]], dest_targz: str,
     return dest_targz
 
 
-def _check_compressed_size(source) -> None:
+def check_compressed_size(source) -> None:
     try:
         if hasattr(source, "fileno"):
             compressed_size = os.fstat(source.fileno()).st_size
@@ -278,7 +278,7 @@ def _validate_member(base_real: str, member: tarfile.TarInfo) -> None:
 
 def _preflight(open_file, base_real: str) -> int:
     """Validate the entire archive before materializing the first member."""
-    _check_compressed_size(open_file)
+    check_compressed_size(open_file)
     count = 0
     total_size = 0
     open_file.seek(0)
@@ -364,7 +364,7 @@ def read_member_bytes(targz: str, arcname: str):
     The member name is matched exactly; no extraction to disk. Defensive."""
     try:
         with open(targz, "rb") as open_file:
-            _check_compressed_size(open_file)
+            check_compressed_size(open_file)
             with tarfile.open(fileobj=open_file, mode="r:gz") as tf:
                 total_size = 0
                 for count, m in enumerate(tf, start=1):

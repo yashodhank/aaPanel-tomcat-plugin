@@ -746,7 +746,11 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         raise FileNotFoundError("archive not found: %r" % archive_path)
     manifest = _read_manifest_file(archive_path)
     if not manifest:
-        raise RuntimeError("archive has no manifest.json (not a JavaHost backup)")
+        # an archive over the size limits also reads as "no manifest": name that
+        archive.check_compressed_size(archive_path)
+        raise RuntimeError("archive has no readable manifest.json: it is not a JavaHost "
+                           "backup, or it holds more than the backup size limits allow "
+                           "(Settings, Backup size limits)")
     src_app = manifest.get("app")
     itype = manifest.get("type") or "war"
     new_mode = as_name is not None

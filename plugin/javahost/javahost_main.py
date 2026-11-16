@@ -777,16 +777,22 @@ class javahost_main(object):
             else:
                 vals = {}
                 for k in keys:
-                    raw = panel.attr(get, k[len("backup_"):], None)
-                    if raw is None or str(raw).strip() == "":
-                        continue
-                    if not str(raw).strip().isdigit():
-                        return panel.err("%s must be a whole number" % k[len("backup_"):])
-                    vals[k] = int(str(raw).strip())
-                cur = backuparchive.limits()
-                if vals.get("backup_max_total_gb", cur["max_total_gb"]) < \
-                        vals.get("backup_max_file_gb", cur["max_file_gb"]):
-                    return panel.err("max_total_gb cannot be smaller than max_file_gb")
+                    field = k[len("backup_"):]
+                    raw = panel.attr(get, field, None)
+                    if raw is None:
+                        continue                    # not sent: leave as it is
+                    raw = str(raw).strip()
+                    # ASCII digits only, short enough that int() cannot be abused
+                    if not (0 < len(raw) <= 9 and raw.isdigit() and raw.encode("utf-8").isdigit()):
+                        return panel.err("%s must be a whole number" % field)
+                    vals[k] = int(raw)
+                if not vals:
+                    return panel.err("no limit was given")
+                if "backup_max_total_gb" in vals or "backup_max_file_gb" in vals:
+                    cur = backuparchive.limits()
+                    if vals.get("backup_max_total_gb", cur["max_total_gb"]) < \
+                            vals.get("backup_max_file_gb", cur["max_file_gb"]):
+                        return panel.err("max_total_gb cannot be smaller than max_file_gb")
                 config.set_backup_limits(vals)
                 panel.log("SetBackupLimits", str(vals))
             return self.GetBackupLimits()
