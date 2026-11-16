@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import urllib.request
 from typing import Optional
 
@@ -24,18 +25,25 @@ _UA = "JavaHost/1.0 (+https://github.com/yashodhank/aaPanel-tomcat-plugin)"
 def _http_get(url: str, dest: str, timeout: int = 300) -> None:
     """Download url -> dest. Prefer curl (proxy/retry friendly), fall back to urllib.
     A real User-Agent is sent — some CDNs/APIs (e.g. Adoptium) 403 the default
-    python-urllib agent."""
+    python-urllib agent.
+
+    HTTPS only, redirects included: a mirror must not be able to downgrade the
+    transfer to plain http."""
+    if not str(url or "").startswith("https://"):
+        raise ValueError("refusing non-https download: %r" % url)
     curl = shell.which("curl")
     if curl:
         shell.run(
-            [curl, "-fSL", "-A", _UA, "--retry", "3", "--retry-delay", "5",
+            [curl, "-fSL", "--proto", "=https", "--proto-redir", "=https",
+             "-A", _UA, "--retry", "3", "--retry-delay", "5",
              "--max-time", str(timeout), "-o", dest, url],
             timeout=timeout + 30,
         )
         return
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as f:  # noqa: S310
-        # url is composed from our own version registry (https Apache/Adoptium), not user input
+        if not r.geturl().startswith("https://"):
+            raise RuntimeError("download redirected off https: %s" % r.geturl())
         while True:
             chunk = r.read(1 << 16)
             if not chunk:
@@ -53,7 +61,7 @@ def sha512_file(path: str) -> str:
 
 def verify_sha512(path: str, expected_hex: str) -> None:
     actual = sha512_file(path)
-    expected = (expected_hex or "").strip().split()[0].lower()
+    expected = ((expected_hex or "").split() or [""])[0].lower()
     if actual.lower() != expected:
         raise RuntimeError(
             "SHA-512 mismatch for %s\n  expected %s\n  actual   %s"
@@ -62,8 +70,7 @@ def verify_sha512(path: str, expected_hex: str) -> None:
 
 
 def verify_gpg(path: str, sig_path: str, keyring: str) -> None:
-    """Verify detached signature against a keyring. No-op-with-warning only if
-    gpg is unavailable AND caller already verified sha512 (decided by caller)."""
+    """Verify a detached signature against a keyring. Raises if gpg is missing."""
     gpg = shell.which("gpg")
     if not gpg:
         raise RuntimeError("gpg not installed; cannot verify OpenPGP signature for %s" % path)
@@ -87,28 +94,45 @@ def fetch_verified(
       2. download from url.
     Verification (must satisfy at least SHA-512):
       - sha512 (explicit hex) OR sha512_url (download the .sha512), required.
-      - sig_url + keyring -> additionally verify OpenPGP signature.
+      - sig_url -> the OpenPGP signature is REQUIRED too, so `keyring` must be
+        given. A missing keyring is an error, never a silent skip.
+
+    A download lands under a temporary name and is only renamed to its final
+    name after every check passed, so a path returned by (or left behind by)
+    this function is always a verified artifact. A failed or interrupted
+    download leaves nothing behind.
     """
     fs.ensure_dir(dest_dir)
     name = os.path.basename(url.split("?")[0]) or "artifact"
-    dest = local_file if local_file else os.path.join(dest_dir, name)
-
-    if not local_file:
-        _http_get(url, dest)
-
-    expected = sha512
-    if not expected and sha512_url:
-        sums = os.path.join(dest_dir, name + ".sha512")
-        _http_get(sha512_url, sums)
-        with open(sums, "r") as f:
-            expected = f.read()
-    if not expected:
+    if sig_url and not keyring:
+        raise RuntimeError("no OpenPGP keyring for %s; refusing to skip signature "
+                           "verification" % name)
+    if not (sha512 or sha512_url):
         raise RuntimeError("no SHA-512 provided for %s; refusing to use unverified artifact" % name)
-    verify_sha512(dest, expected)
 
-    if sig_url and keyring:
-        sig = os.path.join(dest_dir, name + ".asc")
-        _http_get(sig_url, sig)
-        verify_gpg(dest, sig, keyring)
+    work = fs.mkdtemp_in(dest_dir, ".fetch-")
+    try:
+        path = local_file or os.path.join(work, name)
+        if not local_file:
+            _http_get(url, path)
 
-    return dest
+        expected = sha512
+        if not expected:
+            sums = os.path.join(work, name + ".sha512")
+            _http_get(sha512_url, sums)
+            with open(sums, "r") as f:
+                expected = f.read()
+        verify_sha512(path, expected)
+
+        if sig_url:
+            sig = os.path.join(work, name + ".asc")
+            _http_get(sig_url, sig)
+            verify_gpg(path, sig, keyring)
+
+        if local_file:
+            return local_file
+        dest = os.path.join(dest_dir, name)
+        os.replace(path, dest)
+        return dest
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
