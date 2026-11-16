@@ -142,7 +142,9 @@ def test_restore_as_new_round_trip(env):
     assert os.path.isfile(os.path.join(base, "webapps", "ROOT", "index.jsp"))
     assert open(os.path.join(base, "webapps", "ROOT", "index.jsp")).read() == "PAYLOAD-OK"
     assert fs.is_managed(base)                                   # marker re-applied
-    assert not os.path.isdir(os.path.join(base, "logs"))        # logs were never archived
+    # logs are never archived, but Tomcat cannot start without logs/work/temp
+    assert os.listdir(os.path.join(base, "logs")) == []
+    assert os.path.isdir(os.path.join(base, "work")) and os.path.isdir(os.path.join(base, "temp"))
     assert not os.path.exists(os.path.join(base, "bin", "site.domain"))  # site dropped (no domain)
     # server.xml now points at the reallocated port
     sx = open(os.path.join(base, "conf", "server.xml")).read()
@@ -500,3 +502,138 @@ def test_delete_backup_local_only(env, monkeypatch):
     assert out["removed"] is True
     assert not os.path.isfile(res["archive"]) and not os.path.isfile(res["archive"] + ".json")
     assert called["n"] == 0                                   # remote delete NOT called for local-only
+
+
+# --------------------------------------------------------------------------- #
+# in-place restore is transactional: the live app is never lost to a failed one
+# --------------------------------------------------------------------------- #
+def _live_app(iroot, name="live"):
+    base = _mk_app(iroot, name, port=8090)
+    arc = store.backup_app(name)["archive"]                 # archive says PAYLOAD-OK
+    payload = os.path.join(base, "webapps", "ROOT", "index.jsp")
+    open(payload, "w").write("LIVE-NEWER")                   # the app moved on since
+    os.makedirs(os.path.join(base, "uploads"))
+    open(os.path.join(base, "uploads", "user.bin"), "w").write("USER-DATA")   # never archived
+    return base, arc, payload
+
+
+def _no_leftovers(iroot):
+    aside = os.path.join(os.path.dirname(iroot), ".restore-aside")
+    return not os.path.isdir(aside) or os.listdir(aside) == []
+
+
+def _assert_live_untouched(base, payload):
+    assert open(payload).read() == "LIVE-NEWER"
+    assert open(os.path.join(base, "uploads", "user.bin")).read() == "USER-DATA"
+    assert open(os.path.join(base, "logs", "catalina.out")).read() == "noise"
+    assert fs.is_managed(base)
+
+
+@pytest.mark.parametrize("failing", ["install_unit", "write_setenv", "enable_start"])
+def test_failed_overwrite_restore_puts_the_live_app_back(env, monkeypatch, failing):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    calls = {"n": 0}
+    started = []
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("%s blew up" % failing)
+        return "/unit"
+    monkeypatch.setattr(store.service, failing, flaky)
+    if failing != "enable_start":
+        monkeypatch.setattr(store.service, "enable_start", lambda app: started.append(app))
+
+    with pytest.raises(RuntimeError, match="previous app was put back"):
+        store.restore(arc)
+
+    _assert_live_untouched(base, payload)
+    assert calls["n"] == 2 or started == ["live"]             # old service was re-installed/started
+    assert _no_leftovers(iroot)
+
+
+def test_overwrite_restore_aborts_when_the_app_cannot_be_stopped(env, monkeypatch):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+
+    def cannot_stop(app, what):
+        raise RuntimeError("systemctl stop timed out")
+    monkeypatch.setattr(store.service, "action", cannot_stop)
+    with pytest.raises(RuntimeError, match="restore aborted"):
+        store.restore(arc)
+    _assert_live_untouched(base, payload)
+    assert _no_leftovers(iroot)
+
+
+def test_unusable_archive_is_rejected_before_the_live_app_is_stopped(env, monkeypatch):
+    iroot, _ = env
+    base, _arc, payload = _live_app(iroot)
+    # an archive of the same app whose setenv lost JAVA_HOME / CATALINA_HOME
+    other = _mk_app(iroot, "donor", port=8091)
+    open(os.path.join(other, "bin", "setenv.sh"), "w").write('export JAVA_OPTS="-Xmx64m"\n')
+    bad = store.backup_app("donor")["archive"]
+    man = store._read_manifest_file(bad)
+    man["app"] = "live"
+    monkeypatch.setattr(store, "_read_manifest_file", lambda p: man)
+    stops = []
+    monkeypatch.setattr(store.service, "action", lambda app, what: stops.append((app, what)))
+    with pytest.raises(RuntimeError, match="nothing was changed"):
+        store.restore(bad)
+    assert stops == []
+    _assert_live_untouched(base, payload)
+
+
+def test_archive_with_an_ajp_connector_is_rejected_before_cutover(env, monkeypatch):
+    iroot, _ = env
+    base, _arc, payload = _live_app(iroot)
+    donor = _mk_app(iroot, "donor", port=8091)
+    open(os.path.join(donor, "conf", "server.xml"), "w").write(
+        '<Server><Service><Connector port="8091"/>'
+        '<Connector protocol="AJP/1.3" port="8009"/></Service></Server>')
+    bad = store.backup_app("donor")["archive"]
+    man = store._read_manifest_file(bad)
+    man["app"] = "live"
+    monkeypatch.setattr(store, "_read_manifest_file", lambda p: man)
+    with pytest.raises(RuntimeError, match="AJP"):
+        store.restore(bad)
+    _assert_live_untouched(base, payload)
+
+
+def test_successful_overwrite_restore_keeps_data_the_backup_does_not_cover(env, monkeypatch):
+    iroot, _ = env
+    base, arc, payload = _live_app(iroot)
+    open(os.path.join(base, "work", "cache.bin"), "w").write("stale compiled jsp")
+    from core.backup import schedule as backupschedule
+    from core.deploy import proxy as _proxy
+
+    def forbidden(*a, **k):
+        raise AssertionError("an in-place restore must not delete the app, its site or its schedule")
+    monkeypatch.setattr(instance, "delete", forbidden)
+    monkeypatch.setattr(_proxy, "remove_site", forbidden)
+    monkeypatch.setattr(backupschedule, "remove_schedule", forbidden)
+    monkeypatch.setattr(store.service, "remove_unit", forbidden)
+
+    res = store.restore(arc)
+    assert res["restored"] and res["mode"] == "overwrite" and res["port"] == 8090
+    assert open(payload).read() == "PAYLOAD-OK"                                  # from the archive
+    assert open(os.path.join(base, "uploads", "user.bin")).read() == "USER-DATA"  # carried over
+    assert open(os.path.join(base, "logs", "catalina.out")).read() == "noise"     # carried over
+    assert os.listdir(os.path.join(base, "work")) == []                           # caches regenerated
+    assert os.path.isdir(os.path.join(base, "temp"))
+    assert _no_leftovers(iroot)
+    assert sorted(os.listdir(iroot)) == ["live"]                                  # no stray "app"
+
+
+def test_restore_never_falls_back_to_unsanitized_java_opts(env, monkeypatch):
+    iroot, _ = env
+    base = _mk_app(iroot, "src", port=8090)
+    open(os.path.join(base, "bin", "setenv.sh"), "w").write(
+        'export JAVA_HOME="/opt/jdk-17"\nexport CATALINA_HOME="/opt/tomcat/10"\n'
+        'export JAVA_OPTS="-XX:OnOutOfMemoryError=/tmp/x.sh"\n')
+    arc = store.backup_app("src")["archive"]
+    monkeypatch.setattr(store, "_sanitize_restore_java_opts", lambda raw, home: "")
+    seen = []
+    monkeypatch.setattr(store.service, "write_setenv", lambda *a, **k: seen.append(a[4]))
+    store.restore(arc, as_name="clone")
+    assert seen == [[]]
