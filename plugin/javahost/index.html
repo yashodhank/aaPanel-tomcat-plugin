@@ -1499,10 +1499,16 @@
     {key:'tomcats', label:'Remove Tomcats',               field:'tomcats'},
     {key:'sites',   label:'Remove reverse-proxy sites',   field:'sites'}
   ];
+  // WipePreview returns {apps:{count,items:[...]}, jdks:{...}, ...}
+  function wipeItems(p, cat){
+    var v = p && p[cat.field];
+    if(Array.isArray(v)) return v;
+    return (v && Array.isArray(v.items)) ? v.items : [];
+  }
   function wipeCount(p, cat){
-    if(p && p.counts && p.counts[cat.field] != null) return Number(p.counts[cat.field]) || 0;
-    var arr = p && p[cat.field];
-    return Array.isArray(arr) ? arr.length : 0;
+    var v = p && p[cat.field];
+    if(v && !Array.isArray(v) && v.count != null) return Number(v.count) || 0;
+    return wipeItems(p, cat).length;
   }
   function refreshDangerZone(btn){
     var body = $('jh-danger-body'); if(!body) return;
@@ -1676,7 +1682,7 @@
         '<label for="'+cid+'" style="display:flex;align-items:center;gap:var(--s2);cursor:pointer;font-weight:600;color:var(--text)">'+
           '<input type="checkbox" id="'+cid+'" data-wipe-cat="'+cat.key+'" style="width:auto;flex:none">'+
           esc(cat.label)+' <span class="jh-badge neutral">'+n+'</span></label>'+
-        previewList(p[cat.field], 'Nothing to remove')+
+        previewList(wipeItems(p, cat), 'Nothing to remove')+
       '</div>';
     }).join('');
 
@@ -1731,36 +1737,66 @@
       busy(btn, false);
       var p = payload(r);
       var res2 = $('jh-wipe-result');
-      if(failed(r)){
+      // failed() treats a payload with ok:false as a failed call, but a wipe that
+      // ran and left items behind answers exactly that, with the per-step detail.
+      var ran = !!(p && p.steps);
+      if(!ran && failed(r)){
         if(res2) res2.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
         toast(errText(p), 'err', 'Wipe failed');
         return;
       }
+      if(res2) res2.innerHTML = '';
       showWipeSummary(p, isFull);
-      toast('Wipe completed', 'ok');
+      if(wipeProblems(p).length || (p && p.ok === false)) toast('Some items are still in place', 'err', 'Wipe incomplete');
+      else toast('Wipe completed', 'ok');
       refresh();                 // re-pull status (apps/runtimes now changed)
       refreshDangerZone();       // re-fetch the preview (counts now zeroed)
     });
   }
+  // Wipe returns {ok, steps:{apps:{removed:[],errors:{},skipped:{}}, ..., data_root:{removed:bool,errors:{}}}}
+  var WIPE_STEPS = [['apps','Apps'],['sites','Sites'],['tomcats','Tomcats'],['jdks','JDKs'],['data_root','Plugin data directory']];
+  function wipeProblems(p){
+    var out = [], steps = (p && p.steps) || {};
+    WIPE_STEPS.forEach(function(row){
+      var st = steps[row[0]]; if(!st) return;
+      Object.keys(st.errors || {}).forEach(function(k){
+        out.push(row[1]+' — '+(k === row[0] ? '' : k+': ')+st.errors[k]);
+      });
+      Object.keys(st.skipped || {}).forEach(function(k){
+        var users = st.skipped[k];
+        out.push(row[1]+' — '+k+' skipped, still in use by '+(Array.isArray(users) ? users.join(', ') : users));
+      });
+    });
+    return out;
+  }
   function summaryLine(p, key, label){
-    var v = (p && p.summary && p.summary[key] != null) ? p.summary[key]
-          : (p && p[key] != null ? p[key] : null);
-    if(v == null) return '';
-    if(Array.isArray(v)) v = v.length;
+    var st = p && p.steps && p.steps[key];
+    if(!st) return '';
+    var v = Array.isArray(st.removed) ? st.removed.length : (st.removed ? 'yes' : 'no');
     return '<div class="jh-kv"><span>'+esc(label)+'</span><span class="jh-muted">'+esc(v)+'</span></div>';
   }
   function showWipeSummary(p, isFull){
     var rows = summaryLine(p,'apps','Apps removed') + summaryLine(p,'jdks','JDKs removed') +
-      summaryLine(p,'tomcats','Tomcats removed') + summaryLine(p,'sites','Sites removed');
-    var fullNote = isFull
+      summaryLine(p,'tomcats','Tomcats removed') + summaryLine(p,'sites','Sites removed') +
+      summaryLine(p,'data_root','Plugin data directory removed');
+    var problems = wipeProblems(p);
+    var incomplete = problems.length > 0 || (p && p.ok === false);
+    var head = incomplete
+      ? '<div class="jh-alert danger" role="alert" style="margin-bottom:var(--s3)">'+ic('warn')+
+          '<div><b>The wipe left some items in place:</b>'+
+          '<ul style="margin:6px 0 0;padding-left:var(--s5)">'+
+          problems.map(function(t){ return '<li>'+esc(t)+'</li>'; }).join('')+'</ul>'+
+          'Items still in use are skipped by design. For anything else, fix the cause and run the wipe again.</div></div>'
+      : '<div class="jh-alert" style="margin-bottom:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
+          '<div>The wipe finished.</div></div>';
+    var fullNote = (isFull && !incomplete)
       ? '<div class="jh-alert" style="margin-top:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
         '<div><b>Plugin data removed.</b> You may now uninstall the JavaHost plugin from the aaPanel App Store.</div></div>'
       : '';
     openModal({
-      title:'Wipe complete', sub:'Summary of what was removed',
-      body:
-        '<div class="jh-alert" style="margin-bottom:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
-          '<div>The destructive wipe finished.</div></div>'+
+      title: incomplete ? 'Wipe incomplete' : 'Wipe complete',
+      sub: incomplete ? 'What was removed and what is still in place' : 'Summary of what was removed',
+      body: head +
         (rows ? '<div class="jh-rows">'+rows+'</div>' : '<div class="jh-hint">No per-category counts were reported by the server.</div>')+
         fullNote,
       footer: [ mkBtn('Close', 'ghost', closeModal) ]
@@ -1858,7 +1894,7 @@
   });
   document.addEventListener('keydown', function(e){
     if(!$('jh-overlay').classList.contains('open')) return;
-    if(e.key === 'Escape'){ closeModal(); return; }
+    if(e.key === 'Escape'){ e.preventDefault(); e.stopImmediatePropagation(); closeModal(); return; }
     // focus trap: keep Tab / Shift+Tab inside the dialog
     if(e.key === 'Tab'){
       var nodes = modalFocusables();
@@ -2175,6 +2211,7 @@
         }
         return;
       }
+      if(p && p.removed === false){ toast('No such destination — it may already be gone', 'err', 'Nothing deleted'); refreshStorageDestinations(); return; }
       toast('Destination deleted', 'ok'); refreshStorageDestinations();
     });
   }
@@ -2246,6 +2283,7 @@
         var go=$('rs-go'), nm=$('rs-name'), cf=$('rs-confirm'), wrap=$('rs-confirm-wrap');
         function sync(){
           var asNew = nm.value.trim() !== '';
+          if(asNew) cf.value = '';        // hidden now: retype it if the name is cleared again
           wrap.style.display = asNew ? 'none' : '';
           go.disabled = asNew ? false : (cf.value.trim() !== 'RESTORE');
         }
@@ -2277,27 +2315,42 @@
       title:'Restore from file', sub:'Upload a JavaHost backup .tar.gz',
       body:'<div class="jh-alert info" style="margin-bottom:var(--s4)">'+ic('info')+
         '<div>The archive is validated and unpacked safely (path-traversal, symlink and '+
-        'device entries are rejected). Leave the name empty to overwrite the original app, '+
-        'or enter a name to restore as a new app.</div></div>'+
+        'device entries are rejected). Leave the name empty to <b>overwrite</b> the original app '+
+        '(it is stopped and replaced) — that requires typing <code>RESTORE</code> to confirm. '+
+        'Enter a name to restore as a new app.</div></div>'+
         '<div class="jh-form">'+
           '<div class="jh-field wide"><label for="ru-file">Backup archive (.tar.gz)</label><input id="ru-file" type="file" accept=".gz,.tar.gz,application/gzip"></div>'+
           '<div class="jh-field wide"><label for="ru-name">Restore as new name (optional)</label><input id="ru-name" type="text" placeholder="restored-app" autocomplete="off"></div>'+
           '<div class="jh-field wide"><label for="ru-domain">Domain for the new app (optional)</label><input id="ru-domain" type="text" placeholder="app.example.com" autocomplete="off"></div>'+
+          '<div class="jh-field wide" id="ru-confirm-wrap"><label for="ru-confirm">Type <code>RESTORE</code> to confirm overwrite</label>'+
+            '<input id="ru-confirm" type="text" placeholder="RESTORE" autocomplete="off" autocapitalize="characters"></div>'+
         '</div>',
+      onMount: function(){
+        var go=$('ru-go'), nm=$('ru-name'), cf=$('ru-confirm'), wrap=$('ru-confirm-wrap');
+        function sync(){
+          if(go.getAttribute('data-uploading')) return;   // busy: do not re-enable mid-upload
+          var asNew = nm.value.trim() !== '';
+          if(asNew) cf.value = '';        // hidden now: retype it if the name is cleared again
+          wrap.style.display = asNew ? 'none' : '';
+          go.disabled = asNew ? false : (cf.value.trim() !== 'RESTORE');
+        }
+        nm.addEventListener('input', sync); cf.addEventListener('input', sync); sync();
+      },
       footer:[ mkBtn('Cancel', 'ghost', closeModal),
-        mkBtn('Upload & restore', 'accent', function(b){
+        (function(){ var ub=mkBtn('Upload & restore', 'accent', function(b){
           var fi = $('ru-file');
           if(!fi || !fi.files || !fi.files[0]){ toast('Choose a .tar.gz file', 'err'); return; }
           var as = $('ru-name').value.trim(), dom = $('ru-domain').value.trim();
+          b.setAttribute('data-uploading', '1');
           busy(b, true);
           stageUpload(fi, function(tmp, err){
-            if(err || !tmp){ busy(b, false); toast(err || 'Upload failed', 'err'); return; }
+            if(err || !tmp){ b.removeAttribute('data-uploading'); busy(b, false); toast(err || 'Upload failed', 'err'); return; }
             var data = {tmp:tmp}; if(as) data.as_name = as; if(dom) data.domain = dom;
             closeModal();
             startJob('RestoreUpload', data, 'Restore '+(as||'upload'), b,
               'restore:'+(as||fi.files[0].name));
           });
-        }, 'upload') ]
+        }, 'upload'); ub.id='ru-go'; ub.disabled=true; return ub; })() ]
     });
   }
 
@@ -3480,7 +3533,10 @@
   document.addEventListener('keydown', function(e){
     if(!$('jh-drawer-ov').classList.contains('open')) return;
     if($('jh-overlay').classList.contains('open')) return;   // modal on top owns the keys
-    if(e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); closeDrawer(); return; }
+    if(e.key === 'Escape'){
+      if(document.querySelector('.jh-menu-pop.open')) return;      // an open menu closes first
+      e.preventDefault(); e.stopImmediatePropagation(); closeDrawer(); return;
+    }
     if(e.key === 'Tab'){
       var nodes = drawerFocusables();
       if(!nodes.length){ e.preventDefault(); $('jh-drawer-x').focus(); return; }
@@ -3539,7 +3595,7 @@
     var pop = e.target.closest && e.target.closest('.jh-menu-pop.open');
     if(!pop) return;
     var items = menuItems(pop), i = items.indexOf(document.activeElement);
-    if(e.key === 'Escape'){ e.preventDefault(); closeMenu(pop, true); }
+    if(e.key === 'Escape'){ e.preventDefault(); e.stopImmediatePropagation(); closeMenu(pop, true); }
     else if(e.key === 'ArrowDown'){ e.preventDefault(); items[(i + 1) % items.length].focus(); }
     else if(e.key === 'ArrowUp'){ e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
     else if(e.key === 'Home'){ e.preventDefault(); items[0].focus(); }
@@ -3995,7 +4051,12 @@
       if(ver) ver.innerHTML = (e.versions||[]).map(function(v){
         return '<option value="'+esc(v)+'">'+esc(v)+'</option>'; }).join('') || '<option value="">(any)</option>';
       var port = $('d-port');
-      if(port){ port.placeholder = String(e.default_port||''); if(!port.value) port.value = e.default_port||''; }
+      if(port){
+        var dflt = String(e.default_port||'');
+        port.placeholder = dflt;
+        // replace the port only while it is still the one we filled in
+        if(!port.value || port.value === port.getAttribute('data-auto')){ port.value = dflt; port.setAttribute('data-auto', dflt); }
+      }
       var drv = $('d-driver');
       if(drv) drv.innerHTML = e.driver ? ('Recommended driver: <code>'+esc(e.driver)+'</code>') : '';
     }
@@ -4524,6 +4585,8 @@
     });
   }
   function retryJob(jid, label, btn){
+    if(/^restore\b/i.test(label || '') &&
+       !confirm('Retry “'+label+'”? If this restore overwrites an existing app, that app is stopped and replaced again.')) return;
     busy(btn, true);
     call('RetryJob', {job_id: jid}, function(r){
       busy(btn, false);
