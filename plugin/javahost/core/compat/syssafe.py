@@ -4,7 +4,7 @@ Read-only detection of aaPanel "System Hardening" (the `syssafe` plugin) and the
 host exec filter. JavaHost reports what it finds so the operator can act in the
 panel; it never edits the hardening plugin's config or allowlists. Pausing
 hardening for a system write goes through the panel's own helper, in
-`compat.aapanel.hardening_paused`.
+`compat.aapanel.system_write`.
 """
 from __future__ import annotations
 

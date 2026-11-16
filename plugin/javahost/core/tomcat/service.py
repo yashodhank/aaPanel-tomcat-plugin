@@ -12,7 +12,6 @@ resolved by which unit/script actually exists, so a fallback stays consistent.
 """
 from __future__ import annotations
 
-import contextlib
 import os
 import pwd
 import re
@@ -71,37 +70,31 @@ def _can_write(d: str) -> bool:
     return fs.can_write_dir(d)
 
 
-@contextlib.contextmanager
-def _system_dir(d: str):
-    """Make system dir `d` writable for the block the panel's way.
-
-    A hardened host keeps this directory read-only. JavaHost does not unlock it
-    itself: when allowed (manage_hardening) it asks the panel to pause System
-    Hardening, and the panel resumes it afterwards."""
-    with panel.hardening_paused(enabled=_manage() and not _can_write(d)):
-        yield
+def _system_write(fn):
+    """Write to a service directory. JavaHost never unlocks a hardened directory
+    itself: when the write is refused and manage_hardening allows it, the panel
+    is asked to pause System Hardening for the write (compat.system_write)."""
+    return panel.system_write(fn, enabled=_manage())
 
 
 def _write_unit_file(path: str, content: str, mode: int) -> None:
-    with _system_dir(os.path.dirname(path)):
-        try:
-            fs.atomic_write(path, content, mode)
-        except PermissionError as e:
-            raise RuntimeError("%s (%s)" % (_locked_msg(), e))
+    _system_write(lambda: fs.atomic_write(path, content, mode))
+
+
+def _remove_file(path: str) -> None:
+    def rm():
+        if os.path.exists(path):
+            os.unlink(path)
+    _system_write(rm)
 
 
 def _locked_msg() -> str:
-    return ("cannot change a service: %s and %s are read-only, most likely "
-            "because aaPanel System Hardening is on. Turn System Hardening off "
-            "in the panel, retry, then turn it back on%s."
-            % (SYSTEMD_DIR, INITD_DIR,
-               "" if _manage() else
-               " (or allow JavaHost to pause it: Settings, manage_hardening)"))
+    return "cannot install a service: " + panel.hardening_blocked_msg(_manage())
 
 
 def can_manage(d: str) -> bool:
-    """Can a unit be installed into dir `d`? True if it is writable, or if the
-    panel can pause System Hardening for us and that is allowed."""
+    """Can a unit be installed into dir `d`? True if it is writable, or if it is
+    read-only and the panel can pause System Hardening for us."""
     if _can_write(d):
         return True
     return os.path.isdir(d) and _manage() and panel.can_pause_hardening()
@@ -285,15 +278,11 @@ def remove_unit(app: str) -> None:
     if b == "systemd":
         unit = "javahost-%s.service" % app
         shell.run(["systemctl", "disable", "--now", unit], check=False)
-        with _system_dir(SYSTEMD_DIR):
-            if os.path.exists(_unit_path(app)):
-                os.unlink(_unit_path(app))
+        _remove_file(_unit_path(app))
         shell.run(["systemctl", "daemon-reload"], check=False)
     elif b == "initd":
         shell.run([_script_path(app), "stop"], check=False)
-        with _system_dir(INITD_DIR):
-            if os.path.exists(_script_path(app)):
-                os.unlink(_script_path(app))
+        _remove_file(_script_path(app))
 
 
 def write_setenv(catalina_base: str, app: str, java_home: str, catalina_home: str,

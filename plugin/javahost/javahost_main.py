@@ -137,6 +137,7 @@ class javahost_main(object):
     # ---- dashboard ----
     def GetStatus(self, get=None):
         try:
+            panel.resume_abandoned_pause()   # undo a pause an interrupted task left
             jdks = {str(k): v for k, v in java.detect().items()}
             tomcats = {}
             for major in registry.LINES:

@@ -7,7 +7,7 @@ file /etc/cron.d/javahost-backups is regenerated from it on every change (robust
 no fragile cron-line parsing). Each entry runs core/backup/run.py for one app.
 
 If /etc/cron.d is read-only on a hardened host, the write asks the panel to pause
-System Hardening (compat.aapanel.hardening_paused), like the service unit writer.
+System Hardening (compat.aapanel.system_write), like the service unit writer.
 cron.d files are picked up automatically — no reload needed.
 """
 from __future__ import annotations
@@ -130,12 +130,13 @@ def _regenerate(data: Dict[str, Dict]) -> None:
         # no cron.d on this host: schedules.json is still recorded, just inert
         return
     fs.ensure_dir(os.path.dirname(CRON_LOG))
-    with panel.hardening_paused(enabled=mh and not fs.can_write_dir(parent)):
-        if not data:
-            if os.path.exists(CRON_PATH):
-                os.unlink(CRON_PATH)
-            return
-        fs.atomic_write(CRON_PATH, _render_cron(data), mode=0o644)
+
+    def write() -> None:
+        if data:
+            fs.atomic_write(CRON_PATH, _render_cron(data), mode=0o644)
+        elif os.path.exists(CRON_PATH):
+            os.unlink(CRON_PATH)
+    panel.system_write(write, enabled=mh)
 
 
 def list_schedules() -> List[Dict]:

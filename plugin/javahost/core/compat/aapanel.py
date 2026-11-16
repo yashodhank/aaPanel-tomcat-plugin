@@ -96,34 +96,121 @@ def _panel_hardening_api():
     return _hardening_api or None
 
 
+_SYSSAFE_DIR = "/www/server/panel/plugin/syssafe"
+
+
 def can_pause_hardening() -> bool:
-    return _panel_hardening_api() is not None
+    """True when the panel offers the pause helper and System Hardening is installed
+    (without it, a read-only directory has another cause a pause cannot fix)."""
+    return _panel_hardening_api() is not None and os.path.isdir(_SYSSAFE_DIR)
+
+
+def hardening_blocked_msg(allowed: bool = True) -> str:
+    return ("a system directory JavaHost must write to is read-only, most likely "
+            "because aaPanel System Hardening is on. Turn System Hardening off in "
+            "the panel, retry, then turn it back on%s."
+            % ("" if allowed else
+               " (or let JavaHost ask the panel to pause it: manage_hardening)"))
+
+
+def _hlog(api, msg: str) -> None:
+    # background jobs have no module-level `public`; log through the handle we hold
+    try:
+        api.WriteLog("JavaHost", "Hardening: %s" % msg)
+    except Exception:
+        pass
+
+
+def _pause_paths() -> Tuple[str, str]:
+    root = os.path.dirname(config.CONFIG_PATH)
+    return (os.path.join(root, ".hardening-paused"),
+            os.path.join(root, ".hardening-pause.lock"))
 
 
 @contextlib.contextmanager
-def hardening_paused(enabled: bool = True):
-    """Ask the panel to pause System Hardening for the block, then resume it.
-
-    The panel's helper only stops hardening when it finds the system directories
-    unwritable, and only restarts what it stopped. Yields True when the panel was
-    asked. A no-op off-panel, on panels without the helper, or when disabled."""
-    api = _panel_hardening_api() if enabled else None
-    asked = False
-    if api is not None:
-        try:
-            api.stop_syssafe()
-            asked = True
-            log("Hardening", "paused System Hardening for a JavaHost system write")
-        except Exception:
-            asked = False
+def _pause_lock(blocking: bool = True):
+    """One JavaHost process pauses hardening at a time. Yields False when the lock
+    is held elsewhere and `blocking` is off. Released if the holder dies."""
+    lock = _pause_paths()[1]
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock, flags, 0o600)
     try:
-        yield asked
+        held = True
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except OSError:
+            held = False
+        yield held
     finally:
-        if asked:
+        os.close(fd)
+
+
+def _resume(api) -> bool:
+    """Ask the panel to turn hardening back on. The marker stays if that fails, so
+    the next JavaHost call tries again."""
+    try:
+        api.start_syssafe()
+    except Exception as e:
+        _hlog(api, "could not resume System Hardening: %s" % e)
+        return False
+    try:
+        os.unlink(_pause_paths()[0])
+    except FileNotFoundError:
+        pass
+    return True
+
+
+def resume_abandoned_pause() -> bool:
+    """Resume hardening if a JavaHost process died while it had it paused.
+
+    The marker is written before the pause and removed after the resume, and the
+    lock is released when its holder dies. A marker with nobody holding the lock
+    is therefore a pause that was never undone."""
+    marker = _pause_paths()[0]
+    if not os.path.exists(marker):
+        return False
+    api = _panel_hardening_api()
+    if api is None:
+        return False
+    with _pause_lock(blocking=False) as held:
+        if not held or not os.path.exists(marker):
+            return False
+        ok_ = _resume(api)
+        if ok_:
+            _hlog(api, "resumed System Hardening left paused by an interrupted task")
+        return ok_
+
+
+def system_write(fn, enabled: bool = True):
+    """Run `fn`, a retriable write to a system directory, and return its result.
+
+    `fn` is tried as is. Only if it is refused (PermissionError) and pausing is
+    allowed does JavaHost ask the panel to pause System Hardening, run `fn` once
+    more, and have the panel resume hardening whatever happened. A write that is
+    still refused raises RuntimeError with what the operator should do."""
+    resume_abandoned_pause()
+    try:
+        return fn()
+    except PermissionError as e:
+        if not (enabled and can_pause_hardening()):
+            raise RuntimeError("%s (%s)" % (hardening_blocked_msg(enabled), e))
+    api = _panel_hardening_api()
+    with _pause_lock():
+        fs.atomic_write(_pause_paths()[0], str(os.getpid()), 0o600)
+        try:
             try:
-                api.start_syssafe()
+                api.stop_syssafe()
             except Exception as e:
-                log("Hardening", "could not resume System Hardening: %s" % e)
+                raise RuntimeError("the panel could not pause System Hardening: %s" % e)
+            _hlog(api, "paused System Hardening for a JavaHost system write")
+            try:
+                return fn()
+            except PermissionError as e:
+                raise RuntimeError("%s The panel's pause did not unlock it. (%s)"
+                                   % (hardening_blocked_msg(True), e))
+        finally:
+            _resume(api)
 
 
 # --- webserver gate (nginx-only until Apache/OLS epic) -----------------------

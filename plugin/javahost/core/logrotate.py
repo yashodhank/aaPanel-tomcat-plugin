@@ -242,12 +242,15 @@ def apply_schedule() -> Dict:
     if not os.path.isdir(parent):
         return {"cron": False, "reason": "no /etc/cron.d on this host"}
     fs.ensure_dir(LOGS_DIR)
-    with panel.hardening_paused(enabled=mh and not fs.can_write_dir(parent)):
-        if not enabled:
-            if os.path.exists(CRON_PATH):
-                os.unlink(CRON_PATH)
-            return {"cron": False, "enabled": False}
-        fs.atomic_write(CRON_PATH, _render_cron(when), mode=0o644)
+
+    def write() -> None:
+        if enabled:
+            fs.atomic_write(CRON_PATH, _render_cron(when), mode=0o644)
+        elif os.path.exists(CRON_PATH):
+            os.unlink(CRON_PATH)
+    panel.system_write(write, enabled=mh)
+    if not enabled:
+        return {"cron": False, "enabled": False}
     return {"cron": True, "enabled": True, "when": when}
 
 
@@ -283,6 +286,7 @@ def main(argv=None) -> int:
     ap.add_argument("--rotate", action="store_true")
     ap.add_argument("--purge", action="store_true")
     a = ap.parse_args(argv)
+    panel.resume_abandoned_pause()   # daily safety net for a pause a dead task left
     do_rot = a.run or a.rotate or not (a.rotate or a.purge)
     do_purge = a.run or a.purge or not (a.rotate or a.purge)
     if do_rot:
