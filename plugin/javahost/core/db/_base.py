@@ -144,8 +144,18 @@ def _read_app_env_fd(bin_fd: int) -> Dict[str, str]:
     return env
 
 
+_HOST = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,252}[A-Za-z0-9])?$")
+
+
 def safe_host(host: str) -> str:
-    return "".join(c for c in str(host) if c.isalnum() or c in ".-_")
+    """A hostname or IPv4 address, unchanged. Anything else is refused: quietly
+    dropping characters turned `db.example.com:3307` into another host name and
+    `::1` into `1`, and the app was then pointed at it."""
+    host = str(host or "").strip()
+    if not _HOST.match(host):
+        raise ValueError("invalid database host %r: use a hostname or an IPv4 address "
+                         "(put the port in its own field)" % host)
+    return host
 
 
 def safe_params(params: Optional[Dict[str, str]]) -> List[Tuple[str, str]]:
@@ -328,6 +338,9 @@ class Engine(object):
         if version is not None:
             self.normalize(version)
         port = validate.port(port if port not in (None, "", 0) else self.default_port)
+        user, password = str(user or ""), str(password or "")
+        if any(c in user + password for c in "\r\n\x00"):
+            raise ValueError("database user/password must not contain line breaks")
         url = self.build_url(host, port, db, ssl=ssl, params=params)
         return self.env_vars(url, user, password, java_major)
 
