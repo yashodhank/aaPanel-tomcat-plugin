@@ -1671,7 +1671,7 @@
   }
   // ---- backup size limits -------------------------------------------------
   var BKLIM_FIELDS = [
-    ['max_files', 'Most files in one app'],
+    ['max_files', 'Most files in one app (files)'],
     ['max_file_gb', 'Largest single file (GB)'],
     ['max_total_gb', 'Most data in one app (GB)'],
     ['max_archive_gb', 'Largest backup archive (GB)']
@@ -1696,28 +1696,41 @@
     var rg = p.ranges || {};
     body.innerHTML = '<div class="jh-rows">'+
       BKLIM_FIELDS.map(function(f){
-        var k = f[0], r = rg[k] || [1, ''];
+        var k = f[0], r = rg[k] || [1, ''], v = esc(String(p[k]));
         return '<div class="jh-kv"><span><label for="bklim-'+k+'" style="margin:0">'+esc(f[1])+'</label>'+
-          '<div class="jh-hint">Default '+esc(String(p['default_'+k]))+'</div></span>'+
-          '<input type="number" id="bklim-'+k+'" min="'+esc(String(r[0]))+'" max="'+esc(String(r[1]))+
-          '" step="1" value="'+esc(String(p[k]))+'" style="width:110px"></div>';
+          '<div class="jh-hint" id="bklim-'+k+'-hint">Default '+esc(String(p['default_'+k]))+
+          ', up to '+esc(String(r[1]))+'</div></span>'+
+          '<input type="number" id="bklim-'+k+'" aria-describedby="bklim-'+k+'-hint" min="'+esc(String(r[0]))+
+          '" max="'+esc(String(r[1]))+'" step="1" value="'+v+'" data-orig="'+v+'" style="width:110px"></div>';
       }).join('')+
-      '<div class="jh-hint">Raising a limit lets larger apps be backed up. Larger backups take more disk and longer to restore.</div>'+
+      '<div class="jh-hint">Raise a limit to back up a larger app. Larger backups take more disk and longer to restore. '+
+        'If you lower a limit again, backups taken above it cannot be restored until you raise it back.</div>'+
       '<div class="jh-spread" style="margin-top:var(--s3);gap:var(--s2)">'+
         '<button class="jh-btn accent sm" id="jh-bklim-save" type="button">'+ic('check')+'Save limits</button>'+
         '<button class="jh-btn ghost sm" id="jh-bklim-reset" type="button">'+ic('refresh')+'Use defaults</button>'+
       '</div></div>';
   }
   function saveBackupLimits(btn, reset){
-    var data = {};
+    var data = {}, changed = 0, blank = null;
     if(reset){ data.reset = 1; }
-    else BKLIM_FIELDS.forEach(function(f){ var el = $('bklim-'+f[0]); if(el) data[f[0]] = el.value; });
+    else {
+      // send only what the operator changed, so untouched limits keep following the defaults
+      BKLIM_FIELDS.forEach(function(f){
+        var el = $('bklim-'+f[0]); if(!el) return;
+        var v = String(el.value).replace(/^\s+|\s+$/g, '');
+        if(v === '' && !blank) blank = el;
+        if(v !== el.getAttribute('data-orig')){ data[f[0]] = v; changed++; }
+      });
+      if(blank){ toast('Enter a whole number for every limit', 'err', 'Backup limits'); blank.focus(); return; }
+      if(!changed){ toast('No limit was changed', 'ok'); return; }
+    }
     busy(btn, true);
     call('SetBackupLimits', data, function(r){
       busy(btn, false);
       var p = payload(r);
       if(failed(r) || !p || typeof p !== 'object'){ toast(errText(p) || 'Could not save the limits', 'err', 'Backup limits'); return; }
       toast(reset ? 'Backup limits back to defaults' : 'Backup limits saved', 'ok'); renderBackupLimits(p);
+      var again = $(reset ? 'jh-bklim-reset' : 'jh-bklim-save'); if(again) again.focus();   // the card was redrawn
     });
   }
   function previewList(items, emptyLabel){
