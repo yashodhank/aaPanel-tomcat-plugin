@@ -19,11 +19,22 @@ A backup is a gzip tarball `backup-<app>-<UTCstamp>.tar.gz` containing:
 - `base/webapps/` — the deployed app (e.g. `ROOT`).
 - `base/bin/` — `setenv.sh`, **`app.env`** (DB credentials), `site.domain`, `site.ssl`.
 - `base/app.jar` — for Spring Boot / executable-JAR apps.
-- `nginx/<app>.conf` — the plugin-owned reverse-proxy vhost.
+- Everything else in the app directory. A JAR app runs with that directory as its
+  working directory, so files it writes with relative paths (an `uploads/` folder,
+  an embedded database, a `config/` directory) are backed up with it.
 
 **Excluded:** `logs/ work/ temp/`, the systemd/init.d unit (re-rendered on restore —
 never unpacked from an archive), and **all of `/etc/letsencrypt`**. TLS **private
 keys are never bundled** — the certificate is **re-issued** on restore.
+
+**Links are left out.** A symbolic link in the app directory is not followed and
+not stored, so what it points to is not in the backup. The backup task prints a
+warning naming each one. Data kept outside the app directory needs its own backup.
+
+**Size limits.** A backup fails, with the reason, if the app has more than 50,000
+files, a single file over 2 GB, more than 8 GB of data, or an archive over 2 GB.
+Those are the limits restore enforces, so an archive that is created can always
+be restored.
 
 > Backups contain the app's DB credentials (`bin/app.env`), so archives are written
 > `0600` under the managed backups dir (`/www/server/javahost/backups`, overridable
