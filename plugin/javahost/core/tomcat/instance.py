@@ -102,7 +102,10 @@ def _discard_half_built(app: str, base: str) -> None:
         pass
     try:
         if os.path.isdir(base):
-            fs.safe_rmtree(base, require_marker=True)
+            # no marker required: the caller made this directory itself, under the
+            # create lock, after checking the name was free; a failure while
+            # scaffolding can leave it without the marker
+            fs.safe_rmtree(base, require_marker=False)
     except Exception:
         pass
 
@@ -404,6 +407,8 @@ def create(app: str, major: str, port: int, memory_mb: int,
     # (e.g. 21) regardless of Tomcat. Callers can still pin any JDK via prefer_java.
     if prefer_java in (None, "", 0, "0"):
         prefer_java = registry.get_line(major).min_java
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
     # may download a JDK for minutes: done before the name and port are claimed
     java_home = installer.ensure_java(major, prefer=prefer_java)
     major_java = java.probe(java_home) or registry.get_line(major).min_java
@@ -416,8 +421,8 @@ def create(app: str, major: str, port: int, memory_mb: int,
             raise RuntimeError("app already exists: %s" % app)
         # allocate_port honors a requested port (and rejects conflicts) or picks a free one
         port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
-        _scaffold(base)                 # from here on the directory is ours to remove
-        try:
+        try:                            # from here on the directory is ours to remove
+            _scaffold(base)
             service.write_setenv(base, app, java_home, home, opts, [])
             _render_conf(base, app, port, catalina_home=home)   # server.xml claims the port
         except Exception:
@@ -430,10 +435,13 @@ def create(app: str, major: str, port: int, memory_mb: int,
         # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
         shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
         service.install_unit(app, java_home, home, base, user=user)
-        service.enable_start(app)
     except Exception:
         _discard_half_built(app, base)
         raise
+    # The app is complete from here. A start that fails (aaPanel's process
+    # protection blocking exec, a bad JVM option) leaves it in place: the error
+    # tells the operator to fix the cause and Repair, and the logs say why.
+    service.enable_start(app)
     return {"app": app, "tomcat": major, "port": port, "java": major_java,
             "status": service.status(app), "warnings": warns}
 
@@ -458,6 +466,8 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
     # The JDK that was asked for, not "that or anything newer": resolve() treats
     # the major as a minimum, so a Java 8 app on a host with 21 ran on 21 while
     # the response said 8.
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
     java_home = java.detect().get(java_major) or java.install_temurin(java_major)
     base = base_path(app)
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
@@ -486,24 +496,30 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
         if exists(app):
             raise RuntimeError("app already exists: %s" % app)
         port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
-        for sub in ("bin", "logs"):
-            fs.ensure_dir(os.path.join(base, sub))
-        fs.mark_managed(base)           # from here on the directory is ours to remove
-        try:
-            shutil.copyfile(jar_src, os.path.join(base, "app.jar"))
-            # app.env carries SERVER_PORT: it is what claims the port
+        try:                            # from here on the directory is ours to remove
+            for sub in ("bin", "logs"):
+                fs.ensure_dir(os.path.join(base, sub))
+            fs.mark_managed(base)
+            # app.env carries SERVER_PORT and an app.jar marks the directory as a
+            # JAR app: together they claim the port. The jar itself (possibly
+            # hundreds of MB) is copied after the lock is released.
             _fs.atomic_write(os.path.join(base, "bin", "app.env"),
                              "\n".join(["SERVER_PORT=%d" % port] + env_lines) + "\n", mode=0o640)
+            open(os.path.join(base, "app.jar"), "wb").close()
         except Exception:
             _discard_half_built(app, base)
             raise
     try:
+        tmp_jar = os.path.join(base, ".app.jar.part")
+        shutil.copyfile(jar_src, tmp_jar)
+        os.replace(tmp_jar, os.path.join(base, "app.jar"))
         shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
         service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
-        service.enable_start(app)
     except Exception:
         _discard_half_built(app, base)
         raise
+    # complete from here: a failed start leaves the app in place to be repaired
+    service.enable_start(app)
     return {"app": app, "type": "jar", "port": port, "java": java_major,
             "springboot": jarmod.detect_springboot(jar_src), "profiles": profiles or "",
             "status": service.status(app), "warnings": warns}

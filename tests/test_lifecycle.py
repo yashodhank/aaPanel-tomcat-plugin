@@ -80,20 +80,45 @@ def test_concurrent_creates_of_one_name_yield_one_app(host, monkeypatch):
     assert instance.exists("same")          # the winner was not cleaned up by a loser
 
 
-@pytest.mark.parametrize("failing", ["install_unit", "enable_start"])
+@pytest.mark.parametrize("failing", ["install_unit", "write_setenv", "mark_managed"])
 def test_failed_create_frees_the_name_and_the_port(host, monkeypatch, failing):
     iroot, calls = host
+    owner = fs if failing == "mark_managed" else instance.service
+    real = getattr(owner, failing)
 
     def boom(*a, **k):
-        raise RuntimeError("%s failed: /etc/systemd/system is immutable" % failing)
-    monkeypatch.setattr(instance.service, failing, boom)
-    with pytest.raises(RuntimeError, match="immutable"):
+        raise OSError(28, "No space left on device (%s)" % failing)
+    monkeypatch.setattr(owner, failing, boom)
+    with pytest.raises(OSError, match="No space left"):
         instance.create("shop", "11", 8090, 256)
-    assert not (iroot / "shop").exists() and calls["removed"] == ["shop"]
+    # nothing is left, marker or not: no "already exists", nothing DeleteApp refuses
+    assert not (iroot / "shop").exists()
     assert 8090 not in instance.used_ports()
 
-    monkeypatch.setattr(instance.service, failing, lambda *a, **k: None)
+    monkeypatch.setattr(owner, failing, real if failing == "mark_managed" else (lambda *a, **k: None))
     assert instance.create("shop", "11", 8090, 256)["port"] == 8090      # retry just works
+
+
+def test_an_app_that_fails_to_start_is_kept_for_repair(host, monkeypatch):
+    iroot, calls = host
+
+    def blocked(app):
+        raise RuntimeError("service installed but aaPanel process/daemon protection blocked "
+                           "it (status 203/EXEC) ... then Repair the app.")
+    monkeypatch.setattr(instance.service, "enable_start", blocked)
+    with pytest.raises(RuntimeError, match="Repair the app"):
+        instance.create("shop", "11", 8090, 256)
+    # the app is complete; deleting it would leave nothing to repair and no logs
+    assert (iroot / "shop" / "conf" / "server.xml").is_file() and calls["removed"] == []
+    assert instance.used_ports().get(8090) == "shop"
+
+
+def test_a_taken_port_is_refused_before_any_jdk_download(host, monkeypatch):
+    instance.create("shop", "11", 8090, 256)
+    monkeypatch.setattr(installer, "ensure_java",
+                        lambda major, prefer=None: pytest.fail("JDK resolved before the port check"))
+    with pytest.raises(RuntimeError, match="port 8090 already used by app 'shop'"):
+        instance.create("blog", "11", 8090, 256)
 
 
 def test_create_refusing_an_existing_app_does_not_touch_it(host):
@@ -145,6 +170,19 @@ def test_failed_jar_create_frees_the_name_and_the_port(host, jar, monkeypatch):
     assert not (iroot / "svc").exists() and 8095 not in instance.used_ports()
 
 
+def test_jar_app_is_complete_and_kept_when_only_the_start_fails(host, jar, monkeypatch):
+    iroot, calls = host
+    monkeypatch.setattr(java, "detect", lambda: {17: "/opt/jdk-17"})
+    monkeypatch.setattr(instance.service, "enable_start",
+                        lambda app: (_ for _ in ()).throw(RuntimeError("exited rc=1")))
+    with pytest.raises(RuntimeError, match="rc=1"):
+        instance.create_jar("svc", jar, 17, port=8095)
+    base = iroot / "svc"
+    assert open(str(base / "app.jar"), "rb").read() == open(jar, "rb").read()   # the real jar, not the placeholder
+    assert not (base / ".app.jar.part").exists() and calls["removed"] == []
+    assert instance.used_ports().get(8095) == "svc"
+
+
 def test_concurrent_jar_creates_never_share_a_port(host, jar, monkeypatch):
     monkeypatch.setattr(java, "detect", lambda: {17: "/opt/jdk-17"})
     _slow_allocate(monkeypatch)
@@ -190,6 +228,7 @@ def jobroot(tmp_path, monkeypatch):
 def test_a_job_from_before_the_reboot_is_no_longer_running(jobroot):
     add, boot, _ = jobroot
     jdir = add("install-tomcat-old", "running", boot - 3600)
+    assert jobs.read_log("install-tomcat-old")["state"] == "failed"     # every read path agrees
     listed = {j["id"]: j for j in jobs.list_jobs()}
     job = listed["install-tomcat-old"]
     assert job["state"] == "failed" and "server restarted" in job["message"]
@@ -199,14 +238,32 @@ def test_a_job_from_before_the_reboot_is_no_longer_running(jobroot):
     assert jobs.clear() == 1                                    # and it can be cleared
 
 
+def test_a_job_started_seconds_before_the_reboot_is_reconciled_too(jobroot):
+    add, boot, _ = jobroot
+    add("just-before", "running", boot - 5)
+    add("never-got-a-pid", "running", boot - 5, pid=None)
+    assert {j["id"]: j["state"] for j in jobs.list_jobs()} == {
+        "just-before": "failed", "never-got-a-pid": "failed"}
+
+
+def test_a_live_job_is_never_failed_because_the_clock_was_stepped(jobroot, monkeypatch):
+    # first NTP sync on a host with no RTC: boot time jumps past the job's start,
+    # but its supervisor is plainly still there
+    add, boot, _ = jobroot
+    jdir = add("long-install", "running", boot - 3600)
+    monkeypatch.setattr(jobs, "_capture_supervisor_identity",
+                        lambda pid, d: (int(pid), 12345) if d == os.path.realpath(jdir) or d == jdir else None)
+    assert jobs.list_jobs()[0]["state"] == "running"
+    assert jobs.clear() == 0                                    # so it cannot be cleared from under it
+    assert os.path.isfile(os.path.join(jdir, "meta.json"))
+
+
 def test_jobs_from_this_boot_are_left_alone(jobroot):
     add, boot, _ = jobroot
     add("after-boot", "running", boot + 30)
-    add("clock-slack", "running", boot - 30)        # within the margin for a stepped clock
     add("done-before", "done", boot - 3600)
     states = {j["id"]: (j["state"], j["message"]) for j in jobs.list_jobs()}
-    assert states == {"after-boot": ("running", ""), "clock-slack": ("running", ""),
-                      "done-before": ("done", "")}
+    assert states == {"after-boot": ("running", ""), "done-before": ("done", "")}
 
 
 def test_unknown_boot_time_changes_nothing(jobroot):

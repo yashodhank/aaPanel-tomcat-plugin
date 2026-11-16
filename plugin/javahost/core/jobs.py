@@ -180,22 +180,23 @@ def _boot_time() -> Optional[float]:
     return None
 
 
-# Slack for the wall clock being stepped after boot (btime moves with it).
-_BOOT_MARGIN = 120.0
-
-
 def _reconcile_interrupted(jdir: str, meta: Dict, boot: Optional[float]) -> Dict:
-    """A job still marked running that started before this boot cannot be running:
-    its supervisor died with the machine and will never record a result. Record
-    one, so the task stops showing as in progress and can be retried or cleared.
+    """A job still marked running that started before this boot, and whose
+    supervisor process is not there, cannot be running: the supervisor died with
+    the machine and will never record a result. Record one, so the task stops
+    showing as in progress and can be retried or cleared.
 
-    Deliberately narrow. A supervisor that vanished without a reboot is left
-    alone here: telling that apart from a live job needs process identity, and
-    getting it wrong would release a job that is still working."""
+    Both conditions are needed. Boot time moves when the wall clock is stepped
+    (first NTP sync on a host without an RTC, `date -s`), so a live job can look
+    older than the boot; a supervisor that is still there vetoes that. And a
+    supervisor that is gone without a reboot is left alone here: its worker may
+    still be running, and saying otherwise would let the job be retried over it."""
     if _normalise_state(meta.get("state")) != "running" or boot is None:
         return meta
     started = _normalise_started(meta.get("started"))
-    if not started or started >= boot - _BOOT_MARGIN:
+    if not started or started >= boot:
+        return meta
+    if meta.get("pid") and _capture_supervisor_identity(meta.get("pid"), jdir) is not None:
         return meta
     meta = dict(meta)
     meta["state"] = "failed"
@@ -383,7 +384,7 @@ def read_log(job_id: str, lines: int = 200) -> Dict:
     if exists:
         state = "unknown"
         try:
-            meta = _read_meta(jdir)
+            meta = _reconcile_interrupted(jdir, _read_meta(jdir), _boot_time())
             state = _normalise_state(meta.get("state"))
             message = meta.get("message") if isinstance(meta.get("message"), str) else ""
         except Exception:
