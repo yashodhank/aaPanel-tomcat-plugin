@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -11,7 +12,8 @@ def test_deploy_requires_explicit_host_and_has_no_public_ip_default():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "VPS_HOST    ?=" not in makefile
-    assert "217.217.248.180" not in makefile
+    # no host address of any kind baked into the Makefile
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", makefile)
     assert 'test -n "$(VPS_HOST)"' in makefile
 
 
