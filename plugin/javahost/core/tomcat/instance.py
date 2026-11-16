@@ -695,13 +695,6 @@ def delete(app: str, *, purge: bool = True) -> Dict:
         site_cleanup = proxy.remove_site(app)
     except Exception as e:
         site_cleanup = {"removed": False, "error": str(e)}
-    # Drop any backup schedule/cron entry for this app (partial wipe + DeleteApp).
-    try:
-        from ..backup import schedule as backupschedule
-        backupschedule.remove_schedule(app)
-    except Exception:
-        pass
-    service.remove_unit(app)
     base = base_path(app)
     removed = False
     # If aaPanel delete failed, keep the instance tree (incl. site.domain marker)
@@ -709,9 +702,19 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     site_blocked = (isinstance(site_cleanup, dict)
                     and site_cleanup.get("removed") is False
                     and site_cleanup.get("domain"))
-    if purge and os.path.isdir(base) and not site_blocked:
-        fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
-        removed = True
+    if not (site_blocked and purge):
+        # Only past this point is the app being taken apart. A blocked delete
+        # leaves it whole and running, not stopped with its unit and schedule
+        # gone but its files and site still there.
+        try:
+            from ..backup import schedule as backupschedule
+            backupschedule.remove_schedule(app)
+        except Exception:
+            pass
+        service.remove_unit(app)
+        if purge and os.path.isdir(base):
+            fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
+            removed = True
     out = {"app": app, "removed": removed}
     if site_cleanup is not None:
         out["site"] = site_cleanup
@@ -722,7 +725,7 @@ def delete(app: str, *, purge: bool = True) -> Dict:
             )
             if site_blocked and purge:
                 out["site_warning"] += (
-                    "; instance kept so domain marker remains for retry"
+                    "; the app was left unchanged so the delete can be retried"
                 )
     return out
 
