@@ -632,13 +632,14 @@ def test_file_that_shrinks_while_being_read_is_reported_not_fatal(env, monkeypat
     iroot, _ = env
     base = _mk_app(iroot, "shop", port=8090)
     log = os.path.join(base, "data.log")
-    open(log, "w").write("x" * 4096)
+    open(log, "w").write("x" * 5000)
     real_fstat = os.fstat
     seen = {"done": False}
 
     def truncate_after_measuring(fd):
         st = real_fstat(fd)
-        if not seen["done"] and st.st_size == 4096:
+        # a directory is 4096 bytes too on ext4: only react to the file itself
+        if not seen["done"] and st.st_size == 5000 and (st.st_mode & 0o170000) == 0o100000:
             seen["done"] = True
             os.truncate(log, 10)                 # logrotate copytruncate, mid-backup
         return st
@@ -647,7 +648,7 @@ def test_file_that_shrinks_while_being_read_is_reported_not_fatal(env, monkeypat
     monkeypatch.setattr(archive.os, "fstat", real_fstat)
     assert res["changed"] == ["data.log"] and "changed while being read" in res["warning"]
     with tarfile.open(res["archive"]) as tf:
-        assert tf.getmember("base/data.log").size == 4096          # still a valid archive
+        assert tf.getmember("base/data.log").size == 5000          # still a valid archive
         assert tf.getmember("base/conf/server.xml").isreg()
     assert store.list_backups("shop")[0].get("changed") == ["data.log"]   # visible wherever it is listed
 
