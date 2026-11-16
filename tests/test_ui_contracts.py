@@ -96,7 +96,7 @@ def test_wipe_summary_counts_come_from_steps(html):
 
 def test_incomplete_wipe_is_not_presented_as_finished(html):
     body = section(html, "function showWipeSummary(p, isFull){", "function showSection(")
-    assert "The wipe did not finish." in body and 'role="alert"' in body
+    assert "The wipe left some items in place:" in body and 'role="alert"' in body
     assert "isFull && !incomplete" in body          # no "you may now uninstall" after a partial wipe
     run = section(html, "function runWipe(btn){", "var WIPE_STEPS = [")
     assert "Wipe incomplete" in run
@@ -154,3 +154,61 @@ def test_retrying_a_restore_asks_first(html):
 def test_destination_that_was_not_deleted_is_not_reported_deleted(html):
     body = section(html, "function deleteDest(id, btn){", "function openRestoreModal")
     assert "p.removed === false" in body and "Nothing deleted" in body
+
+
+def test_incomplete_wipe_reaches_the_summary_through_the_real_call_path(html):
+    # failed() reads ok:false in the payload as a failed call; an incomplete wipe
+    # answers exactly that and must still get its summary, not a JSON dump
+    fns = section(html, "function payload(r){", "// HTML escaping for ALL dynamic text")
+    run = section(html, "function runWipe(btn){", "var WIPE_STEPS = [")
+    probs = section(html, "var WIPE_STEPS = [", "function summaryLine(p, key, label){")
+    harness = """
+    const seen={summary:0, toasts:[], refreshed:0, alert:null};
+    function $(id){ return id==='jh-wipe-confirm' ? {value:'WIPE'} : {set innerHTML(v){ seen.alert=v; }}; }
+    function wipeCheckedCats(){ return ['apps']; } function updateWipeRunState(){}
+    function busy(){} function ic(){ return ''; } function esc(v){ return String(v); }
+    function toast(m,k,t){ seen.toasts.push([k,t||'']); }
+    function showWipeSummary(p){ seen.summary++; }
+    function refresh(){ seen.refreshed++; } function refreshDangerZone(){ seen.refreshed++; }
+    function call(name, data, cb){ cb({status:true, msg:%s}); }
+    %s
+    %s
+    %s
+    runWipe({});
+    console.log(JSON.stringify(seen));
+    """ % (json.dumps({"ok": False, "performed": True, "scope": ["apps"],
+                       "steps": {"apps": {"removed": ["blog"], "errors": {"shop": "site still registered"}}}}),
+           fns, probs, run)
+    out = run_node(harness)
+    assert out["summary"] == 1 and out["refreshed"] == 2
+    assert out["toasts"] == [["err", "Wipe incomplete"]]
+    assert "{" not in (out["alert"] or "")              # no raw JSON shown to the operator
+
+
+def test_a_wipe_call_that_really_failed_is_still_an_error(html):
+    fns = section(html, "function payload(r){", "// HTML escaping for ALL dynamic text")
+    run = section(html, "function runWipe(btn){", "var WIPE_STEPS = [")
+    probs = section(html, "var WIPE_STEPS = [", "function summaryLine(p, key, label){")
+    harness = """
+    const seen={summary:0, toasts:[]};
+    function $(id){ return id==='jh-wipe-confirm' ? {value:'WIPE'} : {set innerHTML(v){}}; }
+    function wipeCheckedCats(){ return ['apps']; } function updateWipeRunState(){}
+    function busy(){} function ic(){ return ''; } function esc(v){ return String(v); }
+    function toast(m,k,t){ seen.toasts.push([k,t||'']); }
+    function showWipeSummary(p){ seen.summary++; } function refresh(){} function refreshDangerZone(){}
+    function call(name, data, cb){ cb({status:false, msg:'confirmation required'}); }
+    %s
+    %s
+    %s
+    runWipe({});
+    console.log(JSON.stringify(seen));
+    """ % (fns, probs, run)
+    out = run_node(harness)
+    assert out["summary"] == 0 and out["toasts"] == [["err", "Wipe failed"]]
+
+
+def test_restore_dialogs_do_not_keep_a_stale_confirmation_or_rearm_mid_upload(html):
+    up = section(html, "function openRestoreUploadModal(){", "var BK_SCHEDULES")
+    assert "data-uploading" in up and "if(asNew) cf.value = '';" in up
+    lst = section(html, "function openRestoreModal(name, app, locations){", "function deleteBackup(")
+    assert "if(asNew) cf.value = '';" in lst

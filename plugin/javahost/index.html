@@ -1737,13 +1737,17 @@
       busy(btn, false);
       var p = payload(r);
       var res2 = $('jh-wipe-result');
-      if(failed(r)){
+      // failed() treats a payload with ok:false as a failed call, but a wipe that
+      // ran and left items behind answers exactly that, with the per-step detail.
+      var ran = !!(p && p.steps);
+      if(!ran && failed(r)){
         if(res2) res2.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+'<div>'+esc(errText(p))+'</div></div>';
         toast(errText(p), 'err', 'Wipe failed');
         return;
       }
+      if(res2) res2.innerHTML = '';
       showWipeSummary(p, isFull);
-      if(wipeProblems(p).length || (p && p.ok === false)) toast('Some items could not be removed', 'err', 'Wipe incomplete');
+      if(wipeProblems(p).length || (p && p.ok === false)) toast('Some items are still in place', 'err', 'Wipe incomplete');
       else toast('Wipe completed', 'ok');
       refresh();                 // re-pull status (apps/runtimes now changed)
       refreshDangerZone();       // re-fetch the preview (counts now zeroed)
@@ -1779,10 +1783,10 @@
     var incomplete = problems.length > 0 || (p && p.ok === false);
     var head = incomplete
       ? '<div class="jh-alert danger" role="alert" style="margin-bottom:var(--s3)">'+ic('warn')+
-          '<div><b>The wipe did not finish.</b> Some items are still in place:'+
+          '<div><b>The wipe left some items in place:</b>'+
           '<ul style="margin:6px 0 0;padding-left:var(--s5)">'+
           problems.map(function(t){ return '<li>'+esc(t)+'</li>'; }).join('')+'</ul>'+
-          'Fix the cause and run the wipe again.</div></div>'
+          'Items still in use are skipped by design. For anything else, fix the cause and run the wipe again.</div></div>'
       : '<div class="jh-alert" style="margin-bottom:var(--s3)"><svg aria-hidden="true" focusable="false"><use href="#i-check"/></svg>'+
           '<div>The wipe finished.</div></div>';
     var fullNote = (isFull && !incomplete)
@@ -2279,6 +2283,7 @@
         var go=$('rs-go'), nm=$('rs-name'), cf=$('rs-confirm'), wrap=$('rs-confirm-wrap');
         function sync(){
           var asNew = nm.value.trim() !== '';
+          if(asNew) cf.value = '';        // hidden now: retype it if the name is cleared again
           wrap.style.display = asNew ? 'none' : '';
           go.disabled = asNew ? false : (cf.value.trim() !== 'RESTORE');
         }
@@ -2323,7 +2328,9 @@
       onMount: function(){
         var go=$('ru-go'), nm=$('ru-name'), cf=$('ru-confirm'), wrap=$('ru-confirm-wrap');
         function sync(){
+          if(go.getAttribute('data-uploading')) return;   // busy: do not re-enable mid-upload
           var asNew = nm.value.trim() !== '';
+          if(asNew) cf.value = '';        // hidden now: retype it if the name is cleared again
           wrap.style.display = asNew ? 'none' : '';
           go.disabled = asNew ? false : (cf.value.trim() !== 'RESTORE');
         }
@@ -2334,9 +2341,10 @@
           var fi = $('ru-file');
           if(!fi || !fi.files || !fi.files[0]){ toast('Choose a .tar.gz file', 'err'); return; }
           var as = $('ru-name').value.trim(), dom = $('ru-domain').value.trim();
+          b.setAttribute('data-uploading', '1');
           busy(b, true);
           stageUpload(fi, function(tmp, err){
-            if(err || !tmp){ busy(b, false); toast(err || 'Upload failed', 'err'); return; }
+            if(err || !tmp){ b.removeAttribute('data-uploading'); busy(b, false); toast(err || 'Upload failed', 'err'); return; }
             var data = {tmp:tmp}; if(as) data.as_name = as; if(dom) data.domain = dom;
             closeModal();
             startJob('RestoreUpload', data, 'Restore '+(as||'upload'), b,
