@@ -107,12 +107,16 @@ def test_render_skips_tampered_stored_entries(sched):
         "evil": {"cron": "0 1 * * *", "remotes": ["x;id>/tmp/pwn;#"], "keep": 1},
         "bad;app": {"cron": "0 1 * * *", "remotes": [], "keep": 1},
         "badcron": {"cron": "* * * * * root id", "remotes": [], "keep": 1},
+        "hugekeep": {"cron": "0 1 * * *", "remotes": [], "keep": float("inf")},
+        "strremote": {"cron": "0 4 * * *", "remotes": "s3,minio", "keep": 0},
     })
     schedule._regenerate(schedule._read())
     body = open(schedule.CRON_PATH).read()
     assert "--app good --remotes s3 --keep 2" in body
     assert "pwn" not in body and "bad;app" not in body and "root id" not in body
-    assert len([l for l in body.splitlines() if " root " in l]) == 1
+    assert "--app strremote --remotes s3,minio" in body      # a csv string is not split per character
+    assert "hugekeep" not in body
+    assert len([l for l in body.splitlines() if " root " in l]) == 2
 
 
 @pytest.mark.parametrize("bad", [
@@ -120,6 +124,8 @@ def test_render_skips_tampered_stored_entries(sched):
     "0 0 * 0 *", "0 0 * 13 *", "0 0 * * 8", "*/0 * * * *", "- * * * *",
     ", * * * *", "9- * * * *", "5-2 * * * *", "1,,2 * * * *", "*/ * * * *",
     "1/2/3 * * * *",
+    "5/15 * * * *",                 # step after a single number: Debian cron rejects it
+    "\u0660 \u0662 * * *",          # non-ASCII digits pass \d and int() but not cron
 ])
 def test_validate_cron_rejects_what_cron_rejects(bad):
     # one line cron cannot parse makes the daemon ignore the whole shared file

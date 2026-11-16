@@ -31,7 +31,10 @@ _RUNNER = os.path.join(_PLUGIN_DIR, "core", "backup", "run.py")
 # reaches it is validated here: on the way in (set_schedule) and again on the way
 # out (_render_cron), because schedules.json is only as trusted as its last writer.
 _CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))   # min hour dom month dow
-_CRON_PART = re.compile(r"^(\*|\d{1,2}(?:-\d{1,2})?)(?:/(\d{1,2}))?$")
+# ASCII digits only (\d would also match other scripts' digits, which cron
+# cannot parse). A step is allowed after `*` or a range, not after a single
+# number: Debian's cron rejects `5/15`.
+_CRON_PART = re.compile(r"^(?:(\*|[0-9]{1,2}-[0-9]{1,2})(?:/([0-9]{1,2}))?|([0-9]{1,2}))$")
 
 
 def _valid_cron_field(field: str, lo: int, hi: int) -> bool:
@@ -39,7 +42,7 @@ def _valid_cron_field(field: str, lo: int, hi: int) -> bool:
         m = _CRON_PART.match(part)
         if not m:
             return False
-        base, step = m.group(1), m.group(2)
+        base, step = m.group(1) or m.group(3), m.group(2)
         if step is not None and int(step) < 1:
             return False
         if base != "*":
@@ -89,6 +92,8 @@ def _write(data: Dict[str, Dict]) -> None:
 def _norm_remotes(s: Dict) -> List[str]:
     """Destination ids for a schedule entry; legacy `remote:true` → ['all']."""
     r = s.get("remotes")
+    if isinstance(r, str):
+        return [x for x in r.split(",") if x]
     if r is not None:
         return list(r)
     return ["all"] if s.get("remote") else []
@@ -105,7 +110,7 @@ def _render_cron(data: Dict[str, Dict]) -> str:
             cmd = "%s %s --app %s" % (py, _RUNNER, validate.identifier(app, "app"))
             remotes = validate_remotes(_norm_remotes(s))
             keep = int(s.get("keep") or 0)
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError, OverflowError):
             continue    # a bad stored entry is dropped, never rendered as root
         if remotes:
             cmd += " --remotes %s" % ",".join(remotes)
