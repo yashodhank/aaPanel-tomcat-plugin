@@ -734,7 +734,13 @@ class javahost_main(object):
 
     def DeleteApp(self, get):
         try:
-            res = instance.delete(panel.attr(get, "app"))
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            res = instance.delete(panel.attr(get, "app"), force=force)
+            if not res.get("removed"):
+                # never a green envelope around an app that is still there
+                panel.log("DeleteApp", "%s NOT removed" % res["app"])
+                return panel.err("%s was not deleted: %s" % (
+                    res["app"], res.get("site_warning") or "the app directory is still present"))
             panel.log("DeleteApp", res["app"])
             return panel.ok(res)
         except Exception as e:
@@ -1186,8 +1192,8 @@ class javahost_main(object):
                 host=host,
                 port=panel.attr(get, "db_port", None),  # defaults to engine port
                 db=panel.attr(get, "db_name"),
-                user=panel.attr(get, "db_user"),
-                password=panel.attr(get, "db_password", ""),
+                user=panel.attr(get, "db_user", "") or "",
+                password=panel.attr(get, "db_password", "") or "",
                 version=panel.attr(get, "db_version"),  # optional; any supported version
                 ssl=ssl,
             )
@@ -1252,7 +1258,8 @@ class javahost_main(object):
                 return panel.err("confirmation required: pass confirm=%r"
                                  % maintenance.CONFIRM)
             scope = panel.attr(get, "scope", "")
-            res = maintenance.wipe(scope, confirm)
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            res = maintenance.wipe(scope, confirm, force=force)
             panel.log("Wipe", "scope=%s performed=%s" % (scope, res.get("performed")))
             return panel.ok(res)
         except Exception as e:

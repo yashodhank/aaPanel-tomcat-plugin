@@ -65,8 +65,13 @@ sys.path.insert(0, os.environ.get("JAVAHOST_PLUGIN_DIR",
                                   "/www/server/panel/plugin/javahost"))
 from core import maintenance  # noqa: E402
 scope = os.environ.get("JAVAHOST_WIPE_SCOPE", "")
-res = maintenance.wipe(scope, "WIPE")
+# force: the plugin code is removed right after this, so there is no second
+# attempt. Apps go even if their aaPanel site could not be confirmed removed.
+res = maintenance.wipe(scope, "WIPE", force=True)
 print(json.dumps(res))
+left = {k: v.get("errors") for k, v in (res.get("steps") or {}).items() if v.get("errors")}
+if left:
+    print("planned wipe left items in place:", json.dumps(left))
 PYEOF
 }
 

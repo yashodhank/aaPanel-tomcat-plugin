@@ -82,12 +82,33 @@ def _list_installed_tomcats() -> List[str]:
     return out
 
 
-def _list_sites() -> List[str]:
-    """Vhost files the plugin owns under proxy.VHOST_DIR (basenames)."""
+def _vhost_apps() -> List[str]:
+    """Apps with a plugin-owned vhost file under proxy.VHOST_DIR."""
     vdir = proxy.VHOST_DIR
     if not os.path.isdir(vdir):
         return []
-    return sorted(f for f in os.listdir(vdir) if f.endswith(".conf"))
+    return sorted(f[:-len(".conf")] for f in os.listdir(vdir) if f.endswith(".conf"))
+
+
+def _site_apps() -> Dict[str, str]:
+    """{app: label} for every app that has a published site: a plugin vhost
+    file, or a domain registered in aaPanel (where SetSite puts them now, with
+    no vhost file at all). Without the second kind the `sites` scope found
+    nothing to remove on a current install."""
+    out = {app: "%s.conf" % app for app in _vhost_apps()}
+    for app in _list_apps():
+        try:
+            domain = proxy.read_domain(app)
+        except Exception:
+            domain = None
+        if domain and app not in out:
+            out[app] = "%s (app %s)" % (domain, app)
+    return out
+
+
+def _list_sites() -> List[str]:
+    """What the `sites` scope would remove, for the preview."""
+    return sorted(_site_apps().values())
 
 
 _SIZE_CACHE: Dict[str, tuple] = {}   # path -> (bytes, monotonic_ts)
@@ -162,7 +183,7 @@ def _normalize_scope(scope) -> List[str]:
     return out
 
 
-def _wipe_apps() -> Dict:
+def _wipe_apps(force: bool = False) -> Dict:
     removed: List[str] = []
     errors: Dict[str, str] = {}
     schedules_pruned: List[str] = []
@@ -183,8 +204,12 @@ def _wipe_apps() -> Dict:
             except Exception:
                 pass
             service.remove_unit(app)  # disables + removes the unit (hardening-aware)
-            instance.delete(app)
-            removed.append(app)
+            res = instance.delete(app, force=True) if force else instance.delete(app)
+            if isinstance(res, dict) and res.get("removed"):
+                removed.append(app)
+            else:
+                errors[app] = ((res or {}).get("site_warning") if isinstance(res, dict) else None) \
+                    or "the app directory is still present"
         except Exception as e:
             errors[app] = str(e)
     return {"removed": removed, "errors": errors, "schedules_pruned": schedules_pruned}
@@ -237,11 +262,13 @@ def _wipe_tomcats() -> Dict:
 def _wipe_sites() -> Dict:
     removed: List[str] = []
     errors: Dict[str, str] = {}
-    for conf in _list_sites():
-        app = conf[:-len(".conf")]
+    for app in sorted(_site_apps()):
         try:
-            proxy.remove_site(app)
-            removed.append(app)
+            res = proxy.remove_site(app)
+            if isinstance(res, dict) and res.get("removed") is False:
+                errors[app] = res.get("error") or "site was not removed"
+            else:
+                removed.append(app)
         except Exception as e:
             errors[app] = str(e)
     # inverse of ensure_include: drop the include line we added, then reload.
@@ -281,15 +308,37 @@ def _remove_include(nginx_conf: str = None) -> bool:
     return True
 
 
-def _wipe_full() -> Dict:
+def _unfinished(steps: Dict[str, Dict]) -> List[str]:
+    """Names of the steps that reported an error or skipped something."""
+    return [name for name, st in steps.items()
+            if isinstance(st, dict) and (st.get("errors") or st.get("skipped"))]
+
+
+def _errored(steps: Dict[str, Dict]) -> List[str]:
+    """Names of the steps that reported an error. A runtime skipped because an
+    app still uses it is the documented outcome of a partial wipe, not an error."""
+    return [name for name, st in steps.items() if isinstance(st, dict) and st.get("errors")]
+
+
+def _wipe_full(force: bool = False) -> Dict:
     """apps + jdks + tomcats + sites, THEN remove the whole data root (guarded)."""
     steps = {
-        "apps": _wipe_apps(),
+        "apps": _wipe_apps(force) if force else _wipe_apps(),
         "sites": _wipe_sites(),
         "tomcats": _wipe_tomcats(),
         "jdks": _wipe_jdks(),
     }
     data_root = {"removed": False, "errors": {}}
+    unfinished = [] if force else _unfinished(steps)
+    if unfinished:
+        # The data root holds what a retry needs (domain markers, the storage
+        # profiles with their keys) and every local backup. Removing it while
+        # apps, sites or runtimes are still there strands them.
+        data_root["errors"]["data_root"] = (
+            "kept: %s did not finish cleanly; fix the errors above and run the "
+            "wipe again" % ", ".join(unfinished))
+        steps["data_root"] = data_root
+        return steps
     try:
         if os.path.isdir(DATA_ROOT):
             # guarded: safe_rmtree refuses anything outside MANAGED_ROOTS and
@@ -302,8 +351,15 @@ def _wipe_full() -> Dict:
     return steps
 
 
-def wipe(scope, confirm: str) -> Dict:
+def wipe(scope, confirm: str, force: bool = False) -> Dict:
     """Remove plugin-managed state for the given `scope`.
+
+    `ok` is True only when no step reported an error; the per-step
+    {removed, errors, skipped} says what is left.
+
+    `force` is for finishing an uninstall when the panel cannot be reached to
+    confirm site removal: apps are removed anyway and a full wipe removes the
+    data root even after errors. What may be left in aaPanel is still reported.
 
     Only proceeds when confirm == "WIPE"; otherwise returns a no-op summary.
     `scope` is a csv string or list drawn from {apps,jdks,tomcats,sites,full}.
@@ -331,23 +387,24 @@ def wipe(scope, confirm: str) -> Dict:
         plan_error = str(e)
 
     if "full" in items:
-        results = _wipe_full()
-        out = {"ok": True, "performed": True, "scope": ["full"], "steps": results,
+        results = _wipe_full(force) if force else _wipe_full()
+        out = {"ok": not _errored(results), "performed": True, "scope": ["full"],
+               "steps": results,
                "uninstall_plan": plan_path}
         if plan_error:
             out["uninstall_plan_error"] = plan_error
         return out
 
     if "apps" in items:
-        results["apps"] = _wipe_apps()
+        results["apps"] = _wipe_apps(force) if force else _wipe_apps()
     if "sites" in items:
         results["sites"] = _wipe_sites()
     if "tomcats" in items:
         results["tomcats"] = _wipe_tomcats()
     if "jdks" in items:
         results["jdks"] = _wipe_jdks()
-    out = {"ok": True, "performed": True, "scope": items, "steps": results,
-           "uninstall_plan": plan_path}
+    out = {"ok": not _errored(results), "performed": True, "scope": items,
+           "steps": results, "uninstall_plan": plan_path}
     if plan_error:
         out["uninstall_plan_error"] = plan_error
     return out

@@ -687,7 +687,11 @@ def metrics_all(names) -> Dict[str, Dict]:
     return out
 
 
-def delete(app: str, *, purge: bool = True) -> Dict:
+def delete(app: str, *, purge: bool = True, force: bool = False) -> Dict:
+    """Remove an app. When its aaPanel site cannot be removed the app is left
+    whole so the delete can be retried, unless `force`: then the app goes and
+    the site is reported as possibly left behind. That is the way out when the
+    panel cannot be reached at all (plugin uninstall, no API key)."""
     app = validate.identifier(app, "app")
     site_cleanup = None
     # Clean up the reverse-proxy site in aaPanel before removing the instance
@@ -696,13 +700,6 @@ def delete(app: str, *, purge: bool = True) -> Dict:
         site_cleanup = proxy.remove_site(app)
     except Exception as e:
         site_cleanup = {"removed": False, "error": str(e)}
-    # Drop any backup schedule/cron entry for this app (partial wipe + DeleteApp).
-    try:
-        from ..backup import schedule as backupschedule
-        backupschedule.remove_schedule(app)
-    except Exception:
-        pass
-    service.remove_unit(app)
     base = base_path(app)
     removed = False
     # If aaPanel delete failed, keep the instance tree (incl. site.domain marker)
@@ -710,9 +707,21 @@ def delete(app: str, *, purge: bool = True) -> Dict:
     site_blocked = (isinstance(site_cleanup, dict)
                     and site_cleanup.get("removed") is False
                     and site_cleanup.get("domain"))
-    if purge and os.path.isdir(base) and not site_blocked:
-        fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
-        removed = True
+    if force or not (site_blocked and purge):
+        # Only past this point is the app being taken apart. A blocked delete
+        # leaves it whole and running, not stopped with its unit and schedule
+        # gone but its files and site still there.
+        try:
+            from ..backup import schedule as backupschedule
+            backupschedule.remove_schedule(app)
+        except Exception:
+            pass
+        service.remove_unit(app)
+        if purge and os.path.isdir(base):
+            fs.safe_rmtree(base, require_marker=True)  # refuses unmanaged dirs
+        # gone is gone: a leftover unit or site with no directory (or a second
+        # click) is a finished delete, not a failed one
+        removed = purge and not os.path.isdir(base)
     out = {"app": app, "removed": removed}
     if site_cleanup is not None:
         out["site"] = site_cleanup
@@ -721,9 +730,9 @@ def delete(app: str, *, purge: bool = True) -> Dict:
                 site_cleanup.get("error")
                 or "reverse-proxy site may still exist in aaPanel — remove it manually"
             )
-            if site_blocked and purge:
+            if site_blocked and purge and not force:
                 out["site_warning"] += (
-                    "; instance kept so domain marker remains for retry"
+                    "; the app was left unchanged so the delete can be retried"
                 )
     return out
 
