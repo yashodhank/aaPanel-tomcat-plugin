@@ -103,3 +103,103 @@ def test_status_reports_sizes(tmp_path, monkeypatch):
     st = logrotate.status()
     assert st["live_bytes"] == 1234
     assert st["rotated_bytes"] == 100 and st["rotated_files"] == 1
+
+
+# ---- root must not follow links planted in the app-owned logs dir ------------
+BIG = 2 * 1024 * 1024
+
+
+def test_rotate_ignores_a_symlinked_log(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    victim = tmp_path / "root-owned.db"
+    victim.write_bytes(b"S" * BIG)
+    ldir = inst / "app1" / "logs"
+    ldir.mkdir(parents=True)
+    os.symlink(str(victim), str(ldir / "x.log"))
+    res = logrotate.rotate(max_mb=1, keep=3)
+    assert res["count"] == 0
+    assert victim.read_bytes() == b"S" * BIG            # not truncated
+    assert sorted(os.listdir(str(ldir))) == ["x.log"]   # not copied out as a .gz
+
+
+def test_rotate_ignores_a_hardlinked_log(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    victim = tmp_path / "root-owned.db"
+    victim.write_bytes(b"S" * BIG)
+    ldir = inst / "app1" / "logs"
+    ldir.mkdir(parents=True)
+    os.link(str(victim), str(ldir / "x.log"))
+    assert logrotate.rotate(max_mb=1, keep=3)["count"] == 0
+    assert victim.read_bytes() == b"S" * BIG
+
+
+def test_rotate_and_purge_skip_a_symlinked_logs_dir(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    elsewhere = tmp_path / "etc"
+    elsewhere.mkdir()
+    (elsewhere / "catalina.out").write_bytes(b"S" * BIG)
+    (elsewhere / "keep.gz").write_bytes(b"z")
+    (inst / "app1").mkdir(parents=True)
+    os.symlink(str(elsewhere), str(inst / "app1" / "logs"))
+    assert logrotate.rotate(max_mb=1, keep=3)["count"] == 0
+    assert logrotate.purge(days=0)["removed"] == 0
+    assert sorted(os.listdir(str(elsewhere))) == ["catalina.out", "keep.gz"]
+    assert (elsewhere / "catalina.out").stat().st_size == BIG
+    assert logrotate.status()["live_bytes"] == 0
+
+
+def test_rotate_does_not_write_through_a_planted_temp_link(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    big = _make_log(inst, "app1", "catalina.out", BIG)
+    victim = tmp_path / "authorized_keys"
+    victim.write_bytes(b"original")
+    os.symlink(str(victim), big + ".1.gz.tmp")          # the old, predictable temp name
+    os.symlink(str(victim), big + ".1.gz")              # and the publish target
+    assert logrotate.rotate(max_mb=1, keep=3)["count"] == 1
+    assert victim.read_bytes() == b"original"
+    assert not os.path.islink(big + ".1.gz")            # link replaced, not followed
+    with gzip.open(big + ".1.gz", "rb") as f:
+        assert f.read() == b"L" * BIG
+
+
+def test_purge_leaves_link_targets_alone(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    live = _make_log(inst, "app1", "catalina.out", 50)
+    victim = tmp_path / "victim.gz"
+    victim.write_bytes(b"keep me")
+    os.symlink(str(victim), live + ".9.gz")
+    open(live + ".1.gz", "wb").write(b"y")
+    assert logrotate.purge(days=0)["removed"] == 1      # only the real rotation
+    assert victim.read_bytes() == b"keep me"
+
+
+def test_rotated_file_is_not_world_readable(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    big = _make_log(inst, "app1", "catalina.out", BIG)
+    logrotate.rotate(max_mb=1, keep=3)
+    assert os.stat(big + ".1.gz").st_mode & 0o007 == 0
+    assert [f for f in os.listdir(os.path.dirname(big)) if f.endswith(".tmp")] == []
+
+
+def test_rotate_keep_zero_discards(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    big = _make_log(inst, "app1", "catalina.out", BIG)
+    assert logrotate.rotate(max_mb=1, keep=0)["count"] == 1
+    assert os.listdir(os.path.dirname(big)) == ["catalina.out"] and os.path.getsize(big) == 0
+
+
+def test_purge_sweeps_temps_left_by_a_killed_run(tmp_path, monkeypatch):
+    inst, _, _ = _setup(tmp_path, monkeypatch)
+    live = _make_log(inst, "app1", "catalina.out", 50)
+    ldir = os.path.dirname(live)
+    stale = os.path.join(ldir, ".catalina.out.0123456789abcdef.tmp")
+    fresh = os.path.join(ldir, ".catalina.out.fedcba9876543210.tmp")
+    other = os.path.join(ldir, ".hidden.tmp")
+    for p in (stale, fresh, other):
+        open(p, "wb").write(b"x")
+    old = time.time() - 7200
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    logrotate.purge(days=30)
+    assert not os.path.exists(stale)
+    assert os.path.exists(fresh) and os.path.exists(other) and os.path.exists(live)

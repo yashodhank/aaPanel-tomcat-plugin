@@ -27,16 +27,52 @@ CRON_LOG = "/www/server/javahost/logs/backup-cron.log"
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _RUNNER = os.path.join(_PLUGIN_DIR, "core", "backup", "run.py")
 
-# 5-field cron expression of digits / * , - / only (no command injection surface).
-_CRON_FIELD = re.compile(r"^[0-9*/,\-]+$")
+# Each line of the cron.d file runs as root under /bin/sh, so every value that
+# reaches it is validated here: on the way in (set_schedule) and again on the way
+# out (_render_cron), because schedules.json is only as trusted as its last writer.
+_CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))   # min hour dom month dow
+# ASCII digits only (\d would also match other scripts' digits, which cron
+# cannot parse). A step is allowed after `*` or a range, not after a single
+# number: Debian's cron rejects `5/15`.
+_CRON_PART = re.compile(r"^(?:(\*|[0-9]{1,2}-[0-9]{1,2})(?:/([0-9]{1,2}))?|([0-9]{1,2}))$")
+
+
+def _valid_cron_field(field: str, lo: int, hi: int) -> bool:
+    for part in field.split(","):
+        m = _CRON_PART.match(part)
+        if not m:
+            return False
+        base, step = m.group(1) or m.group(3), m.group(2)
+        if step is not None and int(step) < 1:
+            return False
+        if base != "*":
+            nums = [int(n) for n in base.split("-")]
+            if any(n < lo or n > hi for n in nums) or nums != sorted(nums):
+                return False
+    return True
 
 
 def validate_cron(expr: str) -> str:
-    expr = (expr or "").strip()
-    fields = expr.split()
-    if len(fields) != 5 or not all(_CRON_FIELD.match(f) for f in fields):
-        raise ValueError("invalid cron expression (need 5 fields of [0-9*/,-]): %r" % expr)
+    """Numeric 5-field cron only. Range-checked, because one line the daemon
+    cannot parse makes it ignore the whole file, silencing every app's backups."""
+    fields = str(expr or "").split()
+    if len(fields) != 5 or not all(
+            _valid_cron_field(f, lo, hi) for f, (lo, hi) in zip(fields, _CRON_RANGES)):
+        raise ValueError("invalid cron expression (need 5 numeric fields: "
+                         "minute hour day month weekday): %r" % expr)
     return " ".join(fields)
+
+
+def validate_remotes(remotes) -> List[str]:
+    """Destination ids: storage-profile ids (identifier charset) or 'all'."""
+    if isinstance(remotes, str):
+        remotes = remotes.split(",")
+    out = []
+    for r in remotes or []:
+        r = str(r).strip()
+        if r:
+            out.append(r if r == "all" else validate.identifier(r, "backup destination"))
+    return out
 
 
 def _read() -> Dict[str, Dict]:
@@ -56,6 +92,8 @@ def _write(data: Dict[str, Dict]) -> None:
 def _norm_remotes(s: Dict) -> List[str]:
     """Destination ids for a schedule entry; legacy `remote:true` → ['all']."""
     r = s.get("remotes")
+    if isinstance(r, str):
+        return [x for x in r.split(",") if x]
     if r is not None:
         return list(r)
     return ["all"] if s.get("remote") else []
@@ -67,15 +105,19 @@ def _render_cron(data: Dict[str, Dict]) -> str:
              "SHELL=/bin/sh", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ""]
     for app in sorted(data):
         s = data[app]
-        cmd = "%s %s --app %s" % (py, _RUNNER, app)
-        remotes = _norm_remotes(s)
+        try:
+            cron = validate_cron(s.get("cron"))
+            cmd = "%s %s --app %s" % (py, _RUNNER, validate.identifier(app, "app"))
+            remotes = validate_remotes(_norm_remotes(s))
+            keep = int(s.get("keep") or 0)
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            continue    # a bad stored entry is dropped, never rendered as root
         if remotes:
             cmd += " --remotes %s" % ",".join(remotes)
-        keep = int(s.get("keep") or 0)
         if keep > 0:
             cmd += " --keep %d" % keep
         cmd += " >> %s 2>&1" % CRON_LOG
-        lines.append("%s root %s" % (s["cron"], cmd))
+        lines.append("%s root %s" % (cron, cmd))
     return "\n".join(lines) + "\n"
 
 
@@ -112,9 +154,7 @@ def set_schedule(app: str, cron_expr: str, remotes=None, keep: int = 7) -> Dict:
     app = validate.identifier(app, "app")
     cron = validate_cron(cron_expr)
     keep = max(0, int(keep))
-    if isinstance(remotes, str):
-        remotes = [x.strip() for x in remotes.split(",") if x.strip()]
-    remotes = list(remotes or [])
+    remotes = validate_remotes(remotes)
     data = _read()
     data[app] = {"cron": cron, "remotes": remotes, "keep": keep}
     _write(data)
