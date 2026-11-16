@@ -27,8 +27,8 @@ verification still apply on install either way.
 ## Install, paths, hardening
 
 Identical orchestration to the other lines (`installer.install("11")`):
-Java-floor check -> verified download (mandatory SHA-512, plus `.asc` against
-`tomcat-11` KEYS when `gpg` is present) -> staged extract into
+Java-floor check -> verified download (mandatory SHA-512 and `.asc` signature
+against the `tomcat-11` KEYS; refused without `gpg`) -> staged extract into
 `tomcat/11.staging` -> harden -> `.javahost-version` marker -> atomic swap into
 `/www/server/javahost/tomcat/11`, with discard-on-failure rollback.
 

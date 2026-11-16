@@ -30,10 +30,11 @@ install regardless of which path produced the version.
 
 1. Enforces the Java floor first (`ensure_java`), before anything is written.
 2. Verified download via `download.fetch_verified`: SHA-512 (from the artifact's
-   `.sha512`) is mandatory, and OpenPGP signature (`.asc`) is checked against a
-   keyring built from `tomcat-10` Apache KEYS when `gpg` is available. An
-   unverifiable artifact is an error, never a silent skip. An offline path
-   (local tarball + expected hash) is supported.
+   `.sha512`) and the OpenPGP signature (`.asc`, checked against a keyring built
+   from the `tomcat-10` Apache KEYS) are both mandatory. Without `gpg` or the
+   KEYS file the install is refused. The download lands under a temporary name
+   and is only published after both checks pass. An offline path (local tarball
+   + expected hash, no gpg needed) is supported.
 3. Staged extract into `tomcat/10.staging` (`tar -xzf --strip-components=1`).
 4. Harden + write `.javahost-version` marker + mark managed.
 5. Atomic swap into `/www/server/javahost/tomcat/10` (old install moved aside
