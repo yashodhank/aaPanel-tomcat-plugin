@@ -8,11 +8,13 @@ CATALINA_HOME (see installer.py). All removals are marker-gated (fs.safe_rmtree)
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import re
 import shutil
 import socket
+from contextlib import contextmanager
 import urllib.error
 import urllib.request
 from typing import Dict, List, Optional
@@ -74,6 +76,39 @@ def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
             return False
         except OSError:
             return True
+
+
+@contextmanager
+def _create_lock():
+    """Serialize "is the name free, is the port free, claim both" across requests.
+
+    A port only counts as taken once the new app's server.xml / app.env exists,
+    and the name once its directory does, so two creates running together could
+    both be handed the same port (or the same name)."""
+    fs.ensure_dir(INSTANCE_ROOT)
+    fd = os.open(os.path.join(INSTANCE_ROOT, ".create.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _discard_half_built(app: str, base: str) -> None:
+    """A create that failed part-way must not leave a directory that holds the
+    name and the port ("app already exists" on retry) with no working app."""
+    try:
+        service.remove_unit(app)
+    except Exception:
+        pass
+    try:
+        if os.path.isdir(base):
+            # no marker required: the caller made this directory itself, under the
+            # create lock, after checking the name was free; a failure while
+            # scaffolding can leave it without the marker
+            fs.safe_rmtree(base, require_marker=False)
+    except Exception:
+        pass
 
 
 def allocate_port(preferred: Optional[int] = None, lo: int = PORT_LO, hi: int = PORT_HI) -> int:
@@ -367,29 +402,46 @@ def create(app: str, major: str, port: int, memory_mb: int,
         raise RuntimeError("Tomcat %s is not installed" % major)
     if exists(app):
         raise RuntimeError("app already exists: %s" % app)
-    # allocate_port honors a requested port (and rejects conflicts) or picks a free one
-    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
     home = installer.home_path(major)
     # Default the JDK to the Tomcat line's baseline (min_java) instead of the
     # newest installed — otherwise every app silently lands on the highest JDK
     # (e.g. 21) regardless of Tomcat. Callers can still pin any JDK via prefer_java.
     if prefer_java in (None, "", 0, "0"):
         prefer_java = registry.get_line(major).min_java
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
+    # may download a JDK for minutes: done before the name and port are claimed
     java_home = installer.ensure_java(major, prefer=prefer_java)
     major_java = java.probe(java_home) or registry.get_line(major).min_java
     base = base_path(app)
-    _scaffold(base)
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), major_java)
-    service.write_setenv(base, app, java_home, home, opts, [])
-    _render_conf(base, app, port, catalina_home=home)
     from . import hardening
-    hardening.assert_no_ajp(os.path.join(base, "conf", "server.xml"))
-    hardening.secure_perms(base, user=user)
-    # The service runs as `user` (default www); give it ownership of CATALINA_BASE
-    # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
     from ..util import shell
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-    service.install_unit(app, java_home, home, base, user=user)
+    with _create_lock():
+        if exists(app):
+            raise RuntimeError("app already exists: %s" % app)
+        # allocate_port honors a requested port (and rejects conflicts) or picks a free one
+        port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+        try:                            # from here on the directory is ours to remove
+            _scaffold(base)
+            service.write_setenv(base, app, java_home, home, opts, [])
+            _render_conf(base, app, port, catalina_home=home)   # server.xml claims the port
+        except Exception:
+            _discard_half_built(app, base)
+            raise
+    try:
+        hardening.assert_no_ajp(os.path.join(base, "conf", "server.xml"))
+        hardening.secure_perms(base, user=user)
+        # The service runs as `user` (default www); give it ownership of CATALINA_BASE
+        # so it can write logs/work/temp. Best-effort (needs root; panel runs as root).
+        shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+        service.install_unit(app, java_home, home, base, user=user)
+    except Exception:
+        _discard_half_built(app, base)
+        raise
+    # The app is complete from here. A start that fails (aaPanel's process
+    # protection blocking exec, a bad JVM option) leaves it in place: the error
+    # tells the operator to fix the cause and Repair, and the logs say why.
     service.enable_start(app)
     return {"app": app, "tomcat": major, "port": port, "java": major_java,
             "status": service.status(app), "warnings": warns}
@@ -412,18 +464,17 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
         raise RuntimeError("not an executable jar (no Main-Class in MANIFEST): %s" % jar_src)
     if exists(app):
         raise RuntimeError("app already exists: %s" % app)
-    java_home = java.resolve(java_major, prefer=java_major) or java.install_temurin(java_major)
-    port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+    # The JDK that was asked for, not "that or anything newer": resolve() treats
+    # the major as a minimum, so a Java 8 app on a host with 21 ran on 21 while
+    # the response said 8.
+    if port not in (None, "", 0, "0"):
+        allocate_port(preferred=port)    # fail fast on a taken port, before any download
+    java_home = java.detect().get(java_major) or java.install_temurin(java_major)
     base = base_path(app)
-    for sub in ("bin", "logs"):
-        fs.ensure_dir(os.path.join(base, sub))
-    fs.mark_managed(base)
-    shutil.copyfile(jar_src, os.path.join(base, "app.jar"))
     opts, warns = jvm_opts.sanitize(jvm_opts.default_opts(memory_mb), java.probe(java_home) or java_major)
     # app.env carries SERVER_PORT (Spring Boot honors it) — also the port marker for health()
     from ..util import fs as _fs
     env_lines = [
-        "SERVER_PORT=%d" % port,
         # Bind to loopback ONLY: like the Tomcat connector, JAR apps must not face
         # the public interface — they are reached through the reverse proxy. Spring
         # Boot honors SERVER_ADDRESS (server.address); generic apps honor SERVER_HOST.
@@ -442,10 +493,33 @@ def create_jar(app: str, jar_src: str, java_major: int, port=None,
     # Persist JVM opts so RepairApp can rebuild a missing unit without
     # silently dropping -Xmx/-Xms (unit file alone is not durable).
     env_lines.append('JAVA_OPTS="%s"' % " ".join(opts))
-    _fs.atomic_write(os.path.join(base, "bin", "app.env"),
-                     "\n".join(env_lines) + "\n", mode=0o640)
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-    service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
+    with _create_lock():
+        if exists(app):
+            raise RuntimeError("app already exists: %s" % app)
+        port = allocate_port(preferred=port if port not in (None, "", 0, "0") else None)
+        try:                            # from here on the directory is ours to remove
+            for sub in ("bin", "logs"):
+                fs.ensure_dir(os.path.join(base, sub))
+            fs.mark_managed(base)
+            # app.env carries SERVER_PORT and an app.jar marks the directory as a
+            # JAR app: together they claim the port. The jar itself (possibly
+            # hundreds of MB) is copied after the lock is released.
+            _fs.atomic_write(os.path.join(base, "bin", "app.env"),
+                             "\n".join(["SERVER_PORT=%d" % port] + env_lines) + "\n", mode=0o640)
+            open(os.path.join(base, "app.jar"), "wb").close()
+        except Exception:
+            _discard_half_built(app, base)
+            raise
+    try:
+        tmp_jar = os.path.join(base, ".app.jar.part")
+        shutil.copyfile(jar_src, tmp_jar)
+        os.replace(tmp_jar, os.path.join(base, "app.jar"))
+        shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+        service.install_jar_unit(app, java_home, base, port, java_opts=" ".join(opts), user=user)
+    except Exception:
+        _discard_half_built(app, base)
+        raise
+    # complete from here: a failed start leaves the app in place to be repaired
     service.enable_start(app)
     return {"app": app, "type": "jar", "port": port, "java": java_major,
             "springboot": jarmod.detect_springboot(jar_src), "profiles": profiles or "",

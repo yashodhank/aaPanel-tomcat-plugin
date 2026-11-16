@@ -25,6 +25,14 @@ def _wait_done(job_id, timeout=15.0):
     return jobs.read_log(job_id)
 
 
+@pytest.fixture(autouse=True)
+def _no_reboot_reconciliation(monkeypatch):
+    """These tests fabricate running jobs with tiny `started` values. On a real
+    Linux host those predate the boot and would be reconciled to failed (see
+    tests/test_lifecycle.py for that rule), so switch the rule off here."""
+    monkeypatch.setattr(jobs, "_boot_time", lambda: None)
+
+
 def test_job_runs_to_done_and_captures_output(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "JOBS_ROOT", str(tmp_path / "jobs"))
     argv = [jobs.sys.executable or "python3", "-c", "print('hi-from-job')"]
