@@ -505,6 +505,100 @@ def _restore_java_opts(base: str, itype: str, manifest: Dict,
         " ".join(jvm_opts.default_opts(mem_i)), java_home)
 
 
+def _undo_restore(base: str, target: str, itype: str, manifest: Dict, user: str,
+                  aside: Optional[str], carried: List[str]) -> List[str]:
+    """Back out a failed restore. With `aside` (in-place restore) the previous
+    app is put back and restarted; otherwise the half-built app is removed.
+    Returns the problems hit while undoing (empty = clean)."""
+    problems: List[str] = []
+    try:
+        service.action(target, "stop")
+    except Exception:
+        pass        # the restored app may never have started
+    for name in carried:        # hand the app's own data back before the tree goes
+        try:
+            os.rename(os.path.join(base, name), os.path.join(aside, name))
+        except OSError as exc:
+            problems.append("return %s to the previous app: %s" % (name, exc))
+    if problems:
+        return problems         # do not delete a tree that still holds that data
+    if os.path.lexists(base):
+        try:
+            fs.safe_rmtree(base, require_marker=False)
+        except Exception as exc:
+            problems.append("remove restored tree: %s" % exc)
+    if not aside:
+        try:
+            service.remove_unit(target)
+        except Exception as exc:
+            problems.append("remove unit: %s" % exc)
+        return problems
+    if os.path.lexists(base):
+        problems.append("previous app kept at %s" % aside)
+        return problems
+    try:
+        os.rename(aside, base)
+        _install_service(base, target, itype, instance._read_port(base), manifest, user)
+        service.enable_start(target)
+    except Exception as exc:
+        problems.append("restart previous app: %s" % exc)
+    return problems
+
+
+def _install_service(base: str, target: str, itype: str, port, manifest: Dict,
+                     user: str) -> None:
+    """Re-render setenv + the service unit for the tree at `base`, from what that
+    tree itself records. Raises if it cannot produce a startable unit."""
+    env = instance._read_setenv(base)
+    java_home = env.get("JAVA_HOME") or instance._read_app_env(base).get("JAVA_HOME", "")
+    java_opts = _restore_java_opts(base, itype, manifest, java_home)
+    if itype == "jar":
+        service.install_jar_unit(target, java_home, base, port or 0,
+                                 java_opts=java_opts, user=user)
+        return
+    catalina_home = env.get("CATALINA_HOME", "")
+    if not (java_home and catalina_home):
+        raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
+    # only the sanitized options: never fall back to the archive's raw JAVA_OPTS
+    service.write_setenv(base, target, java_home, catalina_home, java_opts.split(), [])
+    service.install_unit(target, java_home, catalina_home, base, user=user)
+
+
+def _preflight_staged(src_base: str, itype: str) -> None:
+    """Reject an archive that cannot become a running app, while the live app is
+    still untouched."""
+    if itype == "jar":
+        return
+    from ..tomcat import hardening
+    hardening.assert_no_ajp(os.path.join(src_base, "conf", "server.xml"))
+    env = instance._read_setenv(src_base)
+    if not (env.get("JAVA_HOME") and env.get("CATALINA_HOME")):
+        raise RuntimeError("archive setenv is missing JAVA_HOME/CATALINA_HOME; "
+                           "cannot rebuild the service, nothing was changed")
+
+
+def _aside_path(target: str) -> str:
+    # outside INSTANCE_ROOT so it never lists as an app; same filesystem so the
+    # move is one atomic rename
+    root = os.path.join(os.path.dirname(instance.INSTANCE_ROOT.rstrip(os.sep)), ".restore-aside")
+    fs.ensure_dir(root, 0o700)
+    return os.path.join(root, "%s-%d" % (target, os.getpid()))
+
+
+_REGENERATED = ("work", "temp")     # Tomcat caches: never carried over
+
+
+def _carry_over(aside: str, base: str, moved: List[str]) -> None:
+    """Keep what the backup does not cover. Archives hold conf/webapps/bin/app.jar;
+    anything else in the app dir (uploads, an embedded DB, logs) is the app's own
+    data and must survive an in-place restore."""
+    for name in sorted(os.listdir(aside)):
+        if name in _REGENERATED or os.path.lexists(os.path.join(base, name)):
+            continue
+        os.rename(os.path.join(aside, name), os.path.join(base, name))
+        moved.append(name)       # recorded as it happens, so a rollback can undo it
+
+
 def restore(archive_path: str, as_name: Optional[str] = None,
             domain: Optional[str] = None, user: str = "www") -> Dict:
     """Restore an app from a backup archive.
@@ -514,6 +608,10 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     as_name      : None -> overwrite the original app in place (original port +
                    domain). Set -> create a NEW app (reallocated port; domain only
                    if `domain` is given, else the site is dropped).
+
+    An in-place restore is transactional: the live app is moved aside, not
+    deleted, and is put back and restarted if any step up to starting the
+    restored app fails.
     """
     if not archive_path or not os.path.isfile(archive_path):
         raise FileNotFoundError("archive not found: %r" % archive_path)
@@ -531,9 +629,13 @@ def restore(archive_path: str, as_name: Optional[str] = None,
     if new_mode:
         if instance.exists(target):
             raise RuntimeError("app already exists: %s (choose another name)" % target)
+    overwrite = not new_mode and instance.exists(target)
+    from ..util import shell
 
-    # Extract and prove secret permissions in staging before destructive
-    # overwrite cutover. A chmod failure must leave the live app untouched.
+    aside = None
+    carried: List[str] = []
+    # Extract and prove the archive usable in staging before the cutover. Any
+    # failure up to here must leave the live app untouched.
     staging = fs.mkdtemp("jh-restore-")
     try:
         archive.safe_extract_tar(archive_path, staging)
@@ -541,57 +643,65 @@ def restore(archive_path: str, as_name: Optional[str] = None,
         if not os.path.isdir(src_base):
             raise RuntimeError("archive missing base/ payload")
         _secure_restored_secrets(src_base, archive_path)
+        _preflight_staged(src_base, itype)
 
-        if not new_mode and instance.exists(target):
+        if overwrite:
             try:
                 service.action(target, "stop")
-            except Exception:
-                pass
-            service.remove_unit(target)
-            instance.delete(target, purge=True)
-        if os.path.isdir(base):
+            except Exception as exc:
+                # replacing files under a JVM that is still running corrupts both
+                raise RuntimeError("could not stop %s (%s); restore aborted, the app "
+                                   "was not changed" % (target, exc)) from exc
+            aside = _aside_path(target)
+            if os.path.lexists(aside):
+                shutil.rmtree(aside)
+            os.rename(base, aside)
+        elif os.path.isdir(base):
             fs.safe_rmtree(base, require_marker=fs.is_managed(base))
-        shutil.move(src_base, base)
+
+        try:
+            shutil.move(src_base, base)
+            fs.mark_managed(base)
+            _secure_or_discard_restore(base, archive_path, target)
+
+            # port + domain
+            if new_mode:
+                port = instance.allocate_port()
+                _rewrite_port(base, itype, port)
+                _clear_site_markers(base)        # never inherit the source domain/cert
+                dom = domain                      # only the explicitly-provided one
+            else:
+                port = instance._read_port(base) or manifest.get("port")
+                dom = manifest.get("domain")
+
+            if aside:
+                _carry_over(aside, base, carried)
+            # logs/work/temp are never archived, and Tomcat will not start without them
+            for sub in (("logs",) if itype == "jar" else ("logs", "work", "temp")):
+                fs.ensure_dir(os.path.join(base, sub))
+
+            shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
+            _install_service(base, target, itype, port, manifest, user)
+            if itype != "jar":
+                from ..tomcat import hardening
+                hardening.secure_perms(base, user=user)
+            # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
+            _secure_or_discard_restore(base, archive_path, target)
+            service.enable_start(target)
+        except Exception as exc:
+            problems = _undo_restore(base, target, itype, manifest, user, aside, carried)
+            if aside and not problems:
+                raise RuntimeError("restore failed, the previous app was put back and "
+                                   "restarted: %s" % exc) from exc
+            if problems:
+                raise RuntimeError("%s; rollback incomplete: %s"
+                                   % (exc, "; ".join(problems))) from exc
+            raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    fs.mark_managed(base)
-    _secure_or_discard_restore(base, archive_path, target)
-
-    # port + domain
-    if new_mode:
-        port = instance.allocate_port()
-        _rewrite_port(base, itype, port)
-        _clear_site_markers(base)            # never inherit the source domain/cert
-        dom = domain                          # only the explicitly-provided one
-    else:
-        port = instance._read_port(base) or manifest.get("port")
-        dom = manifest.get("domain")
-
-    # ownership
-    from ..util import shell
-    shell.run(["chown", "-R", "%s:%s" % (user, user), base], check=False)
-
-    # re-render setenv (fixes CATALINA_BASE/app for a new name) + the service unit
-    env = instance._read_setenv(base)
-    java_home = env.get("JAVA_HOME") or instance._read_app_env(base).get("JAVA_HOME", "")
-    java_opts = _restore_java_opts(base, itype, manifest, java_home)
-    if itype == "jar":
-        service.install_jar_unit(target, java_home, base, port or 0,
-                                 java_opts=java_opts, user=user)
-    else:
-        catalina_home = env.get("CATALINA_HOME", "")
-        opts = [o for o in (java_opts or env.get("JAVA_OPTS", "") or "").split() if o]
-        if java_home and catalina_home:
-            service.write_setenv(base, target, java_home, catalina_home, opts, [])
-            service.install_unit(target, java_home, catalina_home, base, user=user)
-        else:
-            raise RuntimeError("restored setenv missing JAVA_HOME/CATALINA_HOME; cannot rebuild unit")
-
-    # Re-apply secret modes after rewrite/chown (tar member modes may be loose).
-    _secure_or_discard_restore(base, archive_path, target)
-
-    service.enable_start(target)
+    if aside:
+        shutil.rmtree(aside, ignore_errors=True)   # commit: the old tree is no longer needed
 
     # republish the reverse-proxy site + re-issue SSL (best-effort, never bundle keys)
     ssl_state = False
