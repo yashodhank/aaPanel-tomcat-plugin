@@ -72,7 +72,7 @@ them via a custom endpoint.
 
 | Mode | When | What happens |
 |------|------|--------------|
-| **Overwrite** | no new name | The original app is stopped and removed, then restored in place with its original port/domain. **Requires typing `RESTORE`** to confirm. |
+| **Overwrite** | no new name | The original app is stopped and moved aside, then restored in place with its original port/domain, site and backup schedule. If any step up to starting the restored app fails, the previous app is put back and restarted. Files in the app directory that the backup does not cover (uploads, an embedded database, logs) are kept. **Requires typing `RESTORE`** to confirm. |
 | **Restore as new** | a new name given | A separate app on a **reallocated port** (`server.xml`/`app.env` rewritten); domain remapped only if you supply one. One-click. |
 
 - **UI:** Backups → **Restore** on a row → optional new name + domain. If the archive
