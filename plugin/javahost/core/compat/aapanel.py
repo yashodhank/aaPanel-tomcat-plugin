@@ -21,6 +21,7 @@ import os
 import re
 import ssl as _sslmod
 import stat
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -63,6 +64,66 @@ def log(action: str, msg: str) -> None:
 def attr(get: Any, name: str, default=None):
     """Safe attribute access on the panel `get` namespace."""
     return getattr(get, name, default)
+
+
+# --- System Hardening ---------------------------------------------------------
+# JavaHost never lifts the immutable bit itself and never edits the hardening plugin's
+# config. When a hardened directory blocks a write it asks the panel to pause
+# hardening with the panel's own helper, and the panel turns it back on after.
+
+_PANEL_CLASS = "/www/server/panel/class"
+_hardening_api = None
+
+
+def _panel_hardening_api():
+    """The panel's `public` module if it offers the pause/resume pair, else None.
+
+    Background jobs run outside the panel process, where the module-level import
+    above found nothing, so this looks in the panel's class directory too."""
+    global _hardening_api
+    if _hardening_api is None:
+        mod = public
+        if mod is None and os.path.isdir(_PANEL_CLASS):
+            if _PANEL_CLASS not in sys.path:
+                sys.path.append(_PANEL_CLASS)
+            try:
+                import public as mod  # noqa: F811
+            except Exception:
+                mod = None
+        ok_ = callable(getattr(mod, "stop_syssafe", None)) and \
+            callable(getattr(mod, "start_syssafe", None))
+        _hardening_api = mod if ok_ else False
+    return _hardening_api or None
+
+
+def can_pause_hardening() -> bool:
+    return _panel_hardening_api() is not None
+
+
+@contextlib.contextmanager
+def hardening_paused(enabled: bool = True):
+    """Ask the panel to pause System Hardening for the block, then resume it.
+
+    The panel's helper only stops hardening when it finds the system directories
+    unwritable, and only restarts what it stopped. Yields True when the panel was
+    asked. A no-op off-panel, on panels without the helper, or when disabled."""
+    api = _panel_hardening_api() if enabled else None
+    asked = False
+    if api is not None:
+        try:
+            api.stop_syssafe()
+            asked = True
+            log("Hardening", "paused System Hardening for a JavaHost system write")
+        except Exception:
+            asked = False
+    try:
+        yield asked
+    finally:
+        if asked:
+            try:
+                api.start_syssafe()
+            except Exception as e:
+                log("Hardening", "could not resume System Hardening: %s" % e)
 
 
 # --- webserver gate (nginx-only until Apache/OLS epic) -----------------------

@@ -6,9 +6,9 @@ The source of truth is schedules.json (per-app {cron, remote, keep}); the cron.d
 file /etc/cron.d/javahost-backups is regenerated from it on every change (robust —
 no fragile cron-line parsing). Each entry runs core/backup/run.py for one app.
 
-Writes to /etc/cron.d transparently lift+relock the immutable bit if the dir is
-hardened (chattr +i), reusing util.immutable like the systemd unit writer. cron.d
-files are picked up automatically — no reload needed.
+If /etc/cron.d is read-only on a hardened host, the write asks the panel to pause
+System Hardening (compat.aapanel.hardening_paused), like the service unit writer.
+cron.d files are picked up automatically — no reload needed.
 """
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ import sys
 from typing import Dict, List
 
 from .. import config
-from ..util import fs, immutable, validate
+from ..compat import aapanel as panel
+from ..util import fs, validate
 
 SCHEDULES_PATH = "/www/server/javahost/schedules.json"
 CRON_PATH = "/etc/cron.d/javahost-backups"
@@ -129,18 +130,12 @@ def _regenerate(data: Dict[str, Dict]) -> None:
         # no cron.d on this host: schedules.json is still recorded, just inert
         return
     fs.ensure_dir(os.path.dirname(CRON_LOG))
-    with immutable.writable(parent, enabled=mh):
+    with panel.hardening_paused(enabled=mh and not fs.can_write_dir(parent)):
         if not data:
             if os.path.exists(CRON_PATH):
-                with immutable.writable(CRON_PATH, enabled=mh):
-                    os.unlink(CRON_PATH)
+                os.unlink(CRON_PATH)
             return
-        body = _render_cron(data)
-        if os.path.exists(CRON_PATH):
-            with immutable.writable(CRON_PATH, enabled=mh):
-                fs.atomic_write(CRON_PATH, body, mode=0o644)
-        else:
-            fs.atomic_write(CRON_PATH, body, mode=0o644)
+        fs.atomic_write(CRON_PATH, _render_cron(data), mode=0o644)
 
 
 def list_schedules() -> List[Dict]:

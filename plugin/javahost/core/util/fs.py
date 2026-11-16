@@ -126,3 +126,17 @@ def list_managed(root: str) -> Iterable[str]:
         for d in os.listdir(root)
         if is_managed(os.path.join(root, d))
     ]
+
+
+def can_write_dir(d: str) -> bool:
+    """Real write probe: catches a read-only or immutable directory, which
+    os.access cannot see."""
+    if not os.path.isdir(d):
+        return False
+    try:
+        fd, p = tempfile.mkstemp(dir=d, prefix=".javahost-probe-")
+        os.close(fd)
+        os.unlink(p)
+        return True
+    except OSError:
+        return False

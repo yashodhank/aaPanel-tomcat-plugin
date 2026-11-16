@@ -81,16 +81,12 @@ uninstall_javahost() {
     # plan file requests a granular wipe, or the operator sets PURGE=1.
     for d in "${ICON_DIRS[@]}"; do rm -f "${d}/ico-${PLUGIN_NAME}.png" 2>/dev/null || true; done
     # Remove BOTH managed crons (log-rotation + scheduled backups) so neither
-    # keeps firing against a removed plugin. Only lift/relock the immutable bit if
-    # /etc/cron.d was ALREADY hardened — never harden a dir that wasn't.
-    if [ -f /etc/cron.d/javahost-logrotate ] || [ -f /etc/cron.d/javahost-backups ]; then
-        was_locked=0
-        if command -v lsattr >/dev/null 2>&1 && lsattr -d /etc/cron.d 2>/dev/null | awk '{print $1}' | grep -q i; then
-            was_locked=1; chattr -i /etc/cron.d 2>/dev/null || true
-        fi
-        rm -f /etc/cron.d/javahost-logrotate /etc/cron.d/javahost-backups 2>/dev/null || true
-        [ "$was_locked" = 1 ] && chattr +i /etc/cron.d 2>/dev/null || true
-    fi
+    # keeps firing against a removed plugin. On a hardened host /etc/cron.d is
+    # read-only; JavaHost does not unlock it, so say what is left instead.
+    rm -f /etc/cron.d/javahost-logrotate /etc/cron.d/javahost-backups 2>/dev/null || true
+    for f in /etc/cron.d/javahost-logrotate /etc/cron.d/javahost-backups; do
+        [ -e "$f" ] && echo "JavaHost: could not remove $f (System Hardening?). Turn hardening off and delete it."
+    done
     if [ -f "$UNINSTALL_PLAN" ]; then
         local scope
         scope="$(head -n1 "$UNINSTALL_PLAN" 2>/dev/null | tr -d '[:space:]')"

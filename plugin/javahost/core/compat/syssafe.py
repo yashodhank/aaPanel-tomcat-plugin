@@ -1,27 +1,16 @@
 # coding: utf-8
 """
-Coexistence with aaPanel "System Hardening" (the `syssafe` plugin).
-
-This registers JavaHost in syssafe's OWN process allowlist (`process_white` /
-`process_white_rule`) — the sanctioned extension point — so JavaHost-managed
-Tomcat/JAR services are recognized rather than killed/blocked as "abnormal
-processes". It is append-only (never removes another entry), backs the config up
-first, and is reversible. It does NOT disable hardening or bypass any control;
-defeating an exec/anti-persistence filter is out of scope by design.
-
-Note: this addresses the *process protection* layer. The *immutable service dir*
-layer is handled separately (util.immutable lift/relock). On the most aggressive
-setups a one-time hardening re-toggle may still be needed to apply changes; that
-is surfaced honestly to the operator.
+Read-only detection of aaPanel "System Hardening" (the `syssafe` plugin) and the
+host exec filter. JavaHost reports what it finds so the operator can act in the
+panel; it never edits the hardening plugin's config or allowlists. Pausing
+hardening for a system write goes through the panel's own helper, in
+`compat.aapanel.hardening_paused`.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
-from typing import List, Optional, Tuple
-
-from ..util import immutable
+from typing import Optional, Tuple
 
 # Where syssafe keeps its config (varies by panel version).
 CONFIG_CANDIDATES = [
@@ -29,11 +18,6 @@ CONFIG_CANDIDATES = [
     "/www/server/panel/plugin/syssafe/config.json",
     "/www/server/panel/data/syssafe.json",
 ]
-
-# Markers that identify JavaHost-managed processes. `java` is already in
-# syssafe's default allowlist; these cover the launcher/daemon + a path rule.
-JAVAHOST_RULES = ["/www/server/javahost", "javahost"]   # process_white_rule (substring)
-JAVAHOST_NAMES = ["catalina.sh", "jsvc", "jsvc.exec"]    # process_white (exact)
 
 
 def find_config() -> Tuple[Optional[str], Optional[dict]]:
@@ -55,7 +39,7 @@ def is_active() -> bool:
 
 # aaPanel's deepest layer is a global LD_PRELOAD execve filter (bt_security /
 # "usranalyse"), which is what emits 203/EXEC + "Tips from BT security". It is NOT
-# governed by syssafe's process_white — it has its own enable/disable + config.
+# governed by syssafe's process allowlist — it has its own enable/disable + config.
 LD_PRELOAD = "/etc/ld.so.preload"
 EXEC_AGENT_MARKERS = ("usranalyse", "bt_security", "bt_tamper")
 USRANALYSE_DISABLE = "/usr/local/usranalyse/sbin/usranalyse-disable"
@@ -90,45 +74,3 @@ def exec_filter() -> dict:
             "`%s` while creating apps then re-enable with `%s`."
             % (USRANALYSE_DISABLE, USRANALYSE_ENABLE)) if active else "",
     }
-
-
-def merge_whitelist(cfg: dict) -> Tuple[dict, List[str]]:
-    """Pure: append JavaHost markers to the process allowlists if missing.
-    Returns (cfg, added). Idempotent; never removes existing entries."""
-    added: List[str] = []
-    proc = cfg.setdefault("process", {})
-    for key, vals in (("process_white_rule", JAVAHOST_RULES),
-                      ("process_white", JAVAHOST_NAMES)):
-        lst = proc.setdefault(key, [])
-        for v in vals:
-            if v not in lst:
-                lst.append(v)
-                added.append("%s:%s" % (key, v))
-    return cfg, added
-
-
-def whitelist_javahost() -> dict:
-    """Register JavaHost in syssafe's process allowlist (append-only, backed up)."""
-    path, cfg = find_config()
-    if not path:
-        raise RuntimeError("aaPanel System Hardening (syssafe) not found — nothing to whitelist")
-    cfg, added = merge_whitelist(cfg)
-    if not added:
-        return {"changed": False, "config": path, "added": [],
-                "active": is_active(), "exec_filter": exec_filter()}
-    backup = path + ".javahost.bak"
-    if not os.path.exists(backup):
-        shutil.copyfile(path, backup)
-    body = json.dumps(cfg)
-    # the config file/dir may itself be immutable on a hardened host
-    with immutable.writable(os.path.dirname(path)):
-        with immutable.writable(path):
-            tmp = path + ".javahost.tmp"
-            with open(tmp, "w") as f:
-                f.write(body)
-            os.replace(tmp, path)
-    return {"changed": True, "config": path, "added": added, "backup": backup,
-            "exec_filter": exec_filter(),
-            "note": "Registered JavaHost in System Hardening's process allowlist. "
-                    "If a managed service still won't start, re-toggle System "
-                    "Hardening once so syssafe reloads."}

@@ -11,10 +11,10 @@ CONFIG_PATH = "/www/server/javahost/config.json"
 _INFO_JSON = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "info.json")
 
 _DEFAULTS = {
-    # When true (default), the plugin may momentarily lift the immutable bit on its
-    # OWN service-file paths to write a unit on a hardened host, then re-lock them.
-    # Set false to forbid touching chattr +i (plugin then errors and asks the
-    # operator to disable hardening / lift the lock manually).
+    # When true (default), the plugin may ask the panel to pause System Hardening
+    # while it writes a service unit or cron file on a hardened host; the panel
+    # resumes it straight after. Set false to forbid that (the plugin then errors
+    # and asks the operator to turn hardening off for the change).
     "manage_hardening": True,
 
     # Log management (rotation + purge). Rotation copy-truncates oversized app/cron

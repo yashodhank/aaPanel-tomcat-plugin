@@ -16,8 +16,8 @@ PURGE deletes rotated `*.gz` older than the retention window. A *live* log is
 never deleted — only its gzipped rotations.
 
 SCHEDULE: a single managed /etc/cron.d/javahost-logrotate runs `--run` on the
-configured cadence, lifting/relocking the immutable bit if the dir is hardened
-(same pattern as scheduled backups).
+configured cadence. On a hardened host the write asks the panel to pause System
+Hardening (same pattern as scheduled backups).
 """
 from __future__ import annotations
 
@@ -37,7 +37,8 @@ if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
 
 from core import config                       # noqa: E402
-from core.util import fs, immutable           # noqa: E402
+from core.compat import aapanel as panel     # noqa: E402
+from core.util import fs                      # noqa: E402
 
 ROOT = "/www/server/javahost"
 INSTANCE_ROOT = ROOT + "/instances"
@@ -241,18 +242,12 @@ def apply_schedule() -> Dict:
     if not os.path.isdir(parent):
         return {"cron": False, "reason": "no /etc/cron.d on this host"}
     fs.ensure_dir(LOGS_DIR)
-    with immutable.writable(parent, enabled=mh):
+    with panel.hardening_paused(enabled=mh and not fs.can_write_dir(parent)):
         if not enabled:
             if os.path.exists(CRON_PATH):
-                with immutable.writable(CRON_PATH, enabled=mh):
-                    os.unlink(CRON_PATH)
+                os.unlink(CRON_PATH)
             return {"cron": False, "enabled": False}
-        body = _render_cron(when)
-        if os.path.exists(CRON_PATH):
-            with immutable.writable(CRON_PATH, enabled=mh):
-                fs.atomic_write(CRON_PATH, body, mode=0o644)
-        else:
-            fs.atomic_write(CRON_PATH, body, mode=0o644)
+        fs.atomic_write(CRON_PATH, _render_cron(when), mode=0o644)
     return {"cron": True, "enabled": True, "when": when}
 
 
