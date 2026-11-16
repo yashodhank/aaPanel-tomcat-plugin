@@ -378,7 +378,8 @@ def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dic
             # The aaPanel site owns the vhost, so a cert on disk (just issued by
             # certbot, or left from an earlier enable) serves nothing until the
             # panel switches the site to HTTPS. Require that before ssl=true.
-            if not panel_api.http_enable_site_ssl(domain):
+            if not (panel_api.http_enable_site_ssl(domain)
+                    or panel_api.site_conf_serves_https(domain)):
                 return {"ssl": False, "error":
                         "a certificate is present but aaPanel did not enable HTTPS "
                         "for the site%s" % ("" if panel_api.api_key_configured() else

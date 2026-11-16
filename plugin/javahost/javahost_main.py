@@ -734,7 +734,8 @@ class javahost_main(object):
 
     def DeleteApp(self, get):
         try:
-            res = instance.delete(panel.attr(get, "app"))
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            res = instance.delete(panel.attr(get, "app"), force=force)
             if not res.get("removed"):
                 # never a green envelope around an app that is still there
                 panel.log("DeleteApp", "%s NOT removed" % res["app"])
@@ -1257,7 +1258,8 @@ class javahost_main(object):
                 return panel.err("confirmation required: pass confirm=%r"
                                  % maintenance.CONFIRM)
             scope = panel.attr(get, "scope", "")
-            res = maintenance.wipe(scope, confirm)
+            force = str(panel.attr(get, "force", "")).lower() in ("1", "true", "yes", "on")
+            res = maintenance.wipe(scope, confirm, force=force)
             panel.log("Wipe", "scope=%s performed=%s" % (scope, res.get("performed")))
             return panel.ok(res)
         except Exception as e:

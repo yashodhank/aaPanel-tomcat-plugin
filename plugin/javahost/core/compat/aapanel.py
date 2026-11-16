@@ -776,7 +776,11 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
         rc, out, err = run([nginx, "-s", "reload"], check=False, timeout=15)
         if rc != 0:
             detail = ((err or "") + (out or "")).strip()[-400:]
-            return _rollback("nginx reload failed: %s" % detail)
+            # nginx not running is not this write's failure: the config passed
+            # `nginx -t` and takes effect when nginx starts. Rolling back there
+            # would orphan the site that was just created.
+            if not re.search(r"nginx\.pid|invalid PID|No such process", detail):
+                return _rollback("nginx reload failed: %s" % detail)
     except Exception as e:
         return _rollback("nginx reload failed: %s" % e)
     return True, ""
@@ -840,6 +844,19 @@ def http_enable_site_ssl(domain: str) -> bool:
         if isinstance(data, dict) and (data.get("status") or data.get("success")):
             return True
     return False
+
+
+def site_conf_serves_https(domain: str) -> bool:
+    """Whether the aaPanel-owned nginx vhost for ``domain`` already has a TLS
+    server (HTTPS switched on in the panel, by any means)."""
+    try:
+        with open(_AAPANEL_SITE_CONF % domain, encoding="utf-8", errors="replace") as f:
+            body = f.read()
+    except OSError:
+        return False
+    live = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+    return bool(re.search(r"\blisten\s+[^;]*\b443\b[^;]*\bssl\b", live)
+                and re.search(r"\bssl_certificate\s+\S", live))
 
 
 def http_disable_site_ssl(domain: str) -> bool:

@@ -41,11 +41,20 @@ def test_unset_and_junk_fall_back_to_defaults(cfg):
     assert (config.log_rotate_keep(), config.log_purge_days()) == (7, 30)
 
 
-def test_update_refuses_to_overwrite_an_unreadable_config(cfg):
+def test_an_unreadable_config_is_set_aside_not_overwritten(cfg):
     cfg.write_text('{"aapanel_api_key": "KEEP-ME", "site_suffix": "example.com"')   # truncated
-    with pytest.raises(RuntimeError, match="not valid JSON"):
-        config.update({"log_rotate_keep": 3})
-    assert "KEEP-ME" in cfg.read_text()         # not replaced by {"log_rotate_keep": 3}
+    config.update({"log_rotate_keep": 3})       # saving still works
+    assert json.loads(cfg.read_text()) == {"log_rotate_keep": 3}
+    aside = cfg.with_name("config.json.unreadable")
+    assert "KEEP-ME" in aside.read_text()       # what was there is kept for the operator
+    assert os.stat(str(aside)).st_mode & 0o777 == 0o600
+
+
+def test_an_empty_config_file_is_just_empty(cfg):
+    cfg.write_text("")
+    config.update({"log_rotate_keep": 3})
+    assert json.loads(cfg.read_text()) == {"log_rotate_keep": 3}
+    assert not cfg.with_name("config.json.unreadable").exists()
 
 
 def test_concurrent_updates_do_not_lose_keys(cfg):
@@ -100,6 +109,26 @@ def test_delete_app_endpoint_reports_a_blocked_delete_as_an_error(blocked_app):
     assert "was not deleted" in res["msg"] and "did not confirm removal" in res["msg"]
 
 
+def test_force_deletes_the_app_and_says_the_site_may_remain(blocked_app):
+    base, touched = blocked_app
+    import javahost_main
+    res = javahost_main.javahost_main().DeleteApp(types.SimpleNamespace(app="demo", force="1"))
+    assert res.get("status") is True and not base.exists()
+    assert sorted(touched) == ["schedule", "unit"]
+    body = res.get("msg") if isinstance(res.get("msg"), dict) else res
+    assert "did not confirm removal" in str(body)       # the leftover is still reported
+
+
+def test_deleting_an_app_whose_directory_is_already_gone_succeeds(blocked_app, monkeypatch):
+    base, touched = blocked_app
+    monkeypatch.setattr(proxy, "remove_site", lambda app: {"app": app, "removed": True, "domain": None})
+    import shutil
+    shutil.rmtree(str(base))
+    import javahost_main
+    res = javahost_main.javahost_main().DeleteApp(types.SimpleNamespace(app="demo"))
+    assert res.get("status") is True        # a second click, or a leftover unit: nothing left to delete
+
+
 def test_delete_app_still_deletes(blocked_app, monkeypatch):
     base, touched = blocked_app
     monkeypatch.setattr(proxy, "remove_site", lambda app: {"app": app, "removed": True, "domain": None})
@@ -137,6 +166,19 @@ def test_ssl_is_not_marked_on_when_the_panel_did_not_enable_https(aapanel_site, 
     assert ssl.read_ssl("site") is False
 
 
+def test_https_the_operator_enabled_in_the_panel_counts(aapanel_site, monkeypatch, tmp_path):
+    # no API key, so the plugin cannot flip the site, but the site already serves TLS
+    monkeypatch.setattr(panel_api, "http_enable_site_ssl", lambda d: False)
+    conf = tmp_path / "app.example.com.conf"
+    monkeypatch.setattr(panel_api, "_AAPANEL_SITE_CONF", str(tmp_path / "%s.conf"))
+    conf.write_text("server {\n  listen 80;\n  #listen 443 ssl;\n  #ssl_certificate /x;\n}\n")
+    assert ssl.enable("site", "app.example.com", 8085)["ssl"] is False      # commented out is not on
+    conf.write_text("server {\n  listen 80;\n  listen 443 ssl http2;\n"
+                    "  ssl_certificate /www/server/panel/vhost/cert/app.example.com/fullchain.pem;\n}\n")
+    res = ssl.enable("site", "app.example.com", 8085)
+    assert res["ssl"] is True and ssl.read_ssl("site") is True
+
+
 def test_ssl_is_marked_on_once_the_panel_confirms(aapanel_site, monkeypatch):
     monkeypatch.setattr(panel_api, "http_enable_site_ssl", lambda d: True)
     res = ssl.enable("site", "app.example.com", 8085)
@@ -170,15 +212,23 @@ def test_failed_nginx_reload_is_reported_and_rolled_back(monkeypatch, tmp_path):
     monkeypatch.setattr(panel_api, "_AAPANEL_PROXY_DIR", str(vhost / "proxy" / "%s"))
     monkeypatch.setattr(panel_api, "_AAPANEL_PROXYFILE", str(proxyfile))
 
+    reload_err = ["nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)"]
+
     def run(argv, check=False, timeout=15):
         if "reload" in argv:
-            return (1, "", "nginx: [error] invalid PID number")
+            return (1, "", reload_err[0])
         return (0, "syntax is ok", "")
     monkeypatch.setattr(panel_api, "run", run)
 
     ok, err = panel_api.write_aapanel_proxy_files(domain, 18080)
-    assert ok is False and "reload failed" in err and "invalid PID" in err
+    assert ok is False and "reload failed" in err and "bind()" in err
     assert site_conf.read_text() == original and proxyfile.read_text() == "[]"
+
+    # nginx simply not running is different: the config is valid and applies when
+    # it starts, and rolling back would orphan the site that was just created
+    reload_err[0] = 'nginx: [error] open() "/www/server/nginx/logs/nginx.pid" failed (2: No such file or directory)'
+    ok, err = panel_api.write_aapanel_proxy_files(domain, 18080)
+    assert ok is True and site_conf.read_text() != original
 
 
 # ---- wipe -------------------------------------------------------------------- #
@@ -211,7 +261,33 @@ def test_full_wipe_keeps_the_data_root_when_a_runtime_was_skipped(wipe_env, monk
     monkeypatch.setattr(maintenance, "_wipe_jdks", lambda: {
         "removed": [], "errors": {}, "skipped": {"jdk-17": ["shop"]}})
     res = maintenance.wipe("full", "WIPE")
-    assert res["ok"] is False and wipe_env.is_dir()
+    assert wipe_env.is_dir()
+    assert res["ok"] is False and "jdks did not finish" in res["steps"]["data_root"]["errors"]["data_root"]
+
+
+def test_forced_full_wipe_finishes_and_still_reports_what_failed(wipe_env, monkeypatch):
+    # plugin uninstall: there is no second attempt, the panel may be unreachable
+    seen = []
+    monkeypatch.setattr(maintenance, "_wipe_apps", lambda force=False: seen.append(force) or {
+        "removed": ["shop"], "errors": {}})
+    monkeypatch.setattr(maintenance, "_wipe_sites", lambda: {
+        "removed": [], "errors": {"shop": "panel unreachable"}})
+    res = maintenance.wipe("full", "WIPE", force=True)
+    assert seen == [True] and not wipe_env.exists()
+    assert res["ok"] is False and res["steps"]["sites"]["errors"] == {"shop": "panel unreachable"}
+
+
+def test_forced_wipe_removes_an_app_whose_site_cannot_be_confirmed(blocked_app):
+    base, touched = blocked_app
+    monkeypatch_apps = maintenance._list_apps
+    maintenance._list_apps = lambda: ["demo"]
+    try:
+        assert maintenance._wipe_apps()["errors"]                  # left whole without force
+        assert base.is_dir()
+        res = maintenance._wipe_apps(force=True)
+    finally:
+        maintenance._list_apps = monkeypatch_apps
+    assert res["removed"] == ["demo"] and not base.exists()
 
 
 def test_full_wipe_removes_the_data_root_when_everything_finished(wipe_env):
@@ -225,6 +301,11 @@ def test_partial_wipe_reports_not_ok_when_a_step_has_errors(wipe_env, monkeypatc
         "removed": [], "errors": {"11": "in use"}, "skipped": {}})
     assert maintenance.wipe("tomcats", "WIPE")["ok"] is False
     assert maintenance.wipe("jdks", "WIPE")["ok"] is True
+    # a runtime skipped because an app still uses it is the documented outcome
+    monkeypatch.setattr(maintenance, "_wipe_jdks", lambda: {
+        "removed": [], "errors": {}, "skipped": {"jdk-17": ["shop"]}})
+    res = maintenance.wipe("jdks", "WIPE")
+    assert res["ok"] is True and res["steps"]["jdks"]["skipped"] == {"jdk-17": ["shop"]}
 
 
 def test_wipe_apps_does_not_count_an_app_that_is_still_there(monkeypatch):
@@ -298,3 +379,32 @@ def test_a_failed_update_check_is_not_cached_for_a_day(tmp_path, monkeypatch):
     later = updates.check(now=1000.0 + updates.ERROR_TTL_SECONDS + 1)    # then it re-checks
     assert later["cached"] is False and later["tomcat"]["11"]["update"] is True
     assert updates.check(now=1000.0 + 3600 * 5)["cached"] is True        # a good result keeps the day
+
+
+# ---- UI: the way out of a blocked delete ------------------------------------- #
+def test_ui_offers_to_delete_anyway_when_the_site_blocks_it():
+    from test_ui_reliability import run_node, section
+    html = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "plugin", "javahost", "index.html"), encoding="utf-8").read()
+    js = section(html, "function deleteApp(app, btn, force){", "// EVENT WIRING")
+    harness = """
+    let calls=[], confirms=[true,true], toasts=[];
+    function confirm(m){ return confirms.shift(); }
+    function appPending(){return false;} function acquireAppPending(){return {};} function releaseAppPending(){}
+    function busy(){} function syncAppPendingControls(){} function resultIsUncertain(){return false;}
+    function toast(m,k,t){ toasts.push(k); } function refresh(){} function closeDrawer(){}
+    function payload(r){return r.msg;} function errText(p){return String(p);}
+    function failed(r){return r.status===false;}
+    function call(name, data, cb){
+      calls.push(data);
+      cb(data.force ? {status:true,msg:{app:'shop',removed:true}}
+                    : {status:false,msg:'shop was not deleted: aaPanel site delete did not confirm removal'});
+    }
+    var DRAWER={app:null}; function $(){ return {classList:{contains:function(){return false;}}}; }
+    %s
+    deleteApp('shop', {});
+    console.log(JSON.stringify({calls:calls, toasts:toasts}));
+    """ % js
+    out = run_node(harness)
+    assert out["calls"] == [{"app": "shop"}, {"app": "shop", "force": "1"}]
+    assert out["toasts"] == ["ok"]

@@ -72,20 +72,25 @@ def update(values: dict) -> dict:
     """Merge `values` into config.json atomically. Returns the merged dict.
 
     Serialized, so two concurrent saves cannot drop each other's keys. A file
-    that exists but cannot be parsed is an error, not an empty config: writing
-    over it would silently discard every other setting, the API key included."""
+    that cannot be parsed is moved to config.json.unreadable, not overwritten:
+    writing over it would discard every other setting, the API key included."""
     with fs.locked(CONFIG_PATH):
         try:
             with open(CONFIG_PATH) as f:
-                data = json.load(f)
+                raw = f.read()
         except FileNotFoundError:
+            raw = ""
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                raise ValueError("not a settings object")
+        except ValueError:
+            # Reads already treat this file as empty. Keep what is in it for the
+            # operator (it may hold the API key) and carry on with a fresh one, so
+            # Settings does not stay unsaveable.
+            os.replace(CONFIG_PATH, CONFIG_PATH + ".unreadable")
+            os.chmod(CONFIG_PATH + ".unreadable", 0o600)
             data = {}
-        except ValueError as e:
-            raise RuntimeError("%s is not valid JSON (%s); fix or remove it, settings "
-                               "were not saved" % (CONFIG_PATH, e))
-        if not isinstance(data, dict):
-            raise RuntimeError("%s does not hold a settings object; fix or remove it, "
-                               "settings were not saved" % CONFIG_PATH)
         data.update(values or {})
         # config.json may hold a secret (e.g. aapanel_api_key): the temp file is
         # created 0600 (mkstemp), so it is never briefly world-readable.

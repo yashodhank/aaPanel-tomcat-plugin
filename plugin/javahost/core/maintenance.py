@@ -183,7 +183,7 @@ def _normalize_scope(scope) -> List[str]:
     return out
 
 
-def _wipe_apps() -> Dict:
+def _wipe_apps(force: bool = False) -> Dict:
     removed: List[str] = []
     errors: Dict[str, str] = {}
     schedules_pruned: List[str] = []
@@ -204,7 +204,7 @@ def _wipe_apps() -> Dict:
             except Exception:
                 pass
             service.remove_unit(app)  # disables + removes the unit (hardening-aware)
-            res = instance.delete(app)
+            res = instance.delete(app, force=True) if force else instance.delete(app)
             if isinstance(res, dict) and res.get("removed"):
                 removed.append(app)
             else:
@@ -314,16 +314,22 @@ def _unfinished(steps: Dict[str, Dict]) -> List[str]:
             if isinstance(st, dict) and (st.get("errors") or st.get("skipped"))]
 
 
-def _wipe_full() -> Dict:
+def _errored(steps: Dict[str, Dict]) -> List[str]:
+    """Names of the steps that reported an error. A runtime skipped because an
+    app still uses it is the documented outcome of a partial wipe, not an error."""
+    return [name for name, st in steps.items() if isinstance(st, dict) and st.get("errors")]
+
+
+def _wipe_full(force: bool = False) -> Dict:
     """apps + jdks + tomcats + sites, THEN remove the whole data root (guarded)."""
     steps = {
-        "apps": _wipe_apps(),
+        "apps": _wipe_apps(force) if force else _wipe_apps(),
         "sites": _wipe_sites(),
         "tomcats": _wipe_tomcats(),
         "jdks": _wipe_jdks(),
     }
     data_root = {"removed": False, "errors": {}}
-    unfinished = _unfinished(steps)
+    unfinished = [] if force else _unfinished(steps)
     if unfinished:
         # The data root holds what a retry needs (domain markers, the storage
         # profiles with their keys) and every local backup. Removing it while
@@ -345,11 +351,15 @@ def _wipe_full() -> Dict:
     return steps
 
 
-def wipe(scope, confirm: str) -> Dict:
+def wipe(scope, confirm: str, force: bool = False) -> Dict:
     """Remove plugin-managed state for the given `scope`.
 
-    `ok` is True only when every step finished with no errors and nothing
-    skipped; the per-step {removed, errors, skipped} says what is left.
+    `ok` is True only when no step reported an error; the per-step
+    {removed, errors, skipped} says what is left.
+
+    `force` is for finishing an uninstall when the panel cannot be reached to
+    confirm site removal: apps are removed anyway and a full wipe removes the
+    data root even after errors. What may be left in aaPanel is still reported.
 
     Only proceeds when confirm == "WIPE"; otherwise returns a no-op summary.
     `scope` is a csv string or list drawn from {apps,jdks,tomcats,sites,full}.
@@ -377,8 +387,8 @@ def wipe(scope, confirm: str) -> Dict:
         plan_error = str(e)
 
     if "full" in items:
-        results = _wipe_full()
-        out = {"ok": not _unfinished(results), "performed": True, "scope": ["full"],
+        results = _wipe_full(force) if force else _wipe_full()
+        out = {"ok": not _errored(results), "performed": True, "scope": ["full"],
                "steps": results,
                "uninstall_plan": plan_path}
         if plan_error:
@@ -386,14 +396,14 @@ def wipe(scope, confirm: str) -> Dict:
         return out
 
     if "apps" in items:
-        results["apps"] = _wipe_apps()
+        results["apps"] = _wipe_apps(force) if force else _wipe_apps()
     if "sites" in items:
         results["sites"] = _wipe_sites()
     if "tomcats" in items:
         results["tomcats"] = _wipe_tomcats()
     if "jdks" in items:
         results["jdks"] = _wipe_jdks()
-    out = {"ok": not _unfinished(results), "performed": True, "scope": items,
+    out = {"ok": not _errored(results), "performed": True, "scope": items,
            "steps": results, "uninstall_plan": plan_path}
     if plan_error:
         out["uninstall_plan_error"] = plan_error

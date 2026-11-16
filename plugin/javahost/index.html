@@ -4623,13 +4623,13 @@
   function startLogsAuto(){ stopLogsAuto(); LOGS.timer = setInterval(logsAutoTick, JOB_POLL); }
   function stopLogsAuto(){ if(LOGS && LOGS.timer){ clearInterval(LOGS.timer); LOGS.timer = null; } }
 
-  function deleteApp(app, btn){
+  function deleteApp(app, btn, force){
     if(appPending(app)) return;
-    if(!confirm('Delete app "'+app+'"? This removes its Tomcat instance and files.')) return;
+    if(!force && !confirm('Delete app "'+app+'"? This removes its Tomcat instance and files.')) return;
     var owner = acquireAppPending(app, 'delete');
     if(!owner) return;
     busy(btn, true);
-    call('DeleteApp', {app:app}, function(r){
+    call('DeleteApp', force ? {app:app, force:'1'} : {app:app}, function(r){
       var p = payload(r);
       if(failed(r) && resultIsUncertain(r)){
         busy(btn, false);
@@ -4640,8 +4640,16 @@
       }
       releaseAppPending(app, owner);
       busy(btn, false);
-      if(failed(r)) toast(errText(p), 'err', 'Delete '+app+' failed');
-      else {
+      if(failed(r)){
+        var why = errText(p);
+        // the app was left whole because its aaPanel site could not be removed
+        if(!force && /was not deleted/.test(why) &&
+           confirm(why+'\n\nDelete the app anyway? Its site may remain in aaPanel → Website and would need removing there.')){
+          deleteApp(app, btn, true);
+          return;
+        }
+        toast(why, 'err', 'Delete '+app+' failed');
+      } else {
         toast('Delete '+app+' completed', 'ok');
         if(p && p.site_warning) toast(String(p.site_warning), 'err', 'Site cleanup');
       }
