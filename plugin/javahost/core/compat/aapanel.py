@@ -195,8 +195,9 @@ def http_request(path: str, *, params: Optional[Dict] = None,
         return None, str(e)
 
 
-def _lookup_site_row(domain: str) -> Optional[Dict]:
-    """Return the aaPanel sites-table row for ``domain``, or None."""
+def _http_site_rows(domain: str) -> Optional[list]:
+    """aaPanel sites-table rows matching ``domain``; None when the lookup failed
+    (as opposed to an empty list: looked, nothing there)."""
     result, _ = http_request(
         "/data",
         params={"action": "getData", "table": "sites", "search": domain},
@@ -204,12 +205,41 @@ def _lookup_site_row(domain: str) -> Optional[Dict]:
     if not isinstance(result, dict):
         return None
     data_list = result.get("data") or result.get("msg") or []
-    if not isinstance(data_list, list):
-        return None
-    for row in data_list:
+    return data_list if isinstance(data_list, list) else None
+
+
+def _lookup_site_row(domain: str) -> Optional[Dict]:
+    """Return the aaPanel sites-table row for ``domain``, or None."""
+    for row in _http_site_rows(domain) or []:
         if isinstance(row, dict) and row.get("name") == domain:
             return row
     return None
+
+
+def site_ownership(domain: str) -> str:
+    """Who created the aaPanel site named ``domain``.
+
+    'javahost' - its notes carry the exact marker JavaHost writes on AddSite
+    'foreign'  - the site exists but was not created by JavaHost
+    'absent'   - no such site
+    'unknown'  - the panel could not be asked
+
+    This, not the per-app domain marker, decides whether a site may be deleted:
+    the marker lives in a directory the app's own user can write to.
+    """
+    rows = _http_site_rows(domain) if config.aapanel_api_key() else None
+    if rows is None and public is not None:
+        try:
+            found = public.M("sites").where("name=?", (domain,)).field("id,name,ps").select()
+            rows = found if isinstance(found, list) else None
+        except Exception:
+            rows = None
+    if rows is None:
+        return "unknown"
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") == domain:
+            return "javahost" if _site_ps_is_javahost(row.get("ps"), domain) else "foreign"
+    return "absent"
 
 
 def _created_site_id(result: Dict) -> Optional[str]:
@@ -782,8 +812,8 @@ def write_aapanel_proxy_files(domain: str, port: int) -> Tuple[bool, str]:
 def http_remove_site(domain: str) -> bool:
     """Delete a site via getData lookup + DeleteSite. Returns True on success."""
     row = _lookup_site_row(domain)
-    if not isinstance(row, dict):
-        return False
+    if not isinstance(row, dict) or not _site_ps_is_javahost(row.get("ps"), domain):
+        return False    # never delete a site JavaHost did not create
     site_id = row.get("id")
     if not site_id:
         return False

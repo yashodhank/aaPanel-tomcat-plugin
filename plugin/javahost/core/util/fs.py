@@ -28,6 +28,12 @@ def mkdtemp(prefix: str = "javahost-") -> str:
     return path
 
 
+def mkdtemp_in(parent: str, prefix: str = ".tmp-") -> str:
+    """A private 0700 work dir inside `parent` (same filesystem, so a file in it
+    can be renamed into `parent` atomically)."""
+    return tempfile.mkdtemp(dir=parent, prefix=prefix)
+
+
 def atomic_write(path: str, content: str, mode: int = 0o640) -> None:
     """Write file atomically (temp + rename) with explicit permissions."""
     d = os.path.dirname(path) or "."
