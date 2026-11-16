@@ -7,6 +7,7 @@ and to each per-instance CATALINA_BASE. Stricter than the legacy plugin's
 from __future__ import annotations
 
 import os
+import stat
 import re
 import shutil
 from typing import List
@@ -50,11 +51,20 @@ def assert_no_ajp(server_xml: str) -> None:
 def secure_perms(catalina_base: str, user: str = "www") -> None:
     """Lock down config dir and secrets (best-effort; chown requires privilege)."""
     conf = os.path.join(catalina_base, "conf")
-    for root, dirs, fns in os.walk(conf):
+    # conf/ belongs to the app user and this runs as root: chmod through a
+    # descriptor opened O_NOFOLLOW so a planted link cannot redirect it.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    for _root, _dirs, fns, dir_fd in os.fwalk(conf, follow_symlinks=False):
         for fn in fns:
-            p = os.path.join(root, fn)
             mode = 0o600 if fn in ("tomcat-users.xml",) else 0o640
             try:
-                os.chmod(p, mode)
+                fd = os.open(fn, flags, dir_fd=dir_fd)
+            except OSError:
+                continue
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    os.fchmod(fd, mode)
             except OSError:
                 pass
+            finally:
+                os.close(fd)
