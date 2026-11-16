@@ -30,7 +30,8 @@ install_javahost() {
     # so make sure gpg is there (best-effort: a failure only surfaces later as a
     # clear "gpg is not installed" error on Install Tomcat).
     if ! command -v gpg >/dev/null 2>&1; then
-        { apt-get install -y gnupg || dnf install -y gnupg2 || yum install -y gnupg2; } \
+        { DEBIAN_FRONTEND=noninteractive apt-get install -y gnupg \
+            || dnf install -y gnupg2 || yum install -y gnupg2; } \
             >/dev/null 2>&1 || true
     fi
     # Install the managed log-rotation cron from default config (best-effort; a

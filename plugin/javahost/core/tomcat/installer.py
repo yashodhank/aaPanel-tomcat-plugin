@@ -214,5 +214,6 @@ def _keyring(major: str, keys_url: str) -> str:
         shell.run([gpg, "--no-default-keyring", "--keyring", keyring, "--import", keys])
     except Exception as e:
         raise RuntimeError("could not build the Apache KEYS keyring to verify the "
-                           "Tomcat download: %s" % e) from e
+                           "Tomcat download (needs outbound HTTPS to downloads.apache.org "
+                           "and a working gpg for this user): %s" % e) from e
     return keyring

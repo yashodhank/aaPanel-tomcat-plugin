@@ -21,8 +21,9 @@ skips verification (`core/util/download.py`).
   Tomcat tarballs are checked against Apache's OpenPGP signature as well as the
   SHA-512, and the install is refused when that check cannot run. Install gpg
   (`apt-get install gnupg` or `yum install gnupg2`) and retry. A host with no
-  internet access can still install from a local tarball with `--tarball` and
-  `--sha512`, which needs no gpg.
+  internet access can still install from a tarball you verified yourself, which
+  needs no gpg: `tomcat_install.sh install <9|10|11> --local /path/to.tar.gz
+  --sha512 <hex>` from the plugin directory.
 - **`could not build the Apache KEYS keyring`**
   The Apache KEYS file could not be downloaded or imported, so the signature
   cannot be checked and the install is refused. Check outbound HTTPS to

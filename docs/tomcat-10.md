@@ -33,8 +33,8 @@ install regardless of which path produced the version.
    `.sha512`) and the OpenPGP signature (`.asc`, checked against a keyring built
    from the `tomcat-10` Apache KEYS) are both mandatory. Without `gpg` or the
    KEYS file the install is refused. The download lands under a temporary name
-   and is only published after both checks pass. An offline path (local tarball
-   + expected hash, no gpg needed) is supported.
+   and is only published after both checks pass. An offline path is supported from the CLI and
+   needs no gpg: `tomcat_install.sh install 10 --local /path/to.tar.gz --sha512 <hex>`.
 3. Staged extract into `tomcat/10.staging` (`tar -xzf --strip-components=1`).
 4. Harden + write `.javahost-version` marker + mark managed.
 5. Atomic swap into `/www/server/javahost/tomcat/10` (old install moved aside
