@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from core.util import validate, immutable
+from core.util import validate
 from core import config
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
@@ -601,42 +601,112 @@ def test_config_default_manage_hardening():
     assert config.get("manage_hardening") is True
 
 
-def test_immutable_parse(monkeypatch):
-    from core.util import shell as sh
-    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
-    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "----i---------e------- /d\n", ""))
-    assert immutable.is_immutable("/d") is True
-    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "-------------e------- /d\n", ""))
-    assert immutable.is_immutable("/d") is False
+class _FakePanel:
+    """Stands in for the panel's `public` pause/resume pair."""
+
+    def __init__(self, fail_resume=False):
+        self.calls = []
+        self.fail_resume = fail_resume
+
+    def stop_syssafe(self):
+        self.calls.append("stop")
+        return True
+
+    def start_syssafe(self):
+        self.calls.append("start")
+        if self.fail_resume:
+            raise RuntimeError("boom")
 
 
-def test_immutable_writable_noop_when_not_immutable(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: False)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x") as lifted:
-        assert lifted is False
-    assert calls == []  # chattr never invoked
+def _fake_panel(monkeypatch, **kw):
+    from core.compat import aapanel
+    fake = _FakePanel(**kw)
+    monkeypatch.setattr(aapanel, "_hardening_api", fake)
+    return aapanel, fake
 
 
-def test_immutable_writable_lifts_and_relocks(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
-    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x") as lifted:
-        assert lifted is True
-        assert calls == [("-i", "/x")]      # lifted inside the block
-    assert calls == [("-i", "/x"), ("+i", "/x")]  # re-locked on exit
+def test_hardening_pause_uses_the_panel_and_always_resumes(monkeypatch):
+    aapanel, fake = _fake_panel(monkeypatch)
+    with pytest.raises(ValueError):
+        with aapanel.hardening_paused() as asked:
+            assert asked is True and fake.calls == ["stop"]
+            raise ValueError("write failed")
+    assert fake.calls == ["stop", "start"]      # resumed even though the write failed
 
 
-def test_immutable_writable_disabled(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x", enabled=False) as lifted:
-        assert lifted is False
-    assert calls == []  # respects manage_hardening=false
+def test_hardening_pause_disabled_or_unavailable_is_a_noop(monkeypatch):
+    aapanel, fake = _fake_panel(monkeypatch)
+    with aapanel.hardening_paused(enabled=False) as asked:
+        assert asked is False
+    assert fake.calls == []                      # manage_hardening=false
+    monkeypatch.setattr(aapanel, "_hardening_api", False)   # off-panel / old panel
+    assert aapanel.can_pause_hardening() is False
+    with aapanel.hardening_paused() as asked:
+        assert asked is False
+
+
+def test_hardening_resume_failure_does_not_mask_the_result(monkeypatch):
+    aapanel, fake = _fake_panel(monkeypatch, fail_resume=True)
+    with aapanel.hardening_paused():
+        pass
+    assert fake.calls == ["stop", "start"]
+
+
+def test_unit_write_pauses_only_when_the_dir_is_read_only(monkeypatch, tmp_path):
+    from core.tomcat import service as svc
+    aapanel, fake = _fake_panel(monkeypatch)
+    unit = str(tmp_path / "javahost-a.service")
+    svc._write_unit_file(unit, "x", 0o644)
+    assert fake.calls == [] and open(unit).read() == "x"    # writable: panel untouched
+    monkeypatch.setattr(svc, "_can_write", lambda d: False)
+    svc._write_unit_file(unit, "y", 0o644)
+    assert fake.calls == ["stop", "start"]
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: False if k == "manage_hardening" else d)
+    svc._write_unit_file(unit, "z", 0o644)
+    assert fake.calls == ["stop", "start"]                  # not allowed: not asked
+
+
+def test_unit_write_blocked_by_hardening_says_what_to_do(monkeypatch, tmp_path):
+    from core.tomcat import service as svc
+    from core.compat import aapanel
+    monkeypatch.setattr(aapanel, "_hardening_api", False)
+
+    def denied(*a, **k):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(svc.fs, "atomic_write", denied)
+    with pytest.raises(RuntimeError) as e:
+        svc._write_unit_file(str(tmp_path / "u.service"), "x", 0o644)
+    assert "System Hardening" in str(e.value) and "turn it back on" in str(e.value)
+
+
+def test_can_manage_needs_a_writable_dir_or_a_panel_pause(monkeypatch, tmp_path):
+    from core.tomcat import service as svc
+    from core.compat import aapanel
+    d = str(tmp_path)
+    assert svc.can_manage(d) is True
+    monkeypatch.setattr(svc, "_can_write", lambda p: False)
+    monkeypatch.setattr(aapanel, "_hardening_api", False)
+    assert svc.can_manage(d) is False
+    monkeypatch.setattr(aapanel, "_hardening_api", _FakePanel())
+    assert svc.can_manage(d) is True
+    assert svc.can_manage(str(tmp_path / "missing")) is False
+
+
+def test_plugin_never_unlocks_dirs_or_edits_hardening_config():
+    """The plugin must not run chattr or write the hardening plugin's files."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "plugin", "javahost")
+    hits = []
+    for base, _, files in os.walk(root):
+        for f in files:
+            if not f.endswith((".py", ".sh")):
+                continue
+            body = open(os.path.join(base, f), encoding="utf-8").read()
+            for bad in ("chattr", "process_white", "whitelist_javahost"):
+                if bad in body:
+                    hits.append((f, bad))
+    assert hits == []
 
 
 # ---- aaPanel daemon/exec protection (layer 2) detection ----
@@ -689,17 +759,7 @@ def test_metrics_reads_proc(monkeypatch, tmp_path):
     assert m["up"] and m["rss_mb"] and m["threads"] >= 1
 
 
-# ---- syssafe allowlist merge (auto-whitelist) ----
-def test_syssafe_merge_appends_missing():
-    from core.compat import syssafe
-    cfg = {"process": {"process_white": ["java"], "process_white_rule": ["/www/server/"]}}
-    out, added = syssafe.merge_whitelist(cfg)
-    assert "/www/server/javahost" in out["process"]["process_white_rule"]
-    assert "catalina.sh" in out["process"]["process_white"]
-    assert "/www/server/" in out["process"]["process_white_rule"]  # existing kept
-    assert added  # reported what it added
-
-
+# ---- hardening detection (read-only) ----
 def test_syssafe_exec_filter_detection(monkeypatch, tmp_path):
     from core.compat import syssafe
     f = tmp_path / "ld.so.preload"
@@ -709,14 +769,6 @@ def test_syssafe_exec_filter_detection(monkeypatch, tmp_path):
     assert r["active"] is True and "usranalyse" in r["library"] and r["guidance"]
     f.write_text("")
     assert syssafe.exec_filter()["active"] is False
-
-
-def test_syssafe_merge_idempotent():
-    from core.compat import syssafe
-    cfg = {"process": {}}
-    cfg, _ = syssafe.merge_whitelist(cfg)
-    cfg, added2 = syssafe.merge_whitelist(cfg)  # second pass
-    assert added2 == []  # nothing new the second time
 
 
 # ---- engine registry ----
