@@ -22,13 +22,14 @@ configured cadence, lifting/relocking the immutable bit if the dir is hardened
 from __future__ import annotations
 
 import argparse
-import glob
 import gzip
 import os
+import secrets
 import shutil
+import stat
 import sys
 import time
-from typing import Dict, List
+from typing import Dict, Iterator, List, Tuple
 
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PLUGIN_DIR not in sys.path:
@@ -53,61 +54,104 @@ _WHEN_CRON = {
 
 # --------------------------------------------------------------------------- #
 # target discovery
+#
+# This runs as root over directories the app user owns (instances/<app>/logs is
+# chowned to the service user), so nothing here may follow a symlink: a planted
+# link would otherwise have root gzip, truncate, overwrite or delete a file of
+# the app's choosing. Every log dir is opened O_NOFOLLOW and every file in it is
+# reached relative to that descriptor, never by path.
 # --------------------------------------------------------------------------- #
-def _targets() -> List[str]:
-    """Live log files JavaHost manages: every app's catalina.out + logs/*.log, plus
-    the plugin's own cron logs. Rotated artifacts (*.gz) are never targets."""
-    out: List[str] = []
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def _log_dirs() -> Iterator[Tuple[str, int]]:
+    """Yield (path, dir_fd) for each app's logs/ plus the plugin's own logs dir."""
+    paths: List[str] = []
     if os.path.isdir(INSTANCE_ROOT):
-        for name in os.listdir(INSTANCE_ROOT):
-            ldir = os.path.join(INSTANCE_ROOT, name, "logs")
-            if not os.path.isdir(ldir):
-                continue
-            for f in os.listdir(ldir):
-                if f.endswith(".gz"):
-                    continue
-                if f == "catalina.out" or f.endswith(".log"):
-                    p = os.path.join(ldir, f)
-                    if os.path.isfile(p):
-                        out.append(p)
-    if os.path.isdir(LOGS_DIR):
-        for f in os.listdir(LOGS_DIR):
-            if f.endswith(".log") and os.path.isfile(os.path.join(LOGS_DIR, f)):
-                out.append(os.path.join(LOGS_DIR, f))
-    return out
+        paths += [os.path.join(INSTANCE_ROOT, n, "logs") for n in sorted(os.listdir(INSTANCE_ROOT))]
+    paths.append(LOGS_DIR)
+    for path in paths:
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW)
+        except OSError:
+            continue        # missing, not a directory, or a symlink
+        try:
+            yield path, fd
+        finally:
+            os.close(fd)
+
+
+def _is_plain_file(st: os.stat_result) -> bool:
+    # single-link regular file: not a symlink, device, fifo, or a hardlink to
+    # some other file
+    return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+
+
+def _entries(dir_fd: int, rotated: bool) -> Iterator[Tuple[str, os.stat_result]]:
+    """(name, lstat) of live logs (catalina.out, *.log) or, with `rotated`, of
+    their *.gz rotations. Anything that is not a plain file is skipped."""
+    for name in sorted(os.listdir(dir_fd)):
+        if rotated != name.endswith(".gz"):
+            continue
+        if not rotated and not (name == "catalina.out" or name.endswith(".log")):
+            continue
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except OSError:
+            continue
+        if _is_plain_file(st):
+            yield name, st
+
+
+def _unlink(dir_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #
 # rotation (copy-truncate + gzip, keep N)
 # --------------------------------------------------------------------------- #
-def _rotate_one(path: str, keep: int) -> bool:
-    """Gzip `path` to `path.1.gz`, shifting older rotations up to `keep`, then
+def _rotate_one(dir_fd: int, name: str, keep: int) -> bool:
+    """Gzip `name` to `name.1.gz`, shifting older rotations up to `keep`, then
     truncate the live file in place. Returns True if rotated."""
-    if keep <= 0:
-        # no rotations kept: just reclaim the space (discard)
-        with open(path, "r+b") as f:
-            f.truncate(0)
+    fd = os.open(name, os.O_RDWR | _NOFOLLOW, dir_fd=dir_fd)
+    try:
+        if not _is_plain_file(os.fstat(fd)):
+            return False    # swapped since it was listed
+        if keep > 0:
+            # drop the oldest, then shift 1..keep-1 up by one
+            _unlink(dir_fd, "%s.%d.gz" % (name, keep))
+            for i in range(keep - 1, 0, -1):
+                try:
+                    os.rename("%s.%d.gz" % (name, i), "%s.%d.gz" % (name, i + 1),
+                              src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                except OSError:
+                    pass
+            # gzip current contents into a fresh, unpredictable temp, then publish
+            tmp = ".%s.%s.tmp" % (name, secrets.token_hex(8))
+            tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o640,
+                          dir_fd=dir_fd)
+            try:
+                try:
+                    owner = os.fstat(dir_fd)       # keep it readable by the app user
+                    os.fchown(tfd, owner.st_uid, owner.st_gid)
+                except OSError:
+                    pass
+                with os.fdopen(tfd, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb") as dst, \
+                        os.fdopen(os.dup(fd), "rb") as src:
+                    shutil.copyfileobj(src, dst, length=1024 * 256)
+                os.rename(tmp, "%s.1.gz" % name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            except BaseException:
+                _unlink(dir_fd, tmp)
+                raise
+        # truncate the live file (writer's append fd keeps the inode); with
+        # keep <= 0 no rotation is kept, the space is just reclaimed
+        os.ftruncate(fd, 0)
         return True
-    # drop the oldest, then shift 1..keep-1 up by one
-    oldest = "%s.%d.gz" % (path, keep)
-    if os.path.exists(oldest):
-        try:
-            os.unlink(oldest)
-        except OSError:
-            pass
-    for i in range(keep - 1, 0, -1):
-        src = "%s.%d.gz" % (path, i)
-        if os.path.exists(src):
-            os.replace(src, "%s.%d.gz" % (path, i + 1))
-    # gzip current contents into <path>.1.gz
-    tmp = "%s.1.gz.tmp" % path
-    with open(path, "rb") as src, gzip.open(tmp, "wb") as dst:
-        shutil.copyfileobj(src, dst, length=1024 * 256)
-    os.replace(tmp, "%s.1.gz" % path)
-    # truncate the live file (writer's append fd keeps the inode)
-    with open(path, "r+b") as f:
-        f.truncate(0)
-    return True
+    finally:
+        os.close(fd)
 
 
 def rotate(max_mb: int = None, keep: int = None) -> Dict:
@@ -118,38 +162,21 @@ def rotate(max_mb: int = None, keep: int = None) -> Dict:
         keep = config.log_rotate_keep()
     max_bytes = max(1, int(max_mb)) * 1024 * 1024
     rotated: List[str] = []
-    for path in _targets():
-        try:
-            if os.path.getsize(path) > max_bytes:
-                if _rotate_one(path, int(keep)):
-                    rotated.append(path)
-        except OSError:
-            continue  # a log vanished mid-run (app deleted) — skip
+    for path, dir_fd in _log_dirs():
+        for name, st in _entries(dir_fd, rotated=False):
+            if st.st_size <= max_bytes:
+                continue
+            try:
+                if _rotate_one(dir_fd, name, int(keep)):
+                    rotated.append(os.path.join(path, name))
+            except OSError:
+                continue  # a log vanished or was swapped mid-run — skip
     return {"rotated": rotated, "count": len(rotated), "max_mb": int(max_mb), "keep": int(keep)}
 
 
 # --------------------------------------------------------------------------- #
 # purge (delete rotated *.gz older than retention)
 # --------------------------------------------------------------------------- #
-def _rotated_artifacts() -> List[str]:
-    out: List[str] = []
-    for base in _gz_dirs():
-        out.extend(glob.glob(os.path.join(base, "*.gz")))
-    return out
-
-
-def _gz_dirs() -> List[str]:
-    dirs: List[str] = []
-    if os.path.isdir(INSTANCE_ROOT):
-        for name in os.listdir(INSTANCE_ROOT):
-            ldir = os.path.join(INSTANCE_ROOT, name, "logs")
-            if os.path.isdir(ldir):
-                dirs.append(ldir)
-    if os.path.isdir(LOGS_DIR):
-        dirs.append(LOGS_DIR)
-    return dirs
-
-
 def purge(days: int = None) -> Dict:
     """Delete rotated `*.gz` older than `days`. Never touches a live log.
     `days <= 0` means purge ALL rotated artifacts (manual 'purge now')."""
@@ -158,16 +185,16 @@ def purge(days: int = None) -> Dict:
     days = int(days)
     cutoff = time.time() - days * 86400 if days > 0 else None
     removed, freed = 0, 0
-    for gzf in _rotated_artifacts():
-        try:
-            if cutoff is not None and os.path.getmtime(gzf) >= cutoff:
+    for _path, dir_fd in _log_dirs():
+        for name, st in _entries(dir_fd, rotated=True):
+            if cutoff is not None and st.st_mtime >= cutoff:
                 continue
-            sz = os.path.getsize(gzf)
-            os.unlink(gzf)
+            try:
+                os.unlink(name, dir_fd=dir_fd)
+            except OSError:
+                continue
             removed += 1
-            freed += sz
-        except OSError:
-            continue
+            freed += st.st_size
     return {"removed": removed, "freed_bytes": freed, "days": days}
 
 
@@ -214,8 +241,12 @@ def apply_schedule() -> Dict:
 # status (for the Settings card)
 # --------------------------------------------------------------------------- #
 def status() -> Dict:
-    live = sum_sizes(_targets())
-    rotated_files = _rotated_artifacts()
+    live = rotated_bytes = rotated_files = 0
+    for _path, dir_fd in _log_dirs():
+        live += sum(st.st_size for _n, st in _entries(dir_fd, rotated=False))
+        for _n, st in _entries(dir_fd, rotated=True):
+            rotated_bytes += st.st_size
+            rotated_files += 1
     return {
         "enabled": config.log_rotate_enabled(),
         "when": config.log_rotate_when(),
@@ -223,20 +254,10 @@ def status() -> Dict:
         "max_mb": config.log_rotate_max_mb(),
         "purge_days": config.log_purge_days(),
         "live_bytes": live,
-        "rotated_bytes": sum_sizes(rotated_files),
-        "rotated_files": len(rotated_files),
+        "rotated_bytes": rotated_bytes,
+        "rotated_files": rotated_files,
         "cron_installed": os.path.exists(CRON_PATH),
     }
-
-
-def sum_sizes(paths) -> int:
-    total = 0
-    for p in paths:
-        try:
-            total += os.path.getsize(p)
-        except OSError:
-            pass
-    return total
 
 
 # --------------------------------------------------------------------------- #
