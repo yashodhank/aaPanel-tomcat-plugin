@@ -29,7 +29,14 @@ keys are never bundled** — the certificate is **re-issued** on restore.
 
 **Links are left out.** A symbolic link in the app directory is not followed and
 not stored, so what it points to is not in the backup. The backup task prints a
-warning naming each one. Data kept outside the app directory needs its own backup.
+warning naming each one, and the backup's record keeps the list. Data kept outside
+the app directory needs its own backup. If `app.jar`, `conf`, `webapps`,
+`webapps/ROOT` or `bin` is itself a link, the backup fails, because it would not
+contain the app.
+
+**A running app.** Files are read while the app runs. One that shrinks or vanishes
+mid-backup (a rotated log, a temp upload) does not fail the backup; it is named in
+the warning. For a consistent copy of an embedded database, stop the app first.
 
 **Size limits.** A backup fails, with the reason, if the app has more than 50,000
 files, a single file over 2 GB, more than 8 GB of data, or an archive over 2 GB.

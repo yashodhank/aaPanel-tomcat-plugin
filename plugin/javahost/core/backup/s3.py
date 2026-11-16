@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import http.client
 import os
+import tempfile
 import ssl as _sslmod
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -169,13 +170,12 @@ class S3Client:
             # connection ends read() early without raising, and a partial archive at
             # the final name would be taken for a local backup from then on.
             expected = resp.getheader("Content-Length")
-            part = local_path + ".part"
             written = 0
+            # a name of its own per download (mkstemp, 0600: it holds DB
+            # credentials), so two fetches of one backup cannot share a temp file
+            fd, part = tempfile.mkstemp(dir=os.path.dirname(local_path) or ".",
+                                        prefix=os.path.basename(local_path) + ".", suffix=".part")
             try:
-                if os.path.lexists(part):
-                    os.unlink(part)
-                fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                             | getattr(os, "O_NOFOLLOW", 0), 0o600)   # holds DB credentials
                 with os.fdopen(fd, "wb") as out:
                     while True:
                         chunk = resp.read(1 << 16)

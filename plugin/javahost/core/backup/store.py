@@ -39,7 +39,12 @@ from . import archive
 
 # logs are excluded by design; work/ and temp/ are Tomcat caches; the marker is
 # re-created on restore.
-_NOT_ARCHIVED = ("logs", "work", "temp", fs.MANAGED_MARKER)
+# app.pid is the init.d JAR script's pid file: restored into a copy of the app it
+# would point that copy's stop/status at the original's process.
+_NOT_ARCHIVED = ("logs", "work", "temp", "app.pid", fs.MANAGED_MARKER)
+# Without these there is no app to restore, so one of them being a link (which a
+# backup never follows) fails the backup instead of producing an empty shell.
+_CORE = ("conf", "webapps", os.path.join("webapps", "ROOT"), "bin", "app.jar")
 
 BACKUPS_ROOT = "/www/server/javahost/backups"   # default; override via config "backup_dest"
 MANIFEST_NAME = "manifest.json"
@@ -197,6 +202,12 @@ def backup_app(app: str, remotes=None) -> Dict:
         # with this directory as its working directory, so its own data (uploads,
         # an embedded database, a config/ dir) lives next to app.jar; an archive of
         # only conf/webapps/bin/app.jar silently left that out.
+        for core in _CORE:
+            if os.path.islink(os.path.join(base, core)):
+                raise RuntimeError(
+                    "%s is a symbolic link, and a backup does not follow links, so it would "
+                    "not contain the app. Back up what it points to separately, or replace "
+                    "the link with the real %s." % (core, "file" if core == "app.jar" else "directory"))
         members = [(man_path, MANIFEST_NAME)]
         for sub in sorted(os.listdir(base)):
             if sub not in _NOT_ARCHIVED:
@@ -207,7 +218,8 @@ def backup_app(app: str, remotes=None) -> Dict:
         name = "backup-%s-%s.tar.gz" % (app, _now_stamp())
         dest = os.path.join(root, name)
         skipped: List[str] = []
-        archive.pack(members, dest, skipped=skipped)
+        changed: List[str] = []
+        archive.pack(members, dest, skipped=skipped, changed=changed)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -218,8 +230,13 @@ def backup_app(app: str, remotes=None) -> Dict:
     if skipped:
         # never silent: these are in the app but not in the backup
         out["skipped"] = [n[len("base/"):] if n.startswith("base/") else n for n in skipped]
-        out["warning"] = ("%d link(s) or special file(s) were left out of the backup; what a "
-                          "link points to is not backed up" % len(skipped))
+        out["warning"] = ("%d link(s), special file(s) or file(s) that vanished were left out "
+                          "of the backup; what a link points to is not backed up" % len(skipped))
+    if changed:
+        out["changed"] = [n[len("base/"):] if n.startswith("base/") else n for n in changed]
+        out["warning"] = (out.get("warning", "") + "; " if out.get("warning") else "") + (
+            "%d file(s) changed while being read and may be incomplete in the backup "
+            "(stop the app first for a consistent copy)" % len(changed))
 
     # fan out to selected destinations (best-effort, per-destination result)
     ids = []
@@ -240,6 +257,11 @@ def backup_app(app: str, remotes=None) -> Dict:
         side = dict(manifest)
         side["name"] = name
         side["uploaded_to"] = out["uploaded_to"]
+        # what this archive does not hold stays visible wherever it is listed
+        if out.get("skipped"):
+            side["skipped"] = out["skipped"]
+        if out.get("changed"):
+            side["changed"] = out["changed"]
         fs.atomic_write(_sidecar(dest), json.dumps(side, indent=2) + "\n", mode=0o600)
     except Exception:
         pass
@@ -302,6 +324,9 @@ def list_backups(app: Optional[str] = None, include_remote: bool = False) -> Lis
                 "created_at": man.get("created_at"), "size_bytes": size,
                 "size_mb": round(size / (1 << 20), 2), "locations": ["local"],
             }
+            for key in ("skipped", "changed"):      # what this archive does not fully hold
+                if isinstance(man.get(key), list) and man[key]:
+                    rec[key] = [str(x) for x in man[key]][:200]
             out.append(rec)
             by_name[name] = rec
     if include_remote:

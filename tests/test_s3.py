@@ -146,3 +146,20 @@ def test_get_object_failure_keeps_an_existing_good_copy(tmp_path, monkeypatch):
     with pytest.raises(s3.S3Error):
         c.get_object(dest.name, str(dest))
     assert dest.read_bytes() == b"good"
+
+
+def test_two_downloads_of_one_backup_do_not_share_a_temp_file(tmp_path, monkeypatch):
+    import os
+    names = []
+    real = s3.tempfile.mkstemp
+
+    def spy(*a, **k):
+        fd, path = real(*a, **k)
+        names.append(os.path.basename(path))
+        return fd, path
+    monkeypatch.setattr(s3.tempfile, "mkstemp", spy)
+    dest = tmp_path / "backup-app-20260101T000000Z.tar.gz"
+    for _ in range(2):
+        _client(monkeypatch, _Resp(b"x" * 10, "10")).get_object(dest.name, str(dest))
+    assert len(set(names)) == 2 and all(n.startswith(dest.name + ".") and n.endswith(".part") for n in names)
+    assert os.listdir(str(tmp_path)) == [dest.name]
