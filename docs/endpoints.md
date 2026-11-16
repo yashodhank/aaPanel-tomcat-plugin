@@ -168,6 +168,8 @@ A legacy single-config `remote.json` is auto-migrated to one `default` profile.
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
+| `GetBackupLimits` | — | `{max_files, max_file_gb, max_total_gb, max_archive_gb, default_*, ranges}`: the limits in force (count / whole GB), their defaults, and the accepted range of each. |
+| `SetBackupLimits` | `max_files?`, `max_file_gb?`, `max_total_gb?`, `max_archive_gb?`, `reset?` | Save backup size limits (whole numbers inside `ranges`; total may not be below the per-file limit). `reset=1` returns to the defaults. Backup and restore both use them. Returns the same shape as `GetBackupLimits`. |
 | `GetBackupSchedules` | — | `{schedules: [{app, cron, remotes, keep}]}`. |
 | `SetBackupSchedule` | `app`, `cron` (5-field), `remotes?`, `keep?` | Upsert; `remotes` = csv of profile ids. Regenerates the managed `/etc/cron.d/javahost-backups`; retention prunes each destination. |
 | `RemoveBackupSchedule` | `app` | Remove the schedule (clears the cron file when empty). |

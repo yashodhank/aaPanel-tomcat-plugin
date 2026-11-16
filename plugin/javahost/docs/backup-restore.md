@@ -40,8 +40,15 @@ the warning. For a consistent copy of an embedded database, stop the app first.
 
 **Size limits.** A backup fails, with the reason, if the app has more than 50,000
 files, a single file over 2 GB, more than 8 GB of data, or an archive over 2 GB.
-Those are the limits restore enforces, so an archive that is created can always
-be restored.
+Restore enforces the same limits, so an archive that is created can always be
+restored on the same server.
+
+For larger apps, raise the limits in **Settings → Backup size limits**. Backup
+and restore both read them. Two things to keep in mind:
+
+- To restore a large backup on another server, set the same limits there first.
+- Uploads to S3-compatible storage are single requests, capped at 5 GB by the
+  storage service. An archive over 5 GB is kept locally but cannot be uploaded.
 
 > Backups contain the app's DB credentials (`bin/app.env`), so archives are written
 > `0600` under the managed backups dir (`/www/server/javahost/backups`, overridable
