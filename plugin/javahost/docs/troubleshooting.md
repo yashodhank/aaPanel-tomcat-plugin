@@ -131,7 +131,7 @@ expired) appear only once HTTPS is actually on.
 the login page itself. Your browser's pre-existing session cookie no longer works.
 
 **Fix:**
-1. Open `https://5d.bisotech.in:37778/6e09181b/` in an **incognito/private**
+1. Open `https://<panel-host>:<panel-port>/<security-entrance>/` in an **incognito/private**
    window (no cookies). The login page should load.
 2. If it still shows 404, SSH to the VPS and run `bt 14` to verify the entrance
    path hasn't changed, then try again with the confirmed URL.

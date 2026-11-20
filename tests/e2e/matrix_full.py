@@ -42,8 +42,8 @@ DB SOURCE (--db-source):
                        DOCKER_DB recipes), torn down in finally.
 
 REAL-HOSTNAME assert (--proxy): for a sample of runs, write a JavaHost-owned
-Nginx vhost for <app>.5d.bisotech.in (core.deploy.proxy) and assert
-`curl http://<app>.5d.bisotech.in/` returns the marker. Skipped gracefully if
+Nginx vhost for <app>.jh.example.com (core.deploy.proxy) and assert
+`curl http://<app>.jh.example.com/` returns the marker. Skipped gracefully if
 nginx is unavailable or the include is not wired.
 
 CLI:
@@ -624,7 +624,7 @@ def _append_env_to_setenv(base, mapping):
 # --- proxy (real hostname) --------------------------------------------------
 
 def _proxy_assert(app, port, marker, cell_id):
-    """Write a JavaHost-owned vhost for <app>.5d.bisotech.in and curl it."""
+    """Write a JavaHost-owned vhost for <app>.jh.example.com and curl it."""
     try:
         from core.deploy import proxy
     except Exception as e:  # noqa: BLE001
@@ -662,7 +662,7 @@ def main(argv=None):
     ap.add_argument("--db-source", choices=["aapanel", "docker"], default="aapanel",
                     help="DB provider for DB cells (default aapanel = local DB)")
     ap.add_argument("--proxy", action="store_true",
-                    help="also assert <app>.5d.bisotech.in via the Nginx vhost on a sample")
+                    help="also assert <app>.jh.example.com via the Nginx vhost on a sample")
     ap.add_argument("--only", default=None,
                     help="filter cells, e.g. tomcat=11,java=21,db=postgresql,kind=war")
     ap.add_argument("--dry-run", action="store_true",
