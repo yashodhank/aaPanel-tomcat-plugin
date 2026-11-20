@@ -137,6 +137,7 @@ class javahost_main(object):
     # ---- dashboard ----
     def GetStatus(self, get=None):
         try:
+            panel.resume_abandoned_pause()   # undo a pause an interrupted task left
             jdks = {str(k): v for k, v in java.detect().items()}
             tomcats = {}
             for major in registry.LINES:
@@ -148,8 +149,8 @@ class javahost_main(object):
                         "namespace": registry.get_line(major).namespace,
                     }
             # service_dirs_locked is true ONLY when the plugin genuinely cannot
-            # manage services — i.e. neither backend is writable nor safely
-            # lift-and-relock manageable (manage_hardening off / chattr absent).
+            # manage services: neither backend is writable, and the panel cannot
+            # pause System Hardening for it (or manage_hardening is off).
             can_sysd = service.have_systemd() and service.can_manage(service.SYSTEMD_DIR)
             can_initd = service.can_manage(service.INITD_DIR)
             hardening_locked = not (can_sysd or can_initd)
@@ -172,9 +173,9 @@ class javahost_main(object):
                 "recommended": registry.recommended(),
                 "service_dirs_locked": hardening_locked,
                 "hardening_hint": (
-                    "Service directories are immutable (likely aaPanel 'System "
-                    "Hardening'). Disable it (or lift chattr +i on /etc/systemd/system) "
-                    "so JavaHost can register Tomcat/JAR services." if hardening_locked else ""),
+                    "Service directories are read-only, most likely because aaPanel "
+                    "System Hardening is on. Turn it off in the panel, make your "
+                    "change, then turn it back on." if hardening_locked else ""),
                 "exec_filter_active": exec_filter.get("active", False),
                 "exec_filter_hint": exec_filter.get("guidance", ""),
                 # Public-domain suffix (config "site_suffix", "" when unset) so the
@@ -1074,17 +1075,6 @@ class javahost_main(object):
         """Lightweight JVM/process metrics (pid, RSS MB, threads, uptime) from /proc."""
         try:
             return panel.ok(instance.metrics(panel.attr(get, "app")))
-        except Exception as e:
-            return panel.err(str(e))
-
-    def AllowServices(self, get=None):
-        """One-click: register JavaHost in aaPanel System Hardening's process
-        allowlist (append-only, reversible). Registers — never bypasses."""
-        try:
-            from core.compat import syssafe
-            res = syssafe.whitelist_javahost()
-            panel.log("AllowServices", "added=%s" % res.get("added"))
-            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 

@@ -65,10 +65,9 @@ state, total apps). Use the **Refresh** button in the top bar to re-poll
 > when available.
 
 If `GetStatus` reports `service_dirs_locked: true`, a red banner appears warning
-that **System hardening is active** and JavaHost cannot register services. It
-includes an **Allow services** button — see [section 7](#7-system-hardening).
-On a normally-hardened host with default settings this banner stays hidden,
-because JavaHost manages hardening transparently.
+that **System Hardening is blocking services**, with what to do about it — see
+[section 7](#7-system-hardening). On a hardened host with default settings this
+banner stays hidden, because the panel can pause hardening for JavaHost's writes.
 
 ---
 
@@ -454,27 +453,25 @@ private keys are never bundled — SSL is re-issued on restore. Full reference:
 
 ## 7. System hardening
 
-aaPanel **System Hardening** locks `/etc/systemd/system` and `/etc/init.d` with
-the immutable bit to block persistence attacks. JavaHost operates safely under it
-(full detail: [System Hardening](system-hardening.md)).
+aaPanel **System Hardening** locks `/etc/systemd/system`, `/etc/init.d` and
+`/etc/cron.d` to block persistence attacks. JavaHost never unlocks them itself
+and never edits System Hardening's settings (full detail:
+[System Hardening](system-hardening.md)).
 
 What to expect:
 
-- **By default** (`manage_hardening: true`) JavaHost briefly lifts the immutable
-  bit on a service directory only long enough to write its own `javahost-<app>`
-  unit, then re-applies it — every lift and restore is logged. Tomcat/JDK
-  install, WAR/JAR deploy, ports, and config rendering all work regardless.
-- The Dashboard banner only appears when JavaHost **genuinely cannot** manage
-  services (hardening on **and** `manage_hardening: false`, or `chattr` missing).
-
-### The Allow services button
-
-When the banner shows, click **Allow services** (`AllowServices`). This
-**registers** JavaHost in aaPanel's syssafe process allowlist — append-only,
-backed up, reversible. It never bypasses anti-persistence controls. If a global
-LD_PRELOAD exec filter (bt_security / usranalyse) is also active, JavaHost detects
-it and stops with a clear error rather than circumventing it; authorize JavaHost
-in **Security → bt_security**, then **Repair** the app.
+- **By default** (`manage_hardening: true`), when a locked directory blocks a
+  service or schedule write, JavaHost asks the panel to pause System Hardening
+  for that write. The panel turns it back on straight after and records the
+  pause in its log. Tomcat/JDK install, WAR/JAR deploy, ports and config
+  rendering work regardless.
+- With `manage_hardening: false`, or when the panel cannot pause hardening, the
+  action fails and the Dashboard banner tells you to turn System Hardening off,
+  retry, and turn it back on.
+- If a new service is killed or blocked by process protection or the exec
+  filter (bt_security / usranalyse), JavaHost reports it and stops. Allow
+  `/www/server/javahost` in the panel's own security pages, then **Repair** the
+  app.
 
 ---
 

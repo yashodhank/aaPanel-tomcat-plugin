@@ -1993,10 +1993,9 @@
     if(d.service_dirs_locked){
       hb.style.display = '';
       hb.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+
-        '<div style="flex:1"><b>System hardening is active.</b> '+
-        esc(d.hardening_hint || 'Service directories are immutable; JavaHost cannot register services until hardening is lifted.')+
+        '<div style="flex:1"><b>System Hardening is blocking services.</b> '+
+        esc(d.hardening_hint || 'Service directories are read-only. Turn System Hardening off in the panel, make your change, then turn it back on.')+
         ' See <code>docs/system-hardening.md</code>.'+
-        '<div style="margin-top:var(--s2)"><button type="button" class="jh-btn sm" id="jh-allow-services">'+ic('wrench')+'Allow services</button></div>'+
         '</div></div>';
     } else { hb.style.display = 'none'; hb.innerHTML = ''; }
   }
@@ -4796,11 +4795,6 @@
     if(ds.destEdit){ openProfileModal(ds.destEdit); return; }
     if(ds.destDelete){ deleteDest(ds.destDelete, b); return; }
     if(ds.schedEdit){ openScheduleModal(ds.schedEdit); return; }
-    if(b.id === 'jh-allow-services'){
-      if(!confirm('Lift hardening on service directories so JavaHost can register services?')) return;
-      busy(b, true); toast('Allowing services…');
-      call('AllowServices', {}, done('Allow services', b)); return;
-    }
 
     // runtimes — Java (async: Start* + job poll, sync fallback inside startJob)
     if(ds.jdk){

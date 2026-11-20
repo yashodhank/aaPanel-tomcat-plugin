@@ -51,7 +51,7 @@ Hardening**. For an unattended campaign — especially the systemd path that
 `make matrix` prefers — turn hardening **off** for the duration, then turn it
 back on.
 
-JavaHost *can* run under hardening (it briefly lifts/re-locks the immutable bit;
+JavaHost *can* run under hardening (the panel pauses it for service writes;
 see [System Hardening](../plugin/javahost/docs/system-hardening.md)), and `matrix_full.py` will **fall
 back to a service-less path on hardened hosts**. But for the canonical campaign:
 
@@ -59,12 +59,12 @@ back to a service-less path on hardened hosts**. But for the canonical campaign:
   System Hardening (系统加固)** → turn **off**, run the campaign, turn back **on**.
   Fully reversible.
 - Equivalently set `manage_hardening: true` (the default) in
-  `/www/server/javahost/config.json` so the plugin handles the immutable bit
-  itself — but the cleanest full-matrix run is with hardening disabled and
+  `/www/server/javahost/config.json` so the plugin may ask the panel to pause
+  hardening for its writes — but the cleanest full-matrix run is with hardening disabled and
   re-enabled at teardown.
 - If a global **LD_PRELOAD exec filter** (bt_security / usranalyse) is active,
   systemd services will be blocked (`status=203/EXEC`). Either authorize JavaHost
-  (run `AllowServices`, then approve in **Security → bt_security**) or run the
+  (approve it in **Security → bt_security**) or run the
   matrix **service-less** (it detects this and falls back automatically).
 
 ### 2. DNS is already wired

@@ -5,7 +5,7 @@ shebang). Prefers systemd; falls back to a lint-clean init.d script when systemd
 is absent OR its unit dir is not writable.
 
 Resilient to locked service dirs: some panels (e.g. aaPanel "System Hardening")
-set the immutable bit (chattr +i) on /etc/systemd/system and /etc/init.d. We
+set the immutable bit on /etc/systemd/system and /etc/init.d. We
 detect that with a real write probe (os.access can't see the immutable attr) and
 raise a clear, actionable error instead of a cryptic EPERM. Per-app backend is
 resolved by which unit/script actually exists, so a fallback stays consistent.
@@ -15,12 +15,12 @@ from __future__ import annotations
 import os
 import pwd
 import re
-import tempfile
 import time
 from typing import Dict, List, Optional
 
 from . import templating
-from ..util import shell, fs, immutable, validate
+from ..compat import aapanel as panel
+from ..util import shell, fs, validate
 from .. import config
 
 SYSTEMD_DIR = "/etc/systemd/system"
@@ -67,47 +67,37 @@ def have_systemd() -> bool:
 
 
 def _can_write(d: str) -> bool:
-    """Real write probe — catches the immutable bit, which os.access misses."""
-    if not os.path.isdir(d):
-        return False
-    try:
-        fd, p = tempfile.mkstemp(dir=d, prefix=".javahost-probe-")
-        os.close(fd)
-        os.unlink(p)
-        return True
-    except OSError:
-        return False
+    return fs.can_write_dir(d)
+
+
+def _system_write(fn):
+    """Write to a service directory. JavaHost never unlocks a hardened directory
+    itself: when the write is refused and manage_hardening allows it, the panel
+    is asked to pause System Hardening for the write (compat.system_write)."""
+    return panel.system_write(fn, enabled=_manage())
 
 
 def _write_unit_file(path: str, content: str, mode: int) -> None:
-    """Write a service unit, transparently handling an immutable (hardened) target.
+    _system_write(lambda: fs.atomic_write(path, content, mode))
 
-    Creating a file in an immutable directory requires briefly lifting the bit on
-    that directory; we re-lock it immediately afterwards (see util.immutable)."""
-    parent = os.path.dirname(path)
-    mh = _manage()
-    with immutable.writable(parent, enabled=mh):
+
+def _remove_file(path: str) -> None:
+    def rm():
         if os.path.exists(path):
-            with immutable.writable(path, enabled=mh):
-                fs.atomic_write(path, content, mode)
-        else:
-            fs.atomic_write(path, content, mode)
+            os.unlink(path)
+    _system_write(rm)
 
 
 def _locked_msg() -> str:
-    return ("cannot install a service: %s and %s are immutable (chattr +i — e.g. "
-            "aaPanel 'System Hardening') and managed handling is disabled "
-            "(manage_hardening=false) or chattr is unavailable. Enable "
-            "manage_hardening, disable hardening, or lift the lock, then retry."
-            % (SYSTEMD_DIR, INITD_DIR))
+    return "cannot install a service: " + panel.hardening_blocked_msg(_manage())
 
 
 def can_manage(d: str) -> bool:
-    """Can we install a unit into dir `d`? True if writable, or if it's immutable
-    but we're allowed (and able) to lift+relock it."""
+    """Can a unit be installed into dir `d`? True if it is writable, or if it is
+    read-only and the panel can pause System Hardening for us."""
     if _can_write(d):
         return True
-    return _manage() and immutable.is_immutable(d) and immutable.chattr_available()
+    return os.path.isdir(d) and _manage() and panel.can_pause_hardening()
 
 
 def _unit_path(app: str) -> str:
@@ -285,20 +275,14 @@ def restore_unit(app: str, snap) -> None:
 
 def remove_unit(app: str) -> None:
     b = _backend(app)
-    mh = _manage()
     if b == "systemd":
         unit = "javahost-%s.service" % app
         shell.run(["systemctl", "disable", "--now", unit], check=False)
-        # removing a file in an immutable dir needs the bit lifted briefly
-        with immutable.writable(SYSTEMD_DIR, enabled=mh):
-            if os.path.exists(_unit_path(app)):
-                os.unlink(_unit_path(app))
+        _remove_file(_unit_path(app))
         shell.run(["systemctl", "daemon-reload"], check=False)
     elif b == "initd":
         shell.run([_script_path(app), "stop"], check=False)
-        with immutable.writable(INITD_DIR, enabled=mh):
-            if os.path.exists(_script_path(app)):
-                os.unlink(_script_path(app))
+        _remove_file(_script_path(app))
 
 
 def write_setenv(catalina_base: str, app: str, java_home: str, catalina_home: str,

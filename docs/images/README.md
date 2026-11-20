@@ -30,7 +30,7 @@ This directory holds the screenshots referenced by the docs (chiefly
 | `fullscreen.png` | Header **Fullscreen** toggle engaged — plugin filling the whole viewport (not the aaPanel modal). | JavaHost in fullscreen mode, popped out of aaPanel's modal. |
 | `install-import.png` | aaPanel **App Store → Third-party → Import plugin**, with `javahost.zip` selected. | Importing the plugin ZIP into aaPanel. |
 | `dashboard.png` | **Dashboard** tab: the four stat tiles + Java / Tomcat / Environment cards (`GetStatus`). | The Dashboard — runtimes, Tomcat versions, app counts, service backend. |
-| `hardening-banner.png` | **Dashboard** with the red **"System hardening is active"** banner + *Allow services* button (only shows when `service_dirs_locked`). | The hardening banner and its one-click Allow-services action. |
+| `hardening-banner.png` | **Dashboard** with the red **"System Hardening is blocking services"** banner (only shows when `service_dirs_locked`). | The hardening banner and its one-click Allow-services action. |
 | `runtimes-java.png` | **Runtimes** tab, **Java** card: rows for 8/11/17/21 with installed badges and **Install / Reinstall / Uninstall** actions. | Java runtimes — install, reinstall, uninstall per major. |
 | `runtimes-tomcat.png` | **Runtimes** tab, **Tomcat** card: 9 / 10.1 / 11 rows with patch, namespace, min-Java, and Install/Update/Uninstall. | Tomcat lines — install, update, uninstall with enforced Java floors. |
 | `java-in-use.png` | The **"Java N is in use"** dialog after attempting to uninstall an in-use JDK — count + scrollable dependents list + **Force**. | Uninstall blocked: the JDK's dependent apps, with a Force override. |

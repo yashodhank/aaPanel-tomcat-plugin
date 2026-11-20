@@ -121,7 +121,6 @@ flowchart TD
     db --> engines["4 DB engines<br/>PostgreSQL · MySQL · MariaDB · MongoDB"]
     jobs --> instanceData
     maint --> instanceData
-    syssafe --> units
 ```
 
 ### Request flow
@@ -170,13 +169,12 @@ flowchart TD
 
 ### 3-layer hardening handling
 
-JavaHost coexists with three independent aaPanel protections. It manages the
-first two on the operator's behalf and only **detects** (never bypasses) the
-third.
+JavaHost coexists with three independent aaPanel protections. It asks the panel to
+pause the first for its own writes, and only **reports** the other two.
 
 ```mermaid
 flowchart TD
-    one["(1) Immutable service dirs<br/>(chattr +i)"] --> oneAct["lift → write unit → relock immediately"]
-    two["(2) syssafe process killer"] --> twoAct["AllowServices: append app to allowlist<br/>(append-only, reversible)"]
+    one["(1) Locked service dirs"] --> oneAct["panel pauses hardening → write unit → panel resumes"]
+    two["(2) syssafe process killer"] --> twoAct["REPORT only — operator allows<br/>the app in the panel"]
     three["(3) LD_PRELOAD execve filter<br/>(bt_security / usranalyse)"] --> threeAct["DETECT only — surface guidance,<br/>never bypass"]
 ```

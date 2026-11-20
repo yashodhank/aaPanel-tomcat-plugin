@@ -120,7 +120,6 @@ See [Reverse proxy & per-site HTTPS](../plugin/javahost/docs/user-guide.md#6-rev
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `AllowServices` | — | Register JavaHost in aaPanel System Hardening's process allowlist (append-only, reversible; registers, never bypasses). See [System Hardening](../plugin/javahost/docs/system-hardening.md). |
 | `WipePreview` | — | **Dry run** of the Danger-zone wipe: counts + lists per category, removes nothing. `jdks` lists plugin runtimes only. |
 | `Wipe` | `confirm` (must equal `WIPE`), `scope` (csv from `apps,jdks,tomcats,sites,full`) | Granular plugin wipe. Stops apps first; **skips in-use** runtimes; writes `/www/server/javahost/.uninstall_plan` for App Store uninstall; never touches the panel cert, other plugins' configs, or any database. |
 

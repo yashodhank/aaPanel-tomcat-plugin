@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from core.util import validate, immutable
+from core.util import validate
 from core import config
 from core.runtime import java, jvm_opts
 from core.tomcat import registry, templating, hardening, instance
@@ -601,42 +601,262 @@ def test_config_default_manage_hardening():
     assert config.get("manage_hardening") is True
 
 
-def test_immutable_parse(monkeypatch):
-    from core.util import shell as sh
-    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
-    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "----i---------e------- /d\n", ""))
-    assert immutable.is_immutable("/d") is True
-    monkeypatch.setattr(sh, "run", lambda argv, **k: (0, "-------------e------- /d\n", ""))
-    assert immutable.is_immutable("/d") is False
+class _FakePanel:
+    """Stands in for the panel's `public`: hardening is on until stop_syssafe."""
+
+    def __init__(self, stop_helps=True, stop_raises=False, resume_raises=False):
+        self.locked = True
+        self.calls = []
+        self.logs = []
+        self.stop_helps, self.stop_raises, self.resume_raises = stop_helps, stop_raises, resume_raises
+
+    def stop_syssafe(self):
+        self.calls.append("stop")
+        if self.stop_raises:
+            raise OSError("init script missing")
+        if self.stop_helps:
+            self.locked = False
+        return not self.locked
+
+    def start_syssafe(self):
+        self.calls.append("start")
+        if self.resume_raises:
+            raise RuntimeError("boom")
+        self.locked = True
+
+    def WriteLog(self, kind, msg):
+        self.logs.append(msg)
+
+    def write(self, done):
+        """A system write that hardening refuses while it is on."""
+        def fn():
+            if self.locked:
+                raise PermissionError(1, "Operation not permitted")
+            done.append("written")
+        return fn
 
 
-def test_immutable_writable_noop_when_not_immutable(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: False)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x") as lifted:
-        assert lifted is False
-    assert calls == []  # chattr never invoked
+@pytest.fixture
+def hardened(monkeypatch, tmp_path):
+    """A fake hardened panel; returns (aapanel, make_fake)."""
+    from core.compat import aapanel
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "data" / "config.json"))
+    sys_dir = tmp_path / "syssafe"
+    sys_dir.mkdir()
+    monkeypatch.setattr(aapanel, "_SYSSAFE_DIR", str(sys_dir))
+
+    def make(**kw):
+        fake = _FakePanel(**kw)
+        monkeypatch.setattr(aapanel, "_hardening_api", fake)
+        return fake
+    return aapanel, make
 
 
-def test_immutable_writable_lifts_and_relocks(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
-    monkeypatch.setattr(immutable, "chattr_available", lambda: True)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x") as lifted:
-        assert lifted is True
-        assert calls == [("-i", "/x")]      # lifted inside the block
-    assert calls == [("-i", "/x"), ("+i", "/x")]  # re-locked on exit
+def test_system_write_does_not_touch_hardening_when_the_write_succeeds(hardened):
+    aapanel, make = hardened
+    fake = make()
+    fake.locked = False
+    done = []
+    aapanel.system_write(fake.write(done))
+    assert done == ["written"] and fake.calls == []
 
 
-def test_immutable_writable_disabled(monkeypatch):
-    calls = []
-    monkeypatch.setattr(immutable, "is_immutable", lambda p: True)
-    monkeypatch.setattr(immutable, "_set", lambda f, p: calls.append((f, p)))
-    with immutable.writable("/x", enabled=False) as lifted:
-        assert lifted is False
-    assert calls == []  # respects manage_hardening=false
+def test_system_write_pauses_through_the_panel_then_resumes(hardened):
+    aapanel, make = hardened
+    fake = make()
+    done = []
+    aapanel.system_write(fake.write(done))
+    assert done == ["written"] and fake.calls == ["stop", "start"]
+    assert fake.locked is True                                   # hardening is back on
+    assert not os.path.exists(aapanel._pause_paths()[0])         # marker cleared
+    assert any("paused" in m for m in fake.logs)                 # recorded, also from jobs
+
+
+def test_system_write_resumes_when_the_write_fails_for_another_reason(hardened):
+    aapanel, make = hardened
+    fake = make()
+    state = {"n": 0}
+
+    def fn():
+        state["n"] += 1
+        if state["n"] == 1:
+            raise PermissionError(1, "Operation not permitted")
+        raise ValueError("disk full")
+    with pytest.raises(ValueError):
+        aapanel.system_write(fn)
+    assert fake.calls == ["stop", "start"] and fake.locked is True
+
+
+def test_system_write_says_what_to_do_when_the_pause_does_not_help(hardened):
+    aapanel, make = hardened
+    fake = make(stop_helps=False)            # e.g. the directory is locked by something else
+    with pytest.raises(RuntimeError) as e:
+        aapanel.system_write(fake.write([]))
+    assert "System Hardening" in str(e.value) and "did not unlock" in str(e.value)
+    assert fake.calls == ["stop", "start"]                       # still resumed
+
+
+def test_system_write_resumes_when_the_panel_pause_itself_fails(hardened):
+    aapanel, make = hardened
+    fake = make(stop_raises=True)            # may have stopped hardening before failing
+    with pytest.raises(RuntimeError, match="could not pause"):
+        aapanel.system_write(fake.write([]))
+    assert fake.calls == ["stop", "start"]
+
+
+@pytest.mark.parametrize("case", ["disabled", "no-helper", "no-syssafe"])
+def test_system_write_never_pauses_when_it_may_not_or_cannot(hardened, monkeypatch, case):
+    aapanel, make = hardened
+    fake = make()
+    enabled = case != "disabled"
+    if case == "no-helper":
+        monkeypatch.setattr(aapanel, "_hardening_api", False)
+    if case == "no-syssafe":
+        monkeypatch.setattr(aapanel, "_SYSSAFE_DIR", "/nonexistent/syssafe")
+    with pytest.raises(RuntimeError) as e:
+        aapanel.system_write(fake.write([]), enabled=enabled)
+    assert fake.calls == [] and "Turn System Hardening off" in str(e.value)
+    assert ("manage_hardening" in str(e.value)) is (case == "disabled")
+
+
+def test_a_pause_left_by_a_dead_task_is_resumed_by_the_next_call(hardened):
+    aapanel, make = hardened
+    fake = make()
+    fake.locked = False                                          # hardening left off
+    marker = aapanel._pause_paths()[0]
+    os.makedirs(os.path.dirname(marker))
+    open(marker, "w").write("4242")                              # the task died before resuming
+    assert aapanel.resume_abandoned_pause() is True
+    assert fake.calls == ["start"] and fake.locked is True and not os.path.exists(marker)
+    assert aapanel.resume_abandoned_pause() is False             # nothing left to do
+    assert fake.calls == ["start"]
+
+
+def test_a_pause_still_in_use_is_not_resumed_under_its_owner(hardened):
+    aapanel, make = hardened
+    fake = make()
+    marker = aapanel._pause_paths()[0]
+    seen = []
+
+    def fn():
+        if fake.locked:
+            raise PermissionError(1, "Operation not permitted")
+        # another JavaHost request arrives while this write holds the pause
+        seen.append((os.path.exists(marker), aapanel.resume_abandoned_pause()))
+    aapanel.system_write(fn)
+    assert seen == [(True, False)] and fake.calls == ["stop", "start"]
+
+
+def test_a_failed_resume_keeps_the_marker_so_it_is_retried(hardened):
+    aapanel, make = hardened
+    fake = make(resume_raises=True)
+    aapanel.system_write(fake.write([]))
+    assert os.path.exists(aapanel._pause_paths()[0])
+    fake.resume_raises = False
+    assert aapanel.resume_abandoned_pause() is True and fake.locked is True
+
+
+def test_the_panel_helper_is_found_from_a_background_job(monkeypatch, tmp_path):
+    """Jobs run outside the panel process: `public` comes from the panel class dir."""
+    import sys
+    from core.compat import aapanel
+    cls = tmp_path / "class"
+    cls.mkdir()
+    (cls / "public.py").write_text("def stop_syssafe():\n    return True\n"
+                                   "def start_syssafe():\n    pass\n")
+    monkeypatch.setattr(aapanel, "public", None)
+    monkeypatch.setattr(aapanel, "_hardening_api", None)
+    monkeypatch.setattr(aapanel, "_PANEL_CLASS", str(cls))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "public", raising=False)
+    api = aapanel._panel_hardening_api()
+    assert api is not None and api.stop_syssafe() is True
+    assert sys.path[-1] == str(cls)                              # appended: plugin modules win
+    monkeypatch.delitem(sys.modules, "public", raising=False)
+    # a panel too old to have the helpers is "cannot pause", not a crash
+    (cls / "public.py").write_text("x = 1\n")
+    monkeypatch.setattr(aapanel, "_hardening_api", None)
+    assert aapanel._panel_hardening_api() is None
+    monkeypatch.delitem(sys.modules, "public", raising=False)
+
+
+def test_unit_write_and_remove_go_through_the_panel_pause(hardened, monkeypatch, tmp_path):
+    from core.tomcat import service as svc
+    aapanel, make = hardened
+    fake = make()
+    real = svc.fs.atomic_write
+
+    def guarded(path, content, mode=0o640):
+        if fake.locked and path.endswith(".service"):
+            raise PermissionError(1, "Operation not permitted")
+        real(path, content, mode)
+    monkeypatch.setattr(svc.fs, "atomic_write", guarded)
+    unit = str(tmp_path / "javahost-a.service")
+    svc._write_unit_file(unit, "x", 0o644)
+    assert open(unit).read() == "x" and fake.calls == ["stop", "start"]
+    svc._remove_file(str(tmp_path / "javahost-gone.service"))    # nothing to remove
+    assert fake.calls == ["stop", "start"]                       # so no pause for it
+    monkeypatch.setattr(config, "get",
+                        lambda k, d=None: False if k == "manage_hardening" else d)
+    with pytest.raises(RuntimeError, match="manage_hardening"):
+        svc._write_unit_file(unit, "y", 0o644)
+    assert fake.calls == ["stop", "start"] and open(unit).read() == "x"
+
+
+def test_cron_writers_go_through_the_panel_pause(hardened, monkeypatch, tmp_path):
+    from core import logrotate
+    from core.backup import schedule
+    aapanel, make = hardened
+    fake = make()
+    real = aapanel.fs.atomic_write
+
+    def guarded(path, content, mode=0o640):
+        if fake.locked and "cron.d" in path:
+            raise PermissionError(1, "Operation not permitted")
+        real(path, content, mode)
+    monkeypatch.setattr(aapanel.fs, "atomic_write", guarded)     # fs is one shared module
+    crond = tmp_path / "cron.d"
+    crond.mkdir()
+    monkeypatch.setattr(schedule, "CRON_PATH", str(crond / "javahost-backups"))
+    monkeypatch.setattr(schedule, "CRON_LOG", str(tmp_path / "logs" / "b.log"))
+    monkeypatch.setattr(logrotate, "CRON_PATH", str(crond / "javahost-logrotate"))
+    monkeypatch.setattr(logrotate, "LOGS_DIR", str(tmp_path / "logs"))
+    schedule._regenerate({"shop": {"cron": "0 3 * * *", "remotes": "", "keep": 3}})
+    assert os.path.exists(schedule.CRON_PATH) and fake.calls == ["stop", "start"]
+    monkeypatch.setattr(config, "log_rotate_enabled", lambda: True)
+    logrotate.apply_schedule()
+    assert os.path.exists(logrotate.CRON_PATH) and fake.calls == ["stop", "start"] * 2
+
+
+def test_can_manage_needs_a_writable_dir_or_a_panel_that_can_pause(hardened, monkeypatch, tmp_path):
+    from core.tomcat import service as svc
+    aapanel, make = hardened
+    make()
+    d = str(tmp_path)
+    assert svc.can_manage(d) is True
+    monkeypatch.setattr(svc, "_can_write", lambda p: False)
+    assert svc.can_manage(d) is True                             # panel can pause
+    assert svc.can_manage(str(tmp_path / "missing")) is False
+    monkeypatch.setattr(aapanel, "_SYSSAFE_DIR", "/nonexistent/syssafe")
+    assert svc.can_manage(d) is False                            # locked by something else
+    monkeypatch.setattr(aapanel, "_hardening_api", False)
+    assert svc.can_manage(d) is False
+
+
+def test_plugin_never_unlocks_dirs_or_edits_hardening_config():
+    """The plugin must not run chattr or write the hardening plugin's files."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "plugin", "javahost")
+    hits = []
+    for base, _, files in os.walk(root):
+        for f in files:
+            if not f.endswith((".py", ".sh")):
+                continue
+            body = open(os.path.join(base, f), encoding="utf-8").read()
+            for bad in ("chattr", "process_white", "whitelist_javahost"):
+                if bad in body:
+                    hits.append((f, bad))
+    assert hits == []
 
 
 # ---- aaPanel daemon/exec protection (layer 2) detection ----
@@ -689,17 +909,7 @@ def test_metrics_reads_proc(monkeypatch, tmp_path):
     assert m["up"] and m["rss_mb"] and m["threads"] >= 1
 
 
-# ---- syssafe allowlist merge (auto-whitelist) ----
-def test_syssafe_merge_appends_missing():
-    from core.compat import syssafe
-    cfg = {"process": {"process_white": ["java"], "process_white_rule": ["/www/server/"]}}
-    out, added = syssafe.merge_whitelist(cfg)
-    assert "/www/server/javahost" in out["process"]["process_white_rule"]
-    assert "catalina.sh" in out["process"]["process_white"]
-    assert "/www/server/" in out["process"]["process_white_rule"]  # existing kept
-    assert added  # reported what it added
-
-
+# ---- hardening detection (read-only) ----
 def test_syssafe_exec_filter_detection(monkeypatch, tmp_path):
     from core.compat import syssafe
     f = tmp_path / "ld.so.preload"
@@ -709,14 +919,6 @@ def test_syssafe_exec_filter_detection(monkeypatch, tmp_path):
     assert r["active"] is True and "usranalyse" in r["library"] and r["guidance"]
     f.write_text("")
     assert syssafe.exec_filter()["active"] is False
-
-
-def test_syssafe_merge_idempotent():
-    from core.compat import syssafe
-    cfg = {"process": {}}
-    cfg, _ = syssafe.merge_whitelist(cfg)
-    cfg, added2 = syssafe.merge_whitelist(cfg)  # second pass
-    assert added2 == []  # nothing new the second time
 
 
 # ---- engine registry ----
