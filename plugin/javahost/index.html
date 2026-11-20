@@ -899,6 +899,26 @@
     return '';
   }
 
+  // The panel rejects a POST without its CSRF token (INIT_CSRF_ERR). The panel
+  // sets the token on jQuery globally, but not always before this UI's first
+  // requests, and never for fetch(). So every request carries it explicitly.
+  function panelToken(){
+    var t = '';
+    try {
+      var el = document.getElementById('request_token_head');
+      t = (el && el.getAttribute('token')) || '';
+      if(!t && window.$ && $.ajaxSettings && $.ajaxSettings.headers){
+        t = $.ajaxSettings.headers['x-http-token'] || '';
+      }
+    } catch(_){}
+    return String(t || '');
+  }
+  function tokenHeaders(base){
+    var h = base || {}, t = panelToken();
+    if(t) h['x-http-token'] = t;
+    return h;
+  }
+
   // Panel plugin convention. jQuery $.post if available, else Fetch.
   function call(method, data, cb){
     var url = '/plugin?action=a&name=javahost&s=' + method;
@@ -934,7 +954,7 @@
       }
     }, REQUEST_TIMEOUT);
     if (window.$ && $.post){
-      request = $.post(url, data || {}, function(r, _textStatus, xhr){
+      var onDone = function(r, _textStatus, xhr){
         if(typeof r === 'string'){
           var s = r.replace(/^﻿/, '');
           if(looksLikeLoginHtml(s, xhr && xhr.responseURL, xhr && xhr.status)){ expireSession(); return; }
@@ -946,7 +966,11 @@
         }
         if(!isPanelEnvelope(r)){ invalidResponse(); return; }
         finish(r);
-      }).fail(function(e){
+      };
+      var tok = panelToken();
+      request = ((tok && $.ajax) ?
+        $.ajax({url:url, type:'POST', data:data || {}, headers:{'x-http-token':tok}, success:onDone}) :
+        $.post(url, data || {}, onDone)).fail(function(e){
         if(settled) return;
         // a 302 -> login page surfaces here in some setups (parsererror w/ HTML)
         var body = e && (e.responseText != null ? e.responseText : '');
@@ -959,7 +983,7 @@
       });
     } else {
       request = fetch(url, {method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        headers:tokenHeaders({'Content-Type':'application/x-www-form-urlencoded'}),
         body:new URLSearchParams(data || {})})
         .then(function(x){
           // followed a redirect to the login/entrance page => session expired
@@ -3700,7 +3724,7 @@
     fd.append('f_size', f.size);
     fd.append('f_start', 0);
     fd.append('blob', f, f.name);
-    var options = {method:'POST', body:fd};
+    var options = {method:'POST', body:fd, headers:tokenHeaders()};
     if(controller) options.signal = controller.signal;
     fetch('/files?action=upload', options)
       .then(function(x){

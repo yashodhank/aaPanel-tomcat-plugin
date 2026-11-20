@@ -118,7 +118,7 @@ Flags:
   (install + create db/user via the App Store). `docker`: ephemeral throwaway
   containers (same recipes as section "Docker DB recipes", `docker rm -f` on exit).
 - `--proxy` — also create a reverse-proxy site per app and assert the **real
-  hostname** `<app>.5d.bisotech.in`, not just loopback.
+  hostname** `<app>.jh.example.com`, not just loopback.
 - `--dry-run` — print the planned cells and exit (run this first to check scope).
 
 **Bytecode pinning to prove Java binding:** `make samples`/`make_samples.py` take
@@ -131,22 +131,22 @@ units); on a hardened host where it cannot register services it **falls back to 
 service-less run** automatically. For an unattended full sweep, prefer hardening
 **OFF** (re-enable at teardown) — see `docs/testbed.md` and `docs/system-hardening.md`.
 
-## 5. Reverse-proxy / domains (`*.5d.bisotech.in`)
+## 5. Reverse-proxy / domains (`*.jh.example.com`)
 
 Tomcat/JAR connectors bind to **`127.0.0.1:<port>` by design** — apps are **NOT**
 reachable on their raw public port. You reach them through a reverse-proxy domain.
-DNS `*.5d.bisotech.in` (and apex `5d.bisotech.in`) already points to the box.
+DNS `*.jh.example.com` (and apex `jh.example.com`) already points to the box.
 
 - **`SetSite{app, domain?}`** — create a reverse-proxy site → app's loopback port.
   No `domain` ⇒ `<app>.<suffix>`, where the suffix is the plugin config key
   **`site_suffix`** (`/www/server/javahost/config.json`), **empty by default** —
   so with no suffix set you MUST pass `domain` (no FQDN is guessed). The campaign
-  box has `site_suffix: "5d.bisotech.in"`, hence `<app>.5d.bisotech.in`. Uses the
+  box has `site_suffix: "jh.example.com"`, hence `<app>.jh.example.com`. Uses the
   aaPanel site API, falls back to writing an nginx vhost. `--proxy` does this and
   asserts the hostname for you.
 - **`RemoveSite{app}`** — remove that site (teardown).
 
-Verify: `curl http://<app>.5d.bisotech.in/ | grep JAVAHOST_OK` (off-box) or
+Verify: `curl http://<app>.jh.example.com/ | grep JAVAHOST_OK` (off-box) or
 `curl http://127.0.0.1:<port>/` (on-box). Never expect the app on `public-ip:port`.
 
 ### Per-site HTTPS (`SetSiteSSL`)
@@ -165,7 +165,7 @@ Verify: `curl http://<app>.5d.bisotech.in/ | grep JAVAHOST_OK` (off-box) or
 
 With SSL on, `request scheme` reads `https` end-to-end (proxy sets
 `X-Forwarded-Proto https`) — visible in the `hello.war` "served by" block. Verify:
-`curl -s https://<app>.5d.bisotech.in/ | grep JAVAHOST_OK`.
+`curl -s https://<app>.jh.example.com/ | grep JAVAHOST_OK`.
 
 ## 6. Tasks & Logs (observability)
 

@@ -3,33 +3,21 @@
 **Date:** 2026-06-10
 **Severity:** High (blocks reverse-proxy site creation via panelSite Python API)
 **Status:** Open — aaPanel internal bug, not fixable from plugin side
-**aaPanel version:** Observed on aaPanel 7.x (panelSite.py, line 4064)
+**aaPanel version:** Observed on aaPanel 7.x
 
 ## Root cause
 
-In `/www/server/panel/class/panelSite.py`, `CreateProxy()` (line ~4064):
+Observed from the outside, by calling the panel's site class from the plugin
+(no panel source is reproduced here, per the project's clean-room rule):
 
-```python
-def CreateProxy(self, get):
-    try:
-        nocheck = get.nocheck
-    except:
-        nocheck = ""
-    if not get.get('proxysite', None):
-        return public.returnMsg(False, ...)
-    if not nocheck:
-        if self.__CheckStart(get, "create"):  # guarded by nocheck
-            return self.__CheckStart(get, "create")
-    if public.get_webserver() == 'nginx':
-        if self.CheckLocation(get):           # NOT guarded — runs always on nginx!
-            return self.CheckLocation(get)
-```
+- `CreateProxy` accepts a `nocheck` parameter that skips its start-up checks.
+- On nginx it still runs a location check on the site's config, whatever
+  `nocheck` says.
+- That check runs a regular expression over the site config. In some cases the
+  config read hands back a boolean instead of text.
 
-The `CheckLocation()` call at line 4064 is **outside** the `if not nocheck:` guard block. It runs unconditionally when the webserver is nginx.
-
-`CheckLocation()` calls `re.findall(rep, conf)` where `conf` comes from `self.__read_config()` — which returns a **bool** instead of a string in some code paths.
-
-**Result:** `TypeError: expected string or bytes-like object, got 'bool'` — crashes even with `nocheck="1"` set.
+**Result:** `TypeError: expected string or bytes-like object, got 'bool'`, raised
+even with `nocheck="1"`.
 
 ## Impact
 
@@ -57,12 +45,5 @@ configure the key rather than expecting a plugin nginx fallback.
 
 ## To fix in aaPanel
 
-Move `CheckLocation` inside the `if not nocheck:` guard block (same as `__CheckStart`).
-Or add `if not nocheck:` before line 4064:
-
-```python
-if not nocheck:
-    if public.get_webserver() == 'nginx':
-        if self.CheckLocation(get):
-            return self.CheckLocation(get)
-```
+The location check should be skipped when `nocheck` is set, as the start-up
+checks are, and it should cope with a config read that did not return text.
