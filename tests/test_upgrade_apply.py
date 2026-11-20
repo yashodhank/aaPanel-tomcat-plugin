@@ -41,7 +41,10 @@ def rig(box, monkeypatch):
     return box
 
 
-def _legacy(rig, app, port, owner=None, listen="listen 80;"):
+def _legacy(rig, app, port, owner=None, listen="listen 80;", first=False):
+    if not first and not (rig.vdir / "0.default.conf").exists():
+        # the panel names its own default site, so no JavaHost file is the fallback
+        (rig.vdir / "0.default.conf").write_text("server {\n    listen 80 default_server;\n    server_name _;\n}\n")
     rig.app(app, port)
     dom = "%s.example.com" % app
     (rig.legacy / ("%s.conf" % app)).write_text(
@@ -126,7 +129,8 @@ def test_a_change_of_the_servers_default_site_is_caught(rig):
 def test_only_plain_listens_are_moved(rig, listen):
     _legacy(rig, "shop", 8080, owner="javahost", listen=listen)
     res = upgrade.apply()
-    assert res["moved"] == [] and "cannot be checked" in res["skipped"]["shop"]
+    assert res["moved"] == [] and res["skipped"] == {}        # the report already keeps it
+    assert "cannot be checked" in _by_app(upgrade.report())["shop"]["notes"][0]
     assert (rig.legacy / "shop.conf").exists() and rig.state["reloads"] == 0
 
 
@@ -240,3 +244,14 @@ def test_plan_changes_nothing(rig):
 def test_start_if_needed_never_raises(rig, monkeypatch):
     monkeypatch.setattr(upgrade, "report", lambda: 1 / 0)
     upgrade.start_if_needed()
+
+
+def test_the_servers_fallback_site_is_never_moved(rig):
+    # Two bare apps answer an unknown name identically, so a probe cannot tell
+    # which one receives it. The first old file is the fallback: it stays.
+    _legacy(rig, "alpha", 8001, owner="javahost", first=True)
+    _legacy(rig, "beta", 8002, owner="javahost", first=True)
+    res = upgrade.apply()
+    assert res["moved"] == ["beta"] and res["skipped"] == {}
+    assert "falls back to for unknown names" in _by_app(upgrade.report())["alpha"]["notes"][0]
+    assert (rig.legacy / "alpha.conf").exists() and (rig.vdir / "javahost_beta.conf").exists()

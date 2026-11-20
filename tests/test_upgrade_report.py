@@ -110,6 +110,7 @@ def test_the_production_layout_is_reported_and_nothing_is_written(box):
 
 
 def test_old_site_file_alone_is_marked_to_move(box):
+    (box.vdir / "0.default.conf").write_text("server {\n    listen 80 default_server;\n    server_name _;\n}\n")
     box.app("shop", 8080)
     (box.legacy / "shop.conf").write_text(LEGACY % dict(app="shop", domain="shop.example.com", port=8080))
     proxy._store_domain("shop", "shop.example.com")
@@ -202,3 +203,17 @@ def test_old_folder_that_nginx_no_longer_loads_is_not_moved(box):
     box.conf.write_text("http {\n    # include %s/*.conf;\n    include %s/*.conf;\n}\n" % (box.legacy, box.vdir))
     a = _by_app(upgrade.report())["shop"]
     assert a["action"] == "keep" and "not being served" in a["attention"][0]
+
+
+def test_fallback_site_and_odd_listens_are_reported_as_staying(box):
+    box.app("shop", 8080)        # the only old file, and no default_server anywhere
+    (box.legacy / "shop.conf").write_text(LEGACY % dict(app="shop", domain="shop.example.com", port=8080))
+    a = _by_app(upgrade.report())["shop"]
+    assert a["action"] == "keep" and not a["attention"]
+    assert "falls back to for unknown names" in a["notes"][0]
+    (box.vdir / "0.default.conf").write_text("server {\n    listen 80 default_server;\n    server_name _;\n}\n")
+    assert _by_app(upgrade.report())["shop"]["action"] == "move"
+    (box.legacy / "shop.conf").write_text(
+        (LEGACY % dict(app="shop", domain="shop.example.com", port=8080)).replace("listen 80;", "listen 8088;"))
+    a = _by_app(upgrade.report())["shop"]
+    assert a["action"] == "keep" and "cannot be checked" in a["notes"][0]
