@@ -502,6 +502,25 @@ def _exclusive_config_lock(config_path: str):
             os.close(fd)
 
 
+def _ws_map_in_vhost_dir(vdir: str = "/www/server/panel/vhost/nginx") -> bool:
+    """True when a top-level file in the panel's vhost dir (e.g. the panel's own
+    0.websocket.conf) already defines the upgrade map."""
+    try:
+        names = sorted(os.listdir(vdir))
+    except OSError:
+        return False
+    for name in names:
+        if not name.endswith(".conf"):
+            continue
+        try:
+            with open(os.path.join(vdir, name), encoding="utf-8", errors="replace") as f:
+                if _WS_MAP_NEEDLE in f.read(65536):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     """Idempotently install the WebSocket upgrade map into nginx's http{} block.
 
@@ -513,6 +532,8 @@ def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     Panel coupling stays here — callers outside compat must use this helper
     rather than writing nginx.conf themselves.
     """
+    if _ws_map_in_vhost_dir():
+        return True          # current panels ship it; nginx.conf stays untouched
     try:
         lock = _exclusive_config_lock(nginx_conf)
         with lock:

@@ -263,13 +263,8 @@ def _activate_plugin_vhost(app: str, domain: str, port: int, *,
                            ssl_on: bool, cert_domain: Optional[str] = None,
                            wildcard_name: Optional[str] = None) -> Optional[str]:
     """Write plugin vhost and reload nginx fail-closed. Returns error or None."""
-    proxy.write_vhost(app, domain, port, ssl=ssl_on,
-                      cert_domain=cert_domain, wildcard_name=wildcard_name)
-    if not proxy.ensure_include():
-        return "failed to ensure JavaHost nginx include (nginx -t rejected?)"
-    if not proxy.reload_nginx():
-        return "nginx -t / reload failed after writing SSL vhost"
-    return None
+    return proxy.publish_vhost(app, domain, port, ssl=ssl_on,
+                               cert_domain=cert_domain, wildcard_name=wildcard_name)
 
 
 def enable(app: str, domain: str, port: int, email: Optional[str] = None) -> Dict:

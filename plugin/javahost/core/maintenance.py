@@ -83,11 +83,8 @@ def _list_installed_tomcats() -> List[str]:
 
 
 def _vhost_apps() -> List[str]:
-    """Apps with a plugin-owned vhost file under proxy.VHOST_DIR."""
-    vdir = proxy.VHOST_DIR
-    if not os.path.isdir(vdir):
-        return []
-    return sorted(f[:-len(".conf")] for f in os.listdir(vdir) if f.endswith(".conf"))
+    """Apps with a JavaHost vhost file (current or pre-0.30 location)."""
+    return proxy.vhost_apps()
 
 
 def _site_apps() -> Dict[str, str]:
@@ -95,7 +92,7 @@ def _site_apps() -> Dict[str, str]:
     file, or a domain registered in aaPanel (where SetSite puts them now, with
     no vhost file at all). Without the second kind the `sites` scope found
     nothing to remove on a current install."""
-    out = {app: "%s.conf" % app for app in _vhost_apps()}
+    out = {app: os.path.basename(proxy.vhost_path(app)) for app in _vhost_apps()}
     for app in _list_apps():
         try:
             domain = proxy.read_domain(app)
@@ -293,11 +290,11 @@ def _remove_include(nginx_conf: str = None) -> bool:
         return False
     with open(nginx_conf, encoding="utf-8", errors="replace") as f:
         content = f.read()
-    if proxy.VHOST_DIR not in content:
+    if proxy.LEGACY_VHOST_DIR not in content:
         return False
     lines = content.splitlines(keepends=True)
     kept = [ln for ln in lines
-            if not (proxy.VHOST_DIR in ln and "include" in ln)]
+            if not (proxy.LEGACY_VHOST_DIR in ln and "include" in ln)]
     if len(kept) == len(lines):
         return False
     new_content = "".join(kept)

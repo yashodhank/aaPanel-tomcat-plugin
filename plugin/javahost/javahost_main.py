@@ -183,6 +183,7 @@ class javahost_main(object):
                 "plugin_version": config.plugin_version(),
                 "aapanel_api_key_set": bool(config.aapanel_api_key()),
                 "aapanel_port": config.aapanel_port(),
+                "publish_mode": config.publish_mode(),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -496,6 +497,7 @@ class javahost_main(object):
             return panel.ok({
                 "aapanel_api_key_set": bool(config.aapanel_api_key()),
                 "aapanel_port": config.aapanel_port(),
+                "publish_mode": config.publish_mode(),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -519,14 +521,28 @@ class javahost_main(object):
                     if p < 1 or p > 65535:
                         return panel.err("invalid panel port: %r" % raw)
                     vals["aapanel_port"] = p
+            if panel.attr(get, "publish_mode", None) is not None:
+                mode = str(panel.attr(get, "publish_mode") or "").strip()
+                if mode not in ("vhost", "panel"):
+                    return panel.err("publish_mode must be vhost or panel")
+                key_after = vals.get("aapanel_api_key", config.aapanel_api_key())
+                if mode == "panel" and not key_after:
+                    return panel.err("Publishing as an aaPanel website needs the "
+                                     "panel API key. Save the key first.")
+                vals["publish_mode"] = mode
             if not vals:
-                return panel.err("pass api_key and/or port")
+                return panel.err("pass api_key, port and/or publish_mode")
+            if vals.get("aapanel_api_key") == "" and vals.get(
+                    "publish_mode", config.publish_mode()) == "panel":
+                # clearing the key leaves nothing for panel publishing to use
+                vals["publish_mode"] = "vhost"
             config.update(vals)
             panel.log("SetPanelApi", "key_set=%s port=%s" % (
                 bool(config.aapanel_api_key()), config.aapanel_port()))
             return panel.ok({
                 "aapanel_api_key_set": bool(config.aapanel_api_key()),
                 "aapanel_port": config.aapanel_port(),
+                "publish_mode": config.publish_mode(),
             })
         except Exception as e:
             return panel.err(str(e))
@@ -586,7 +602,8 @@ class javahost_main(object):
         """Publish <app> at <domain> reverse-proxied to its loopback port. The
         domain comes from ?domain= or, if a site_suffix is configured, the
         convention "<app>.<suffix>"; with neither, the caller MUST pass ?domain=
-        (no FQDN is ever guessed). Registers via aaPanel site APIs only.
+        (no FQDN is ever guessed). Publishes per config publish_mode: a JavaHost
+        vhost file (default) or a panel website.
         Returns {domain, url} on success; panel.err with the diagnostic on failure."""
         try:
             app = validate.identifier(panel.attr(get, "app"), "app")
@@ -599,7 +616,7 @@ class javahost_main(object):
                 return panel.err("cannot resolve port for app %r (is it created?)" % app)
             res = proxy.set_site(app, domain, int(port))
             if not res.get("ok"):
-                return panel.err(res.get("error") or "aaPanel site registration failed")
+                return panel.err(res.get("error") or "could not publish the domain")
             panel.log("SetSite", "%s -> %s (%s)" % (app, res.get("domain"), res.get("via")))
             return panel.ok(res)
         except Exception as e:
