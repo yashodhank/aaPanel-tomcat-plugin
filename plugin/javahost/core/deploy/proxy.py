@@ -745,7 +745,7 @@ def set_site(app: str, domain: str, port: int) -> Dict:
             "via": "aapanel", "owner": "aapanel", "aapanel": aap.get("detail", "")}
 
 
-_SERVER_NAME = re.compile(r"(?:^|[;{}])\s*server_name\s+([^;]+);", re.M)
+_SERVER_NAME = re.compile(r"(?:^|(?<=[;{}]))\s*server_name\s+([^;]+);", re.M)
 
 
 def _serves(name: str, domain: str) -> bool:

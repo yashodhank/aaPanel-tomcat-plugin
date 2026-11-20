@@ -326,32 +326,68 @@ class _Undo(Exception):
     pass
 
 
+_LISTEN = re.compile(r"(?:^|(?<=[;{}]))\s*listen\s+([^;]+);", re.M)
+_SOCKET = re.compile(r"^(\[::\]:)?(80|443)$")
+
+
+def _listens(body: str) -> List[List[str]]:
+    """Every listen directive in the file, as its list of words."""
+    return [m.group(1).split() for m in _LISTEN.finditer(_live(body))]
+
+
 def _plain_listens(body: str) -> bool:
-    listens = re.findall(r"^\s*listen\s+([^;]+);", _live(body), re.M)
-    return bool(listens) and all(_PLAIN_LISTEN.match(" ".join(l.split())) for l in listens)
+    listens = _listens(body)
+    return bool(listens) and all(_PLAIN_LISTEN.match(" ".join(l)) for l in listens)
+
+
+def _sockets(body: str, only_default: bool = False) -> set:
+    """The (address, port) pairs a file listens on in the plain way: every
+    IPv4 address or every IPv6 address, port 80 or 443."""
+    out = set()
+    for words in _listens(body):
+        m = _SOCKET.match(words[0]) if words else None
+        if m and (not only_default or "default_server" in words[1:]):
+            out.add(("[::]" if m.group(1) else "*", m.group(2)))
+    return out
 
 
 def _is_default_site(old: str) -> bool:
-    """Is this old site file the one nginx falls back to for names no site
-    serves? The old folder is loaded first, so its first file is, unless some
-    file names a default_server outright. Two apps can answer an unknown name
-    identically, so this is decided from the files and not from a probe."""
+    """Could this old site file be what nginx answers with for names no site
+    serves, on any address and port it listens on?
+
+    nginx uses the first server it loaded for an address and port unless one
+    is marked default_server for exactly that pair. The old folder is loaded
+    before the panel's, in byte order of the file names. So the file is NOT
+    the fallback for a pair only when an earlier old file listens on that same
+    pair, or some file marks a default for it. Two apps can answer an unknown
+    name identically, so this is decided from the files, not from a probe.
+    Anything that cannot be worked out counts as "could be"."""
     try:
-        first = sorted(f for f in os.listdir(proxy.LEGACY_VHOST_DIR) if f.endswith(".conf"))[0]
-    except (OSError, IndexError):
-        return False
-    if os.path.basename(old) != first:
-        return False
+        files = sorted(f for f in os.listdir(proxy.LEGACY_VHOST_DIR) if f.endswith(".conf"))
+    except OSError:
+        return True
+    me = os.path.basename(old)
+    if me not in files or not all(f.isascii() for f in files):
+        return True                    # load order is only certain for ASCII names
+    conf = _live(_read(proxy.NGINX_CONF) or "")
+    first = conf.find("%s/*.conf" % proxy.LEGACY_VHOST_DIR)
+    panel = conf.find("%s/*.conf" % proxy.VHOST_DIR)
+    if first < 0 or panel < 0 or first > panel:
+        return True                    # the old folder is not loaded first
+    mine = _sockets(_read(old) or "")
+    earlier = set()
+    for f in files[:files.index(me)]:
+        earlier |= _sockets(_read(os.path.join(proxy.LEGACY_VHOST_DIR, f)) or "")
+    marked = set()
     for vdir in (proxy.LEGACY_VHOST_DIR, proxy.VHOST_DIR):
         try:
             names = os.listdir(vdir)
         except OSError:
             continue
         for f in names:
-            if f.endswith(".conf") and re.search(
-                    r"^\s*listen\s+[^;]*\bdefault_server\b", _live(_read(os.path.join(vdir, f)) or ""), re.M):
-                return False
-    return True
+            if f.endswith(".conf"):
+                marked |= _sockets(_read(os.path.join(vdir, f)) or "", only_default=True)
+    return bool(mine - earlier - marked)
 
 
 def _stays_put(old: str) -> Optional[str]:
@@ -360,6 +396,9 @@ def _stays_put(old: str) -> Optional[str]:
     if not _plain_listens(_read(old) or ""):
         return ("it listens on a specific address or port, or sets default_server, "
                 "so a move cannot be checked from this server")
+    if not all(re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", n.lower())
+               for n in proxy._conf_names(old)):
+        return "it uses wildcard or special server names, which cannot be checked"
     if _is_default_site(old):
         return ("it is the site this server falls back to for unknown names and "
                 "for its bare IP address; moving it would hand those to another site")
@@ -471,14 +510,28 @@ def _restore(old: str, raw: bytes, new: str) -> bool:
 
 
 def _recover() -> Optional[str]:
-    """Finish undoing a move that was cut short (process killed mid-way)."""
+    """Finish undoing a move that was cut short (process killed mid-way).
+
+    The moved copy is removed only if it is still byte for byte what the move
+    wrote. If the app was published again since, that newer file is the live
+    site and is left alone."""
+    import hashlib
     import json
     try:
         with open(JOURNAL_PATH, encoding="utf-8") as f:
             j = json.load(f)
-        old, new, copy = j["old"], j["new"], j["copy"]
+        old, new, copy, digest = j["old"], j["new"], j["copy"], j["sha256"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    try:
+        with open(new, "rb") as f:
+            current = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        current = None
+    if current is not None and current != digest:
+        _journal(None)
+        return ("a move of %s was cut short, and the site has been published "
+                "again since; the newer site file was kept" % old)
     try:
         with open(copy, "rb") as f:
             raw = f.read()
@@ -520,7 +573,9 @@ def _move_site(app: str, names: List[str], copy: str) -> Optional[str]:
     moved = raw if text.startswith("# Managed by JavaHost") else (
         "# Managed by JavaHost — instance %s (%s). Do not edit by hand.\n"
         % (app, names[0])).encode("utf-8") + raw
-    _journal({"app": app, "old": old, "new": new, "copy": copy})
+    import hashlib
+    _journal({"app": app, "old": old, "new": new, "copy": copy,
+              "sha256": hashlib.sha256(moved).hexdigest()})
     try:
         os.makedirs(proxy.VHOST_DIR, exist_ok=True)
         _write_bytes(new, moved)
@@ -565,10 +620,14 @@ def needed() -> bool:
     """Should the upgrade step run? True for a plugin version that has not run
     it, and for a run that left something undone, a few spaced-out times."""
     import time
+    if os.path.exists(JOURNAL_PATH):
+        return True                    # a move was cut short and must be undone
     st = _state()
     if st.get("plugin_version") != config.plugin_version():
         return True
     now = time.time()
+    if int(st.get("attempts") or 0) >= _MAX_ATTEMPTS:
+        return False
     if st.get("pending"):
         return now - float(st.get("ts") or 0) > _JOB_GRACE
     return bool(st.get("skipped")) and int(st.get("attempts") or 1) < _MAX_ATTEMPTS \
@@ -604,16 +663,18 @@ def apply(dry_run: bool = False, once: bool = False) -> Optional[Dict]:
 
     with proxy._publish_lock():
         prev = _state()
-        if once and not (needed() or prev.get("pending")):
+        note = _recover()                  # always, whoever runs first
+        if once and not (note or needed() or prev.get("pending")):
             return None
         now = time.time()
+        same = prev.get("plugin_version") == config.plugin_version()
         out = {"plugin_version": config.plugin_version(),
                "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                "ts": now, "dry_run": False, "moved": [], "marked": [], "skipped": {},
                "backup": None,
-               "attempts": (int(prev.get("attempts") or 0) + 1
-                            if prev.get("plugin_version") == config.plugin_version() else 1)}
-        note = _recover()
+               # a run started from a status request was counted when it started
+               "attempts": (int(prev.get("attempts") or 0) + (0 if prev.get("pending") else 1)
+                            if same else 1)}
         if note:
             out["skipped"]["interrupted move"] = note
         moves, marks = _work(report())            # read under the lock
@@ -672,15 +733,17 @@ def start_if_needed() -> None:
               "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "moved": [], "marked": [], "skipped": {}, "backup": None}
         _started = True                      # at most once per panel process
-        if not moves and not marks:
-            prev = _state()
-            if prev.get("plugin_version") == config.plugin_version():
-                st = dict(prev, ts=st["ts"],
-                          attempts=int(prev.get("attempts") or 1) + 1)
-            _save_state(st)
+        prev = _state()
+        same = prev.get("plugin_version") == config.plugin_version()
+        attempts = (int(prev.get("attempts") or 0) if same else 0) + 1
+        if not moves and not marks and not os.path.exists(JOURNAL_PATH):
+            _save_state(dict(prev if same else st, plugin_version=st["plugin_version"],
+                             ts=st["ts"], attempts=attempts))
             return
         from . import jobs
-        _save_state(dict(st, pending=True))
+        # counted before the job runs, so a job that keeps dying still stops
+        _save_state(dict(prev if same else st, plugin_version=st["plugin_version"],
+                         ts=st["ts"], attempts=attempts, pending=True))
         jobs.start("upgrade", "site files", jobs.python_work(
             "import json\nfrom core import upgrade\n"
             "print(json.dumps(upgrade.apply(once=True), indent=2, sort_keys=True))\n"))

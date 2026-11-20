@@ -507,14 +507,16 @@ class javahost_main(object):
             return panel.err(str(e))
 
     def RunUpgrade(self, get=None):
-        """Run the safe upgrade steps again (the same ones that run by
-        themselves after an update). Moves only what can be proven unchanged."""
+        """Run the safe upgrade steps again (the same ones that start by
+        themselves after an update), as a background job. Moves only what can
+        be proven unchanged. Returns {job_id}."""
         try:
-            from core import upgrade
-            res = upgrade.apply()
-            panel.log("RunUpgrade", "moved=%s skipped=%s" % (
-                ",".join(res["moved"]) or "-", ",".join(sorted(res["skipped"])) or "-"))
-            return panel.ok(res)
+            argv = jobs.python_work(
+                "import json\nfrom core import upgrade\n"
+                "print(json.dumps(upgrade.apply(), indent=2, sort_keys=True))\n")
+            job_id = jobs.start("upgrade", "site files", argv)
+            panel.log("RunUpgrade", "job %s" % job_id)
+            return panel.ok({"job_id": job_id})
         except Exception as e:
             return panel.err(str(e))
 

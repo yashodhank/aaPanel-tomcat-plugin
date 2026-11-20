@@ -1642,10 +1642,8 @@
       busy(btn, false);
       var p = payload(r);
       if(failed(r)){ toast(errText(p) || 'upgrade step failed', 'err', 'Upgrade'); return; }
-      var n = (p.moved || []).length, s = 0, k;
-      for(k in (p.skipped || {})){ if(Object.prototype.hasOwnProperty.call(p.skipped, k)) s++; }
-      toast(n+' site file(s) moved'+(s ? ', '+s+' left alone (see the list)' : ''), s ? 'info' : 'ok');
-      refreshUpgradeReport();
+      toast('Upgrade step started. It runs in the background; see Activity.');
+      setTimeout(function(){ refreshUpgradeReport(); }, 10000);
     });
   }
 
