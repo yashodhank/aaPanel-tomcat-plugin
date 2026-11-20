@@ -203,10 +203,23 @@ def test_recover_restores_from_the_copy(rig):
     old, new = proxy.legacy_vhost_path("shop"), proxy.vhost_path("shop")
     original = open(old, "rb").read()
     copy = str(rig.tmp / "copy.conf"); open(copy, "wb").write(original)
+    import hashlib
     os.rename(old, new)                                            # the half-done state
-    upgrade._journal({"app": "shop", "old": old, "new": new, "copy": copy})
+    j = {"app": "shop", "old": old, "new": new, "copy": copy,
+         "sha256": hashlib.sha256(original).hexdigest()}
+    upgrade._journal(j)
+    assert upgrade.needed() is True                                # a journal always means work
     assert upgrade._recover() is None
     assert open(old, "rb").read() == original and not os.path.exists(new)
+    assert not os.path.exists(upgrade.JOURNAL_PATH)
+
+    # the app was published again before recovery ran: the newer file is the live site
+    os.unlink(old)
+    open(new, "w").write("# Managed by JavaHost\nserver { server_name newer.example.com; }\n")
+    upgrade._journal(j)
+    note = upgrade._recover()
+    assert "newer site file was kept" in note
+    assert "newer.example.com" in open(new).read() and not os.path.exists(old)
     assert not os.path.exists(upgrade.JOURNAL_PATH)
 
 
@@ -255,3 +268,63 @@ def test_the_servers_fallback_site_is_never_moved(rig):
     assert res["moved"] == ["beta"] and res["skipped"] == {}
     assert "falls back to for unknown names" in _by_app(upgrade.report())["alpha"]["notes"][0]
     assert (rig.legacy / "alpha.conf").exists() and (rig.vdir / "javahost_beta.conf").exists()
+
+
+def _old(rig, name, listens):
+    rig.app(name, 8000 + len(os.listdir(str(rig.legacy))))
+    body = (LEGACY % dict(app=name, domain="%s.example.com" % name, port=8001)).replace(
+        "    listen 80;\n", "".join("    listen %s;\n" % l for l in listens))
+    (rig.legacy / ("%s.conf" % name)).write_text(body)
+    return str(rig.legacy / ("%s.conf" % name))
+
+
+def test_fallback_is_worked_out_per_address_and_port(rig):
+    a = _old(rig, "a", ["8080"])                     # earlier, but on another port
+    b = _old(rig, "b", ["80"])                       # so b is the real :80 fallback
+    c = _old(rig, "c", ["80", "443 ssl"])            # :80 covered by b, but first on :443
+    d = _old(rig, "d", ["80"])                       # covered by b
+    e = _old(rig, "e", ["80", "[::]:80"])            # first on the IPv6 socket
+    assert upgrade._is_default_site(b) and upgrade._is_default_site(c) and upgrade._is_default_site(e)
+    assert not upgrade._is_default_site(d)
+    # a default_server on another port or address family does not cover :80
+    (rig.vdir / "x.conf").write_text("server {\n    listen 8443 ssl default_server;\n    listen [::]:80 default_server;\n}\n")
+    assert upgrade._is_default_site(b) and not upgrade._is_default_site(e)
+    (rig.vdir / "y.conf").write_text("server { listen 80 default_server; listen 443 ssl default_server; }\n")
+    assert not upgrade._is_default_site(b) and not upgrade._is_default_site(c)
+    # the old folder must really be loaded before the panel's
+    rig.conf.write_text("http {\n    include %s/*.conf;\n    include %s/*.conf;\n}\n" % (rig.vdir, rig.legacy))
+    assert upgrade._is_default_site(d)
+
+
+def test_two_listens_on_one_line_are_both_seen():
+    assert not upgrade._plain_listens("server { listen 80; listen 127.0.0.1:81; }")
+    assert upgrade._sockets("server { listen 80; listen [::]:443 ssl; }") == {("*", "80"), ("[::]", "443")}
+
+
+def test_wildcard_names_stay(rig):
+    _legacy(rig, "shop", 8080, owner="javahost")
+    f = rig.legacy / "shop.conf"
+    f.write_text(f.read_text().replace("server_name shop.example.com;", "server_name shop.example.com *.shop.example.com;"))
+    assert "wildcard or special server names" in upgrade._stays_put(str(f))
+
+
+def test_a_job_that_keeps_failing_stops_being_started(rig, monkeypatch):
+    _legacy(rig, "shop", 8080)
+    for expected in (1, 2, 3):
+        monkeypatch.setattr(upgrade, "_started", False)
+        upgrade.start_if_needed()                    # the job dies before it saves anything
+        st = upgrade._state()
+        assert st["attempts"] == expected and st["pending"] is True
+        st["ts"] -= upgrade._JOB_GRACE + 1; upgrade._save_state(st)
+    assert upgrade.needed() is False                 # three tries, then left for the operator
+    monkeypatch.setattr(upgrade, "_started", False)
+    upgrade.start_if_needed()
+    assert rig.state["jobs"] == ["upgrade"] * 3
+
+
+def test_run_again_is_a_background_job(rig):
+    import javahost_main
+    _legacy(rig, "shop", 8080)
+    r = javahost_main.javahost_main().RunUpgrade()
+    assert r["status"] is True and r["msg"] == {"job_id": "job-1"}
+    assert (rig.legacy / "shop.conf").exists() and rig.state["reloads"] == 0
