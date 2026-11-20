@@ -2312,7 +2312,7 @@ def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     # sites under VHOST_DIR
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "javahost_site.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_site.conf").write_text("# Managed by JavaHost\nserver {}\n")
     monkeypatch.setattr(maintenance, "DATA_ROOT", str(tmp_path / "javahost"))
 
     res = maintenance.wipe_preview()
@@ -2358,8 +2358,8 @@ def test_wipe_sites_calls_remove_site(monkeypatch, tmp_path):
     from core import maintenance
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "javahost_demo.conf").write_text("server {}\n")
-    (tmp_path / "vhost" / "javahost_shop.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_demo.conf").write_text("# Managed by JavaHost\nserver {}\n")
+    (tmp_path / "vhost" / "javahost_shop.conf").write_text("# Managed by JavaHost\nserver {}\n")
     calls = []
     monkeypatch.setattr(maintenance.proxy, "remove_site",
                         lambda app: calls.append(app) or {"app": app, "removed": True})
@@ -2473,7 +2473,7 @@ def test_remove_site_aapanel_not_found_keeps_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: False)
 
     os.makedirs(vdir, exist_ok=True)
-    open(proxy.vhost_path("demo"), "w").write("server {}\n")
+    open(proxy.vhost_path("demo"), "w").write("# Managed by JavaHost\nserver {}\n")
 
     res = proxy.remove_site("demo")
     assert res["removed"] is False

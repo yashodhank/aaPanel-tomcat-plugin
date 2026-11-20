@@ -64,7 +64,7 @@ def test_default_mode_publishes_without_the_panel_or_a_key(box):
 def test_rejected_config_is_rolled_back(box):
     box.nginx_ok = False
     res = proxy.set_site("shop", "shop.example.com", 8080)
-    assert res["ok"] is False and "nginx rejected" in res["error"]
+    assert res["ok"] is False and "nginx did not accept" in res["error"]
     assert os.listdir(str(box.vdir)) == []          # nothing left to break later reloads
     assert proxy.read_domain("shop") is None
 
@@ -156,12 +156,25 @@ def test_https_toggle_cannot_take_a_domain_someone_else_serves(box):
     assert not (box.vdir / "javahost_shop.conf").exists() and box.reloads == 0
 
 
-def test_previous_panel_website_is_reported_not_deleted(box, monkeypatch):
+def test_previous_panel_website_is_deleted_only_when_it_points_at_this_app(box, monkeypatch):
     proxy._store_domain("shop", "old.example.com")       # no owner marker => panel-owned
-    monkeypatch.setattr(proxy, "aapanel_remove_site",
-                        lambda d: pytest.fail("must not delete a panel website"))
+    monkeypatch.setattr(panel_api, "_AAPANEL_SITE_CONF", str(box.vdir / "%s.conf"))
+    monkeypatch.setattr(panel_api, "_AAPANEL_PROXY_DIR", str(box.vdir / "proxy" / "%s"))
+    removed = []
+    monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: removed.append(d) or True)
+    # the panel's files send old.example.com to another app's port: hands off
+    (box.vdir / "old.example.com.conf").write_text(
+        "server {\n  server_name old.example.com;\n  location / { proxy_pass http://127.0.0.1:9999; }\n}\n")
     res = proxy.set_site("shop", "new.example.com", 8080)
-    assert res["ok"] and "old.example.com was left in place" in res["note"]
+    assert res["ok"] and removed == []
+    assert "old.example.com was left in place" in res["note"]
+    # now it does point at this app's port
+    proxy._store_domain("blog", "old.example.com")
+    (box.vdir / "old.example.com.conf").write_text(
+        "server {\n  server_name old.example.com;\n  location / { proxy_pass http://127.0.0.1:8081; }\n}\n")
+    res = proxy.set_site("blog", "blog.example.com", 8081)
+    assert res["ok"] and removed == ["old.example.com"] and "note" not in res
+    assert not panel_api.site_proxies_to("old.example.com", 808)     # 808 is not 8081
 
 
 def test_upgrade_map_shipped_by_the_panel_means_no_nginx_conf_edit(tmp_path, monkeypatch):
@@ -174,3 +187,75 @@ def test_upgrade_map_shipped_by_the_panel_means_no_nginx_conf_edit(tmp_path, mon
     monkeypatch.setattr(panel_api, "_ws_map_in_vhost_dir", lambda: True)
     assert panel_api.ensure_ws_map(str(conf)) is True
     assert conf.read_text() == "http {\n}\n"
+
+
+@pytest.mark.parametrize("names,domain,taken", [
+    ("a.example.com www.a.example.com", "www.a.example.com", True),   # alias, not the file name
+    ("A.Example.COM", "a.example.com", True),
+    ("*.example.com", "shop.example.com", True),
+    (".example.com", "example.com", True),
+    ("*.example.com", "example.com", False),
+    ("a.example.com", "aa.example.com", False),
+    ("_", "shop.example.com", False),
+])
+def test_clash_check_reads_every_server_name(box, names, domain, taken):
+    (box.vdir / "a.example.com.conf").write_text("server {\n  server_name %s;\n}\n" % names)
+    res = proxy.set_site("shop", domain, 8080)
+    assert res["ok"] is (not taken)
+    if taken:
+        assert "already a website in the panel" in res["error"]
+
+
+def test_https_toggle_follows_the_vhost_file_not_the_marker(box):
+    proxy.set_site("shop", "shop.example.com", 8080)
+    # the app's user rewrites the marker to a name nobody serves yet
+    err = sslmod._activate_plugin_vhost("shop", "fresh.example.com", 8080, ssl_on=False)
+    assert err and "published at shop.example.com" in err
+    assert "server_name shop.example.com;" in (box.vdir / "javahost_shop.conf").read_text()
+    assert proxy.vhost_domain("blog") is None
+
+
+def test_republishing_the_same_site_keeps_https(box):
+    proxy.set_site("shop", "shop.example.com", 8080)
+    sslmod._mark_ssl("shop", True)
+    before = (box.vdir / "javahost_shop.conf").read_text()
+    reloads = box.reloads
+    res = proxy.set_site("shop", "shop.example.com", 8080)
+    assert res["ok"] and "note" not in res
+    assert sslmod.read_ssl("shop") is True and box.reloads == reloads
+    assert (box.vdir / "javahost_shop.conf").read_text() == before
+    # a new port does rewrite the file, and says HTTPS went off
+    res = proxy.set_site("shop", "shop.example.com", 8090)
+    assert res["ok"] and "HTTPS was switched off" in res["note"]
+
+
+def test_exception_during_reload_rolls_back(box, monkeypatch):
+    def boom():
+        raise RuntimeError("nginx binary missing")
+    monkeypatch.setattr(proxy, "reload_nginx", boom)
+    res = proxy.set_site("shop", "shop.example.com", 8080)
+    assert res["ok"] is False and "nginx binary missing" in res["error"]
+    assert os.listdir(str(box.vdir)) == []
+
+
+def test_a_panel_file_with_our_prefix_is_never_touched(box):
+    foreign = box.vdir / "javahost_shop.conf"            # a panel website named like ours
+    foreign.write_text("server {\n  server_name javahost_shop;\n}\n")
+    assert proxy.vhost_apps() == []
+    res = proxy.set_site("shop", "shop.example.com", 8080)
+    assert res["ok"] is False and "not written by JavaHost" in res["error"]
+    proxy.remove_vhost("shop")
+    assert foreign.exists()
+
+
+def test_commented_include_does_not_count(box):
+    box.conf.write_text("http {\n    # include %s/*.conf;\n}\n" % box.vdir)
+    assert proxy.set_site("shop", "shop.example.com", 8080)["ok"] is False
+
+
+def test_https_endpoint_refuses_a_marker_the_vhost_does_not_back(box, monkeypatch):
+    proxy.set_site("shop", "shop.example.com", 8080)
+    proxy._store_domain("shop", "victim.example.com")     # what the app's user could do
+    monkeypatch.setattr(sslmod, "enable", lambda *a, **k: pytest.fail("must not reach ssl.enable"))
+    r = javahost_main.javahost_main().SetSiteSSL(SimpleNamespace(app="shop", enable="1"))
+    assert r["status"] is False and "not the domain this app is published at" in r["msg"]
