@@ -3,6 +3,45 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.30.0] — 2026-11-21
+
+### Added
+- Publish a domain without a panel API key. JavaHost writes its own site file
+  into the panel's vhost folder by default; publishing as a panel website stays
+  available as a setting when an API key is configured (#45).
+- Upgrade check in Settings: a read-only report of what older versions left
+  behind, per app (#46).
+- Old site files move to the current layout by themselves after an update, as a
+  background job, and only when every answer is identical before and after.
+  Sites shared with a panel website and the server's fallback site are left
+  alone (#47).
+- One-click HTTPS repair, with undo, for an app whose panel website has HTTPS
+  but no proxy to the app (#48).
+- Backup size limits are a setting (#41).
+
+### Changed
+- Site files are now named `javahost_<app>.conf` and live in
+  `/www/server/panel/vhost/nginx`. JavaHost no longer edits `nginx.conf`.
+
+### Fixed
+- nginx is tested and reloaded through the panel's own binary, including in the
+  certificate renewal hook. A distro nginx earlier on PATH was used before (#49).
+- The JDK download matches the server's CPU architecture (#44).
+- Every UI request carries the panel's CSRF token, which aaPanel 8 requires (#43).
+- Backups archive the whole app, stay restorable and are private (#39).
+- An in-place restore is transactional (#35).
+- App creation races, cleanup after a failed create, exact JDK selection, the
+  Tomcat install lock, and jobs left over after a reboot (#38).
+- Operations that failed no longer report success (#36).
+- Wipe preview and result, Escape key layering, DB port, restore
+  confirmations (#37).
+
+### Security
+- Files in the app-owned instance tree are no longer trusted (#34).
+- Downloads fail closed when an artifact cannot be verified (#33).
+- Backup schedule destinations and cron fields are validated (#32).
+- Removed quoted panel source and server details from the repository (#42).
+
 ## [0.29.1] — 2026-08-20
 
 ### Security
