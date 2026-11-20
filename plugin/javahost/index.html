@@ -747,7 +747,7 @@
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
-          <div><h3>Upgrade check</h3><p>How each app’s domain is served today, and what an upgrade may change. This only reads; it changes nothing</p></div>
+          <div><h3>Upgrade check</h3><p>How each app’s domain is served today, and what the last upgrade moved or left alone</p></div>
           <button class="jh-btn ghost sm" id="jh-upg-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <div id="jh-upg-body"><div class="jh-loading">Loading…</div></div>
@@ -1619,8 +1619,32 @@
     (p.server || []).forEach(function(s){
       html += '<div class="jh-hint">'+esc(s)+'</div>';
     });
+    var lr = p.last_run;
+    if(lr && lr.ran_at){
+      var sk = lr.skipped || {}, skn = [];
+      for(var k in sk){ if(Object.prototype.hasOwnProperty.call(sk, k)) skn.push(k+': '+sk[k]); }
+      html += '<div class="jh-hint">Last upgrade run '+esc(lr.ran_at)+': '+
+        (lr.pending ? 'still running (see Activity). ' : '')+
+        ((lr.moved||[]).length ? 'moved '+esc(lr.moved.join(', ')) : 'nothing to move')+
+        (lr.backup ? '; copies kept in '+esc(lr.backup) : '')+'.'+
+        (skn.length ? ' Left alone: '+esc(skn.join('; '))+'.' : '')+'</div>';
+    }
     html += '</div>';
+    if(c.to_move){
+      html += '<div class="jh-spread" style="margin-top:var(--s3)">'+
+        '<button class="jh-btn accent sm" id="jh-upg-run" type="button">'+ic('refresh')+'Move old site files now</button></div>';
+    }
     body.innerHTML = html;
+  }
+  function runUpgrade(btn){
+    busy(btn, true);
+    call('RunUpgrade', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'upgrade step failed', 'err', 'Upgrade'); return; }
+      toast('Upgrade step started. It runs in the background; see Activity.');
+      setTimeout(function(){ refreshUpgradeReport(); }, 10000);
+    });
   }
 
   // --- Settings: aaPanel API key / panel port --------------------------------
@@ -4987,6 +5011,7 @@
     // settings / danger zone
     if(b.id === 'jh-run-wizard'){ openWizard(); return; }
     if(b.id === 'jh-upg-refresh'){ refreshUpgradeReport(b); return; }
+    if(b.id === 'jh-upg-run'){ runUpgrade(b); return; }
     if(b.id === 'jh-panelapi-refresh'){ refreshPanelApi(b); return; }
     if(b.id === 'jh-panelapi-save'){ savePanelApi(b); return; }
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }

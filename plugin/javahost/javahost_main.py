@@ -138,6 +138,10 @@ class javahost_main(object):
     # ---- dashboard ----
     def GetStatus(self, get=None):
         try:
+            # First status request after a new version lands: start the upgrade
+            # step (a background job) if older versions left anything to move.
+            from core import upgrade
+            upgrade.start_if_needed()
             jdks = {str(k): v for k, v in java.detect().items()}
             tomcats = {}
             for major in registry.LINES:
@@ -496,7 +500,23 @@ class javahost_main(object):
         upgrade may safely change. Read-only."""
         try:
             from core import upgrade
-            return panel.ok(upgrade.report())
+            rep = upgrade.report()
+            rep["last_run"] = upgrade.last_run()
+            return panel.ok(rep)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RunUpgrade(self, get=None):
+        """Run the safe upgrade steps again (the same ones that start by
+        themselves after an update), as a background job. Moves only what can
+        be proven unchanged. Returns {job_id}."""
+        try:
+            argv = jobs.python_work(
+                "import json\nfrom core import upgrade\n"
+                "print(json.dumps(upgrade.apply(), indent=2, sort_keys=True))\n")
+            job_id = jobs.start("upgrade", "site files", argv)
+            panel.log("RunUpgrade", "job %s" % job_id)
+            return panel.ok({"job_id": job_id})
         except Exception as e:
             return panel.err(str(e))
 

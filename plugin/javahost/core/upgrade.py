@@ -191,9 +191,14 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
                 attention.append("nginx.conf does not load the old site folder, so "
                                  "this site file is not being served.")
             else:
-                action = "move"
-                notes.append("The site file moves to the panel's vhost folder; the "
-                             "site keeps answering the same way.")
+                stays = _stays_put(proxy.legacy_vhost_path(app))
+                if stays:
+                    action = "keep"
+                    notes.append("The old site file stays where it is: %s." % stays)
+                else:
+                    action = "move"
+                    notes.append("The site file moves to the panel's vhost folder; "
+                                 "the site keeps answering the same way.")
         elif cur and (panel or apps_):
             state, action = "site-file-and-panel-website", "keep"
             attention.append("%s is also served by %s." % (
@@ -274,9 +279,10 @@ def report() -> Dict:
     if legacy_include:
         server.append(
             "nginx.conf still loads the old JavaHost site folder. %s" % (
-                "The line stays while old site files remain (%s)."
+                "Old site files are still served from it (%s)."
                 % ", ".join(staying + orphans) if (staying or orphans) else
-                "The line is removed once the old site files have moved."))
+                "The line is harmless once that folder is empty and is left in "
+                "place; JavaHost does not edit nginx.conf."))
     if orphans:
         server.append("Old site files with no matching app are left alone: %s."
                       % ", ".join(orphans))
@@ -295,6 +301,462 @@ def report() -> Dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Applying the safe part of the report
+# --------------------------------------------------------------------------- #
+STATE_PATH = "/www/server/javahost/.upgrade.json"
+JOURNAL_PATH = "/www/server/javahost/.upgrade-move.json"
+BACKUP_ROOT = "/www/server/javahost/upgrade-backup"
+_PROBE_PATHS = ("/", "/.javahost-upgrade-check")
+# A name no site serves: what nginx answers for it shows which server is the
+# default one, which a change of load order could alter.
+_UNKNOWN_HOST = "javahost-upgrade-check.invalid"
+_SETTLE = (1.5, 1.0)          # seconds to let nginx finish swapping workers
+_BEFORE = (0.0, 1.0)          # gap between the two "before" samples
+_MAX_ATTEMPTS = 3
+_RETRY_AFTER = 3600
+_JOB_GRACE = 900
+# Only site files that listen the plain way are moved: port 80 or 443 on every
+# address. A file bound to one address or another port cannot be checked from
+# loopback, and `default_server` or `reuseport` depend on load order.
+_PLAIN_LISTEN = re.compile(r"^(\[::\]:)?(80|443)(\s+(ssl|http2))*$")
+
+
+class _Undo(Exception):
+    pass
+
+
+_LISTEN = re.compile(r"(?:^|(?<=[;{}]))\s*listen\s+([^;]+);", re.M)
+_SOCKET = re.compile(r"^(\[::\]:)?(80|443)$")
+
+
+def _listens(body: str) -> List[List[str]]:
+    """Every listen directive in the file, as its list of words."""
+    return [m.group(1).split() for m in _LISTEN.finditer(_live(body))]
+
+
+def _plain_listens(body: str) -> bool:
+    listens = _listens(body)
+    return bool(listens) and all(_PLAIN_LISTEN.match(" ".join(l)) for l in listens)
+
+
+def _sockets(body: str, only_default: bool = False) -> set:
+    """The (address, port) pairs a file listens on in the plain way: every
+    IPv4 address or every IPv6 address, port 80 or 443."""
+    out = set()
+    for words in _listens(body):
+        m = _SOCKET.match(words[0]) if words else None
+        if m and (not only_default or "default_server" in words[1:]):
+            out.add(("[::]" if m.group(1) else "*", m.group(2)))
+    return out
+
+
+def _is_default_site(old: str) -> bool:
+    """Could this old site file be what nginx answers with for names no site
+    serves, on any address and port it listens on?
+
+    nginx uses the first server it loaded for an address and port unless one
+    is marked default_server for exactly that pair. The old folder is loaded
+    before the panel's, in byte order of the file names. So the file is NOT
+    the fallback for a pair only when an earlier old file listens on that same
+    pair, or some file marks a default for it. Two apps can answer an unknown
+    name identically, so this is decided from the files, not from a probe.
+    Anything that cannot be worked out counts as "could be"."""
+    try:
+        files = sorted(f for f in os.listdir(proxy.LEGACY_VHOST_DIR) if f.endswith(".conf"))
+    except OSError:
+        return True
+    me = os.path.basename(old)
+    if me not in files or not all(f.isascii() for f in files):
+        return True                    # load order is only certain for ASCII names
+    conf = _live(_read(proxy.NGINX_CONF) or "")
+    first = conf.find("%s/*.conf" % proxy.LEGACY_VHOST_DIR)
+    panel = conf.find("%s/*.conf" % proxy.VHOST_DIR)
+    if first < 0 or panel < 0 or first > panel:
+        return True                    # the old folder is not loaded first
+    mine = _sockets(_read(old) or "")
+    earlier = set()
+    for f in files[:files.index(me)]:
+        earlier |= _sockets(_read(os.path.join(proxy.LEGACY_VHOST_DIR, f)) or "")
+    marked = set()
+    for vdir in (proxy.LEGACY_VHOST_DIR, proxy.VHOST_DIR):
+        try:
+            names = os.listdir(vdir)
+        except OSError:
+            continue
+        for f in names:
+            if f.endswith(".conf"):
+                marked |= _sockets(_read(os.path.join(vdir, f)) or "", only_default=True)
+    return bool(mine - earlier - marked)
+
+
+def _stays_put(old: str) -> Optional[str]:
+    """Why an old site file is not moved even though nothing shares its names,
+    or None. Decided from the files alone, so the report can say it up front."""
+    if not _plain_listens(_read(old) or ""):
+        return ("it listens on a specific address or port, or sets default_server, "
+                "so a move cannot be checked from this server")
+    if not all(re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", n.lower())
+               for n in proxy._conf_names(old)):
+        return "it uses wildcard or special server names, which cannot be checked"
+    if _is_default_site(old):
+        return ("it is the site this server falls back to for unknown names and "
+                "for its bare IP address; moving it would hand those to another site")
+    return None
+
+
+def _probe(host: str, https: bool, body: bool = False) -> Optional[tuple]:
+    """What nginx on this server answers for <host>: per probe path the status,
+    Location and content type (plus a digest of the body when asked), and for
+    HTTPS the certificate presented. None when it could not be asked."""
+    import hashlib
+    import http.client
+    import socket
+    import ssl as _ssl
+    out = []
+    for path in _PROBE_PATHS:
+        try:
+            if https:
+                # loopback only, to compare two answers: the certificate is
+                # recorded, not judged
+                ctx = _ssl._create_unverified_context()  # nosec B323 - 127.0.0.1 only, sends no data, compares two answers
+                raw = socket.create_connection(("127.0.0.1", 443), 4)
+                sock = ctx.wrap_socket(raw, server_hostname=host)
+                cert = hashlib.sha256(sock.getpeercert(True) or b"").hexdigest()
+                conn = http.client.HTTPSConnection("127.0.0.1", 443, timeout=4, context=ctx)
+                conn.sock = sock
+            else:
+                cert = None
+                conn = http.client.HTTPConnection("127.0.0.1", 80, timeout=4)
+            conn.request("GET", path, headers={"Host": host,
+                                               "User-Agent": "javahost-upgrade-check"})
+            r = conn.getresponse()
+            data = r.read(4096)
+            out.append((r.status, r.getheader("Location"),
+                        (r.getheader("Content-Type") or "").split(";")[0].strip(),
+                        hashlib.sha256(data).hexdigest() if body else None, cert))
+            conn.close()
+        except Exception:
+            return None
+    return tuple(out)
+
+
+def _answers(names: List[str]) -> Optional[Dict]:
+    """Answers for every name of the site and for a name no site serves. None
+    when one of the site's own names cannot be asked over HTTP: then nothing
+    can be proven."""
+    out = {}
+    for n in list(names) + [_UNKNOWN_HOST]:
+        unknown = n == _UNKNOWN_HOST
+        http = _probe(n, False, body=unknown)
+        if http is None and not unknown:
+            return None
+        out[n] = (http, _probe(n, True, body=unknown))
+    return out
+
+
+def _stable_answers(names: List[str], wait) -> Optional[Dict]:
+    """Two samples that agree, or None. An app that answers differently from
+    one request to the next cannot be compared before and after."""
+    import time
+    time.sleep(wait[0])
+    first = _answers(names)
+    time.sleep(wait[1])
+    second = _answers(names)
+    return second if (first is not None and first == second) else None
+
+
+def _write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
+    tmp = "%s.javahost-tmp" % path
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def _journal(data: Optional[Dict]) -> None:
+    import json
+    if data is None:
+        try:
+            os.unlink(JOURNAL_PATH)
+        except OSError:
+            pass
+        return
+    _write_bytes(JOURNAL_PATH, json.dumps(data).encode("utf-8"), 0o600)
+
+
+def _restore(old: str, raw: bytes, new: str) -> bool:
+    """Put the old site file back and drop the moved copy. True when nginx
+    accepted the restored layout."""
+    ok = True
+    try:
+        _write_bytes(old, raw)
+    except Exception:
+        ok = False
+    try:
+        if ok and os.path.exists(new) and proxy._is_ours(new):
+            os.unlink(new)
+    except OSError:
+        ok = False
+    try:
+        ok = bool(proxy.reload_nginx()) and ok
+    except Exception:
+        ok = False
+    return ok
+
+
+def _recover() -> Optional[str]:
+    """Finish undoing a move that was cut short (process killed mid-way).
+
+    The moved copy is removed only if it is still byte for byte what the move
+    wrote. If the app was published again since, that newer file is the live
+    site and is left alone."""
+    import hashlib
+    import json
+    try:
+        with open(JOURNAL_PATH, encoding="utf-8") as f:
+            j = json.load(f)
+        old, new, copy, digest = j["old"], j["new"], j["copy"], j["sha256"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        with open(new, "rb") as f:
+            current = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        current = None
+    if current is not None and current != digest:
+        _journal(None)
+        return ("a move of %s was cut short, and the site has been published "
+                "again since; the newer site file was kept" % old)
+    try:
+        with open(copy, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return "an interrupted move of %s could not be undone: its copy is missing" % old
+    ok = _restore(old, raw, new)
+    _journal(None)
+    return None if ok else "an interrupted move of %s was undone, but nginx did not reload" % old
+
+
+def _move_site(app: str, names: List[str], copy: str) -> Optional[str]:
+    """Move one old site file into the panel's vhost folder. Returns the reason
+    it was NOT moved, or None on success. On any doubt the old file stays."""
+    old, new = proxy.legacy_vhost_path(app), proxy.vhost_path(app)
+    try:
+        if os.path.islink(old) or os.path.getsize(old) > (1 << 20):
+            return "the old site file is a link or too large"
+        with open(old, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "the old site file could not be read"
+    if not names:
+        return "the old site file names no domain"
+    if os.path.exists(new):
+        return "%s already exists" % new
+    stays = _stays_put(old)
+    if stays:
+        return stays
+    if not proxy.ensure_include():
+        return "nginx.conf does not load %s" % proxy.VHOST_DIR
+    for n in names:
+        if proxy._domain_in_use(app, n):
+            return "another site file also serves %s" % n
+    before = _stable_answers(names, _BEFORE)
+    if before is None:
+        return ("%s could not be asked, or answers differently from one request "
+                "to the next, so nothing could be proven" % names[0])
+    moved = raw if text.startswith("# Managed by JavaHost") else (
+        "# Managed by JavaHost — instance %s (%s). Do not edit by hand.\n"
+        % (app, names[0])).encode("utf-8") + raw
+    import hashlib
+    _journal({"app": app, "old": old, "new": new, "copy": copy,
+              "sha256": hashlib.sha256(moved).hexdigest()})
+    try:
+        os.makedirs(proxy.VHOST_DIR, exist_ok=True)
+        _write_bytes(new, moved)
+        os.unlink(old)
+        if not proxy.reload_nginx():
+            raise _Undo("nginx did not accept the moved file")
+        if _stable_answers(names, _SETTLE) != before:
+            raise _Undo("%s, or the server's default site, answered differently "
+                        "after the move" % names[0])
+    except BaseException as e:
+        ok = _restore(old, raw, new)
+        if ok and _stable_answers(names, _SETTLE) != before:
+            ok = False
+        if ok:
+            _journal(None)
+        why = str(e) if isinstance(e, _Undo) else "the move failed: %s" % (e or type(e).__name__)
+        if not ok:
+            why += (". RESTORE NOT CONFIRMED: check nginx now; the original file "
+                    "is kept at %s" % copy)
+        if not isinstance(e, Exception):
+            raise
+        return why
+    _journal(None)
+    return None
+
+
+def _state() -> Dict:
+    import json
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def last_run() -> Optional[Dict]:
+    return _state() or None
+
+
+def needed() -> bool:
+    """Should the upgrade step run? True for a plugin version that has not run
+    it, and for a run that left something undone, a few spaced-out times."""
+    import time
+    if os.path.exists(JOURNAL_PATH):
+        return True                    # a move was cut short and must be undone
+    st = _state()
+    if st.get("plugin_version") != config.plugin_version():
+        return True
+    now = time.time()
+    if int(st.get("attempts") or 0) >= _MAX_ATTEMPTS:
+        return False
+    if st.get("pending"):
+        return now - float(st.get("ts") or 0) > _JOB_GRACE
+    return bool(st.get("skipped")) and int(st.get("attempts") or 1) < _MAX_ATTEMPTS \
+        and now - float(st.get("ts") or 0) > _RETRY_AFTER
+
+
+def _save_state(out: Dict) -> None:
+    import json
+    try:
+        _write_bytes(STATE_PATH, json.dumps(out, indent=2, sort_keys=True).encode("utf-8"), 0o600)
+    except OSError:
+        pass
+
+
+def _work(rep: Dict):
+    moves = [a for a in rep["apps"] if a["action"] == "move"]
+    marks = [a for a in rep["apps"] if a["action"] in ("mark", "move")
+             and a.get("owner_marker") is None]
+    return moves, marks
+
+
+def apply(dry_run: bool = False, once: bool = False) -> Optional[Dict]:
+    """Do what the report marks as safe: move old site files that no other site
+    file shares, and write missing owner markers. Never restarts an app, never
+    edits nginx.conf; nginx is reloaded gracefully; a step that cannot be
+    proven is skipped and reported. With once=True it does nothing unless the
+    upgrade step is due."""
+    import time
+    if dry_run:
+        moves, marks = _work(report())
+        return {"dry_run": True, "moved": [a["app"] for a in moves],
+                "marked": [a["app"] for a in marks], "skipped": {}}
+
+    with proxy._publish_lock():
+        prev = _state()
+        note = _recover()                  # always, whoever runs first
+        if once and not (note or needed() or prev.get("pending")):
+            return None
+        now = time.time()
+        same = prev.get("plugin_version") == config.plugin_version()
+        out = {"plugin_version": config.plugin_version(),
+               "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+               "ts": now, "dry_run": False, "moved": [], "marked": [], "skipped": {},
+               "backup": None,
+               # a run started from a status request was counted when it started
+               "attempts": (int(prev.get("attempts") or 0) + (0 if prev.get("pending") else 1)
+                            if same else 1)}
+        if note:
+            out["skipped"]["interrupted move"] = note
+        moves, marks = _work(report())            # read under the lock
+        if moves:
+            if not proxy.nginx_test():
+                for a in moves:
+                    out["skipped"][a["app"]] = ("nginx's own config check fails, "
+                                               "so nothing was changed")
+                moves = []
+            else:
+                out["backup"] = os.path.join(
+                    BACKUP_ROOT, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now)))
+        for a in moves:
+            try:
+                import shutil
+                os.makedirs(out["backup"], mode=0o700, exist_ok=True)
+                copy = os.path.join(out["backup"], "%s.conf" % a["app"])
+                shutil.copyfile(proxy.legacy_vhost_path(a["app"]), copy)
+                why = _move_site(a["app"], a.get("names") or [], copy)
+            except Exception as e:
+                why = str(e) or type(e).__name__
+            if why:
+                out["skipped"][a["app"]] = why
+            else:
+                out["moved"].append(a["app"])
+        for a in marks:
+            if a["app"] in out["skipped"]:
+                continue
+            owner = "aapanel" if a["state"] == "panel-website" else "javahost"
+            try:
+                proxy._store_owner(a["app"], owner)
+                out["marked"].append(a["app"])
+            except Exception as e:
+                out["skipped"][a["app"]] = "owner marker not written: %s" % e
+        _save_state(out)
+        return out
+
+
+_started = False
+
+
+def start_if_needed() -> None:
+    """Called on status requests after an update. Cheap, never raises and
+    never does the work in the request: anything that touches nginx runs as a
+    background job, visible under Activity."""
+    global _started
+    if _started:
+        return
+    try:
+        if not needed():
+            _started = True
+            return
+        import time
+        moves, marks = _work(report())
+        st = {"plugin_version": config.plugin_version(), "ts": time.time(),
+              "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "moved": [], "marked": [], "skipped": {}, "backup": None}
+        _started = True                      # at most once per panel process
+        prev = _state()
+        same = prev.get("plugin_version") == config.plugin_version()
+        attempts = (int(prev.get("attempts") or 0) if same else 0) + 1
+        if not moves and not marks and not os.path.exists(JOURNAL_PATH):
+            _save_state(dict(prev if same else st, plugin_version=st["plugin_version"],
+                             ts=st["ts"], attempts=attempts))
+            return
+        from . import jobs
+        # counted before the job runs, so a job that keeps dying still stops
+        _save_state(dict(prev if same else st, plugin_version=st["plugin_version"],
+                         ts=st["ts"], attempts=attempts, pending=True))
+        jobs.start("upgrade", "site files", jobs.python_work(
+            "import json\nfrom core import upgrade\n"
+            "print(json.dumps(upgrade.apply(once=True), indent=2, sort_keys=True))\n"))
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     import json
-    print(json.dumps(report(), indent=2, sort_keys=True))
+    import sys
+    if "--apply" in sys.argv:
+        print(json.dumps(apply(), indent=2, sort_keys=True))
+    elif "--plan" in sys.argv:
+        print(json.dumps(apply(dry_run=True), indent=2, sort_keys=True))
+    else:
+        print(json.dumps(report(), indent=2, sort_keys=True))
