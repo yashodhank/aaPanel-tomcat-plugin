@@ -63,6 +63,7 @@ def box(tmp_path, monkeypatch):
     snap = {}
 
     def snapshot():
+        snap.clear()
         for root, _, files in os.walk(str(tmp_path)):
             for f in files:
                 p = os.path.join(root, f)
@@ -157,3 +158,47 @@ def test_unit_template_match_ignores_values_but_not_edits():
     assert upgrade.unit_matches_template("User=www\nA=/i/app/x\nB=/i/app/y\nN=true\n", tmpl)
     assert not upgrade.unit_matches_template("User=www\nA=/i/app/x\nB=/i/app/y\nN=false\n", tmpl)
     assert not upgrade.unit_matches_template("User=www\nA=/i/app/x\nB=/other/y\nN=true\n", tmpl)
+
+
+def test_owner_marker_is_never_followed_or_echoed(box):
+    box.app("shop", 8080)
+    secret = box.tmp / "secret"; secret.write_text("root:hash\n")
+    marker = box.tmp / "instances" / "shop" / "bin" / "site.owner"
+    os.symlink(str(secret), str(marker))
+    assert _by_app(upgrade.report())["shop"]["owner_marker"] is None
+    marker.unlink(); marker.write_text("something else entirely\n")
+    assert _by_app(upgrade.report())["shop"]["owner_marker"] is None
+    marker.write_text("javahost\n")
+    assert _by_app(upgrade.report())["shop"]["owner_marker"] == "javahost"
+
+
+def test_nothing_shared_is_ever_marked_to_move(box):
+    def legacy(app, port, names):
+        box.app(app, port)
+        (box.legacy / ("%s.conf" % app)).write_text(
+            (LEGACY % dict(app=app, domain="x", port=port)).replace("server_name x;", "server_name %s;" % names))
+    # an alias of the old file is a panel website
+    legacy("a", 8001, "a.example.com www.a.example.com")
+    (box.vdir / "www.a.example.com.conf").write_text(PANEL_SITE % dict(domain="www.a.example.com", extra=""))
+    # two old files name one domain
+    legacy("b", 8002, "same.example.com"); legacy("c", 8003, "same.example.com")
+    # old and current file for one app
+    legacy("d", 8004, "d.example.com")
+    (box.vdir / "javahost_d.conf").write_text(LEGACY % dict(app="d", domain="d.example.com", port=8004))
+    # regex name
+    legacy("e", 8005, "~^e\\d+\\.example\\.com$")
+    # marker points at another app's domain
+    legacy("f", 8006, "f.example.com"); proxy._store_domain("f", "same.example.com")
+    apps = _by_app(upgrade.report())
+    for name in "abcde":
+        assert apps[name]["action"] == "keep" and apps[name]["attention"], name
+    assert apps["f"]["action"] == "keep" and apps["f"]["domain"] == "f.example.com"
+    assert "is not the one in the app's site file" in apps["f"]["attention"][0]
+
+
+def test_old_folder_that_nginx_no_longer_loads_is_not_moved(box):
+    box.app("shop", 8080)
+    (box.legacy / "shop.conf").write_text(LEGACY % dict(app="shop", domain="shop.example.com", port=8080))
+    box.conf.write_text("http {\n    # include %s/*.conf;\n    include %s/*.conf;\n}\n" % (box.legacy, box.vdir))
+    a = _by_app(upgrade.report())["shop"]
+    assert a["action"] == "keep" and "not being served" in a["attention"][0]
