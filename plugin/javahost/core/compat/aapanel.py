@@ -903,7 +903,7 @@ def site_proxies_to(domain: str, port: int) -> bool:
     """True when the panel website's own (root-owned) nginx files send its
     traffic to 127.0.0.1:<port>."""
     pat = re.compile(r"proxy_pass\s+http://127\.0\.0\.1:%d\b" % int(port))
-    paths = [_AAPANEL_SITE_CONF % domain, _AAPANEL_REWRITE % domain]
+    paths = [_AAPANEL_SITE_CONF % domain]
     try:
         pdir = _AAPANEL_PROXY_DIR % domain
         paths += [os.path.join(pdir, f) for f in os.listdir(pdir) if f.endswith(".conf")]

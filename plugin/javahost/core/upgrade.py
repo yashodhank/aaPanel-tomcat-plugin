@@ -103,7 +103,13 @@ def _proxies(entry: Dict, domain: str, port: Optional[int]) -> bool:
         return False
     if re.search(r"proxy_pass\s+http://127\.0\.0\.1:%d\b" % port, entry["body"]):
         return True
-    return (not entry["ours"]) and panel_api.site_proxies_to(domain, port)
+    if entry["ours"]:
+        return False
+    if panel_api.site_proxies_to(domain, port):
+        return True
+    # the website's own rewrite file is part of its server block
+    return bool(re.search(r"proxy_pass\s+http://127\.0\.0\.1:%d\b" % port,
+                          _live(_read(panel_api._AAPANEL_REWRITE % domain) or "")))
 
 
 def _own_file(path: str, legacy: bool) -> Optional[Dict]:
@@ -250,6 +256,9 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
                 https_fix = {"possible": bool(plan.get("possible")),
                              "applied": bool(plan.get("applied")),
                              "effect": plan.get("effect")}
+            if plan.get("stale"):
+                attention.append("The HTTPS repair points at a port this app no "
+                                 "longer uses. Undo it, then apply it again.")
         except Exception:
             https_fix = None
     return {"app": app, "kind": kind, "port": port, "domain": domain,
@@ -767,6 +776,9 @@ def start_if_needed() -> None:
 # --------------------------------------------------------------------------- #
 _FIX_BEGIN = "# JavaHost HTTPS proxy for %s: begin (remove this block to undo)"
 _FIX_END = "# JavaHost HTTPS proxy: end"
+_FIX_WS = """    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+"""
 _FIX_BLOCK = """%(begin)s
 location ^~ / {
     proxy_pass http://127.0.0.1:%(port)d;
@@ -775,16 +787,15 @@ location ^~ / {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-    proxy_read_timeout 300;
+%(ws)s    proxy_read_timeout 300;
 }
 %(end)s
 """
 
 
 def _direct(port: int, host: str) -> Optional[tuple]:
-    """What the app itself answers on its loopback port, in _probe's shape."""
+    """What the app itself answers on its loopback port: (status, content
+    type) per probe path. None when it does not answer."""
     import http.client
     out = []
     for path in _PROBE_PATHS:
@@ -801,46 +812,63 @@ def _direct(port: int, host: str) -> Optional[tuple]:
     return tuple(out)
 
 
+def _has_upgrade_map() -> bool:
+    return panel_api._ws_map_in_vhost_dir() or \
+        panel_api._WS_MAP_NEEDLE in _live(_read(proxy.NGINX_CONF) or "")
+
+
+def _repair_target(app: str):
+    """(domain, rewrite path, port in an applied block or None). The domain is
+    taken only from the app's own root-owned site files, never from the marker
+    the app's user can write."""
+    names = sorted({n for f in (_own_file(proxy.legacy_vhost_path(app), True),
+                                _own_file(proxy.vhost_path(app), False)) if f
+                    for n in f["names"]})
+    if not names or names[0].startswith(("~", "*", ".")):
+        return None, None, None
+    domain = names[0]
+    rewrite = panel_api._AAPANEL_REWRITE % domain
+    text = _read(rewrite) or ""
+    a, b = text.find(_FIX_BEGIN % app), text.find(_FIX_END)
+    applied = None
+    if 0 <= a < b:
+        m = re.search(r"proxy_pass\s+http://127\.0\.0\.1:(\d+)", text[a:b])
+        applied = int(m.group(1)) if m else 0
+    return domain, rewrite, applied
+
+
 def https_repair_plan(app: str) -> Dict:
     """Can HTTPS for <app> be pointed at the app with one block in its panel
     website's rewrite file? Read-only. {'possible': bool, 'reason'|'effect'}."""
-    base = instance.base_path(app)
-    port = instance._read_port(base)
-    old = _own_file(proxy.legacy_vhost_path(app), True)
-    cur = _own_file(proxy.vhost_path(app), False)
-    names = sorted({n for f in (old, cur) if f for n in f["names"]})
-    domain = (names[0] if names else None) or proxy.read_domain(app)
+    port = instance._read_port(instance.base_path(app))
+    domain, rewrite, applied = _repair_target(app)
 
-    def no(reason):
-        return {"possible": False, "app": app, "domain": domain, "reason": reason}
-    if not domain or not port:
-        return no("the app has no domain or no port")
-    domain = domain.lower()
+    def no(reason, **extra):
+        return dict({"possible": False, "app": app, "domain": domain, "reason": reason}, **extra)
+    if not domain:
+        return no("the app has no site file of its own that names a plain domain")
+    if not port:
+        return no("the app has no port")
+    if applied is not None:
+        return no("the repair is already in place", applied=True,
+                  stale=(applied != port), rewrite=rewrite)
     site = os.path.join(proxy.VHOST_DIR, "%s.conf" % domain)
     body = _read(site)
     if body is None or proxy._is_ours(site):
         return no("no panel website exists for %s" % domain)
     live = _live(body)
-    # Two root-owned proofs that this website belongs to this app: the app's
-    # own site file already serves the name, or the panel's notes carry the
-    # exact JavaHost marker. (Older versions wrote a different note, so the
-    # marker alone would miss sites they created.)
-    if domain not in names and panel_api.site_ownership(domain) != "javahost":
-        return no("the panel website for %s was not created by JavaHost" % domain)
-    if not any(_SOCKET.match(w[0]) and _SOCKET.match(w[0]).group(2) == "443" for w in _listens(body)):
+    if not any(_SOCKET.match(w[0]) and _SOCKET.match(w[0]).group(2) == "443" and "ssl" in w[1:]
+               for w in _listens(body)):
         return no("the panel website has no HTTPS yet; switch HTTPS on first")
-    rewrite = panel_api._AAPANEL_REWRITE % domain
     if not re.search(r"^\s*include\s+%s\s*;" % re.escape(rewrite), live, re.M):
         return no("the panel website does not load %s" % rewrite)
     current = _read(rewrite)
     if current is None or os.path.islink(rewrite):
         return no("%s is missing" % rewrite)
-    if (_FIX_BEGIN % app) in current:
-        return {"possible": False, "app": app, "domain": domain, "applied": True,
-                "reason": "the repair is already in place"}
-    if _live(current).strip():
-        return no("the website already has URL rewrite rules; they are left alone")
-    if re.search(r"(?:^|(?<=[;{}]))\s*location\s+(\^~\s+)?/\s*\{", live, re.M) \
+    if current.strip():
+        return no("the website already has URL rewrite rules (or notes in that "
+                  "file); they are left alone")
+    if re.search(r"(?:^|(?<=[;{}]))\s*location\s+(\^~\s+|=\s+)?/\s*\{", live, re.M) \
             or panel_api.site_proxies_to(domain, port) \
             or re.search(r"proxy_pass\s", live):
         return no("the panel website already has a location for / or a proxy")
@@ -848,34 +876,48 @@ def https_repair_plan(app: str) -> Dict:
             "rewrite": rewrite,
             "effect": ("https://%s/ will show this app instead of the panel's "
                        "placeholder page. http://%s/ keeps answering exactly as "
-                       "it does now. The app is not restarted. Undo by removing "
-                       "the marked block from the website's URL rewrite rules."
+                       "it does now. The app is not restarted. Undo with the "
+                       "button that replaces this one, or by removing the marked "
+                       "block from the website's URL rewrite rules."
                        % (domain, domain))}
 
 
 def repair_https(app: str, undo: bool = False) -> Dict:
     """Point the panel website's HTTPS at the app (or take that back). Checked
     before and after: plain HTTP must answer exactly as before, and HTTPS must
-    answer what the app itself answers; otherwise the file is put back."""
+    change to what the app itself answers; otherwise the file is put back."""
     import time
     with proxy._publish_lock():
         plan = https_repair_plan(app)
-        if undo:
-            if not plan.get("applied"):
-                return {"ok": False, "error": "there is no JavaHost repair to remove"}
-            domain = plan["domain"]
-            rewrite = panel_api._AAPANEL_REWRITE % domain
-        elif not plan.get("possible"):
+        if undo and not plan.get("applied"):
+            return {"ok": False, "error": "there is no JavaHost repair to remove"}
+        if not undo and not plan.get("possible"):
             return {"ok": False, "error": plan.get("reason")}
-        else:
-            domain, rewrite = plan["domain"], plan["rewrite"]
+        domain, rewrite = plan["domain"], plan["rewrite"]
         port = instance._read_port(instance.base_path(app))
+        if os.path.islink(rewrite):
+            return {"ok": False, "error": "%s is a link" % rewrite}
         with open(rewrite, "rb") as f:
             raw = f.read()
         st = os.stat(rewrite)
+        if undo:
+            text = raw.decode("utf-8", "replace")
+            a, b = text.find(_FIX_BEGIN % app), text.find(_FIX_END)
+            if not 0 <= a < b:
+                return {"ok": False, "error": "the block's markers were changed by hand; "
+                                              "remove it under the website's URL rewrite rules"}
+            new = (text[:a] + text[b + len(_FIX_END):]).strip("\n").encode("utf-8")
+            new = new + b"\n" if new else b""
+        else:
+            new = (_FIX_BLOCK % {"begin": _FIX_BEGIN % app, "end": _FIX_END, "port": port,
+                                 "ws": _FIX_WS if _has_upgrade_map() else ""}).encode("utf-8")
         if not proxy.nginx_test():
             return {"ok": False, "error": "nginx's own config check fails, so nothing was changed"}
+        if not undo and _direct(port, domain) is None:
+            return {"ok": False, "error": "the app is not answering on port %d; start "
+                                          "it, then try again" % port}
         before = _stable_answers([domain], _BEFORE)
+        tls_before = _probe(domain, True, body=True)
         if before is None:
             return {"ok": False, "error": "%s could not be asked, or its answers are "
                                           "not stable, so nothing was changed" % domain}
@@ -883,13 +925,17 @@ def repair_https(app: str, undo: bool = False) -> Dict:
         os.makedirs(os.path.join(BACKUP_ROOT, stamp), mode=0o700, exist_ok=True)
         copy = os.path.join(BACKUP_ROOT, stamp, "rewrite-%s.conf" % domain)
         _write_bytes(copy, raw, 0o600)
-        if undo:
-            text = raw.decode("utf-8", "replace")
-            a, b = text.find(_FIX_BEGIN % app), text.find(_FIX_END)
-            new = (text[:a] + text[b + len(_FIX_END):]).lstrip("\n").encode("utf-8") if 0 <= a < b else raw
-        else:
-            new = (_FIX_BLOCK % {"begin": _FIX_BEGIN % app, "end": _FIX_END,
-                                 "port": port}).encode("utf-8")
+
+        def on_disk():
+            try:
+                with open(rewrite, "rb") as f:
+                    return f.read()
+            except OSError:
+                return None
+        # the checks above take a few seconds; the panel may have saved rules meanwhile
+        if on_disk() != raw:
+            return {"ok": False, "error": "the website's URL rewrite rules changed "
+                                          "just now; nothing was written"}
         why = None
         try:
             _write_bytes(rewrite, new, st.st_mode & 0o777)
@@ -903,17 +949,26 @@ def repair_https(app: str, undo: bool = False) -> Dict:
             if (after[domain][0], after[_UNKNOWN_HOST][0]) != (before[domain][0], before[_UNKNOWN_HOST][0]):
                 raise _Undo("plain HTTP answered differently")
             if not undo:
-                app_says, tls = _direct(port, domain), after[domain][1]
+                # HTTPS must now say what the app says, and must really have
+                # changed: an app and a placeholder can share status and type
+                app_says, tls = _direct(port, domain), _probe(domain, True, body=True)
                 if tls is None or app_says is None or \
                         tuple((r[0], r[2]) for r in tls) != app_says:
                     raise _Undo("HTTPS still does not answer what the app answers")
+                if tls_before is not None and \
+                        [r[3] for r in tls] == [r[3] for r in tls_before]:
+                    raise _Undo("HTTPS answers exactly what it did before, so the "
+                                "change cannot be confirmed")
         except BaseException as e:
             ok = True
-            try:
-                _write_bytes(rewrite, raw, st.st_mode & 0o777)
-                os.chown(rewrite, st.st_uid, st.st_gid)
-                ok = bool(proxy.reload_nginx())
-            except Exception:
+            if on_disk() == new:               # never overwrite what someone else saved since
+                try:
+                    _write_bytes(rewrite, raw, st.st_mode & 0o777)
+                    os.chown(rewrite, st.st_uid, st.st_gid)
+                    ok = bool(proxy.reload_nginx())
+                except Exception:
+                    ok = False
+            else:
                 ok = False
             if not isinstance(e, Exception):
                 raise
