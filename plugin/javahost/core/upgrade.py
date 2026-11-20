@@ -419,7 +419,7 @@ def _probe(host: str, https: bool, body: bool = False) -> Optional[tuple]:
             if https:
                 # loopback only, to compare two answers: the certificate is
                 # recorded, not judged
-                ctx = _ssl._create_unverified_context()
+                ctx = _ssl._create_unverified_context()  # nosec B323 - 127.0.0.1 only, sends no data, compares two answers
                 raw = socket.create_connection(("127.0.0.1", 443), 4)
                 sock = ctx.wrap_socket(raw, server_hostname=host)
                 cert = hashlib.sha256(sock.getpeercert(True) or b"").hexdigest()
