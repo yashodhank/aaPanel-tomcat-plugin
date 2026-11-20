@@ -502,6 +502,25 @@ def _exclusive_config_lock(config_path: str):
             os.close(fd)
 
 
+def _ws_map_in_vhost_dir(vdir: str = "/www/server/panel/vhost/nginx") -> bool:
+    """True when a top-level file in the panel's vhost dir (e.g. the panel's own
+    0.websocket.conf) already defines the upgrade map."""
+    try:
+        names = sorted(os.listdir(vdir))
+    except OSError:
+        return False
+    for name in names:
+        if not name.endswith(".conf"):
+            continue
+        try:
+            with open(os.path.join(vdir, name), encoding="utf-8", errors="replace") as f:
+                if _WS_MAP_NEEDLE in f.read(65536):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     """Idempotently install the WebSocket upgrade map into nginx's http{} block.
 
@@ -513,6 +532,8 @@ def ensure_ws_map(nginx_conf: str = _AAPANEL_NGINX_CONF) -> bool:
     Panel coupling stays here — callers outside compat must use this helper
     rather than writing nginx.conf themselves.
     """
+    if _ws_map_in_vhost_dir():
+        return True          # current panels ship it; nginx.conf stays untouched
     try:
         lock = _exclusive_config_lock(nginx_conf)
         with lock:
@@ -873,6 +894,26 @@ def http_enable_site_ssl(domain: str) -> bool:
             method="POST", timeout=60)
         if isinstance(data, dict) and (data.get("status") or data.get("success")):
             return True
+    return False
+
+
+def site_proxies_to(domain: str, port: int) -> bool:
+    """True when the panel website's own (root-owned) nginx files send its
+    traffic to 127.0.0.1:<port>."""
+    pat = re.compile(r"proxy_pass\s+http://127\.0\.0\.1:%d\b" % int(port))
+    paths = [_AAPANEL_SITE_CONF % domain]
+    try:
+        pdir = _AAPANEL_PROXY_DIR % domain
+        paths += [os.path.join(pdir, f) for f in os.listdir(pdir) if f.endswith(".conf")]
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                if pat.search(f.read(1 << 20)):
+                    return True
+        except OSError:
+            pass
     return False
 
 

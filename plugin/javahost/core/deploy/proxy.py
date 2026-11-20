@@ -1,17 +1,24 @@
 # coding: utf-8
 """
-Reverse-proxy helper. Generates a plugin-owned Nginx vhost pointing at a
-Tomcat instance's loopback HTTP port. Never edits another plugin's config
-(closes F8) — writes only into a JavaHost-owned include dir and validates with
-`nginx -t` before asking the panel to reload.
+Reverse-proxy helper. Publishes an app at a domain in one of two ways
+(config "publish_mode"):
 
-Site registration (aapanel_add_site) tries three paths in order:
+  vhost (default)  one JavaHost-owned file, javahost_<app>.conf, in the panel's
+                   nginx vhost directory. nginx.conf already loads that
+                   directory, so nginx.conf itself is never edited, and no panel
+                   API key is needed. The file is kept only if `nginx -t`
+                   accepts it.
+  panel            a website registered in the panel (needs the panel API key).
+
+Panel registration (aapanel_add_site) tries three paths in order:
   1. aaPanel's native `site.AddSite()` API (modern path — /www/server/panel/class/site.py)
   2. aaPanel's legacy `panelSite` module (older aaPanel versions)
   3. aaPanel HTTP API (POST /site?action=AddSite, loopback)
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 from typing import Dict, Optional
@@ -20,7 +27,11 @@ from .. import config
 from ..compat import aapanel as panel_api
 from ..util import shell, fs, validate
 
-VHOST_DIR = "/www/server/javahost/vhost/nginx"
+# The panel's own vhost directory: its nginx.conf includes *.conf from here.
+VHOST_DIR = "/www/server/panel/vhost/nginx"
+# Where vhosts lived before 0.30; it needed an include line added to nginx.conf.
+LEGACY_VHOST_DIR = "/www/server/javahost/vhost/nginx"
+VHOST_PREFIX = "javahost_"
 NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
 # Shared ACME webroot for HTTP-01 challenge files (issuance + renewal). Both the
 # native (aaPanel) and certbot paths serve challenges from here, so the port-80
@@ -112,7 +123,48 @@ def _nginx_supports_http2_on() -> bool:
 
 
 def vhost_path(app: str) -> str:
-    return os.path.join(VHOST_DIR, "%s.conf" % app)
+    return os.path.join(VHOST_DIR, "%s%s.conf" % (VHOST_PREFIX, app))
+
+
+def legacy_vhost_path(app: str) -> str:
+    return os.path.join(LEGACY_VHOST_DIR, "%s.conf" % app)
+
+
+def vhost_apps() -> list:
+    """Apps that have a JavaHost vhost file, in either location."""
+    apps = set()
+    for vdir, prefix in ((VHOST_DIR, VHOST_PREFIX), (LEGACY_VHOST_DIR, "")):
+        try:
+            names = os.listdir(vdir)
+        except OSError:
+            continue
+        for f in names:
+            if (f.startswith(prefix) and f.endswith(".conf")
+                    and (not prefix or _is_ours(os.path.join(vdir, f)))):
+                apps.add(f[len(prefix):-len(".conf")])
+    return sorted(apps)
+
+
+def _is_ours(path: str) -> bool:
+    """A file in the panel's vhost folder is JavaHost's only if JavaHost wrote
+    its header; the name alone could belong to a panel website."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read(64).startswith("# Managed by JavaHost")
+    except OSError:
+        return False
+
+
+@contextlib.contextmanager
+def _publish_lock():
+    """One publish at a time: check, write, test and roll back as a unit."""
+    os.makedirs(VHOST_DIR, exist_ok=True)
+    fd = os.open(VHOST_DIR, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
@@ -135,7 +187,8 @@ def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
     app = validate.identifier(app, "app")
     domain = validate.domain(domain)
     port = validate.port(port)
-    fs.ensure_dir(VHOST_DIR)
+    # not fs.ensure_dir: it would chmod a directory the panel owns
+    os.makedirs(VHOST_DIR, exist_ok=True)
     acme = _ACME_LOCATION.replace("@@acme@@", ACME_WEBROOT)
     cert_for = cert_domain or domain
     # Intentionally ignore wildcard_name for server_name — cert reuse only.
@@ -158,14 +211,60 @@ def write_vhost(app: str, domain: str, port: int, ssl: bool = False,
             .replace("@@http2_line@@", http2_line))
     path = vhost_path(app)
     fs.atomic_write(path, body, mode=0o644)
+    # one file per app: drop a pre-0.30 copy so the domain is not defined twice
+    legacy = legacy_vhost_path(app)
+    if os.path.exists(legacy):
+        os.unlink(legacy)
     return path
 
 
 def remove_vhost(app: str) -> None:
     app = validate.identifier(app, "app")
     p = vhost_path(app)
+    if os.path.exists(p) and _is_ours(p):
+        os.unlink(p)
+    p = legacy_vhost_path(app)
     if os.path.exists(p):
         os.unlink(p)
+
+
+def publish_vhost(app: str, domain: str, port: int, **kw) -> Optional[str]:
+    """Write the app's vhost and reload nginx. Returns an error, or None.
+
+    A file nginx rejects would block every later reload on the server, the
+    panel's own included, so on any failure the previous files are put back."""
+    app = validate.identifier(app, "app")
+    path = vhost_path(app)
+    with _publish_lock():
+        if os.path.exists(path) and not _is_ours(path):
+            return "%s exists and was not written by JavaHost" % path
+        # Every writer goes through here, so this is where a domain that a panel
+        # website or another app already serves is refused.
+        clash = _domain_in_use(app, validate.domain(domain))
+        if clash:
+            return clash
+        before = {}
+        for p in (path, legacy_vhost_path(app)):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    before[p] = f.read()
+            except OSError:
+                pass
+        try:
+            write_vhost(app, domain, port, **kw)
+            if not ensure_include():
+                err = "nginx.conf does not load %s/*.conf" % VHOST_DIR
+            elif not reload_nginx():
+                err = ("nginx did not accept or reload the configuration "
+                       "(run `nginx -t` for the reason)")
+            else:
+                return None
+        except Exception as e:
+            err = str(e)
+        remove_vhost(app)
+        for p, body in before.items():
+            fs.atomic_write(p, body, mode=0o644)
+        return err + "; the site file was not kept"
 
 
 def nginx_test() -> bool:
@@ -175,7 +274,7 @@ def nginx_test() -> bool:
 
 
 def include_hint() -> str:
-    """Line the user adds once to nginx.conf http{} to pick up JavaHost vhosts."""
+    """The nginx.conf line that loads JavaHost vhosts (the panel ships it)."""
     return "include %s/*.conf;" % VHOST_DIR
 
 
@@ -190,39 +289,16 @@ def default_domain(app: str) -> Optional[str]:
     return validate.domain("%s.%s" % (app, suffix))
 
 
-_INCLUDE_LINE = "include %s/*.conf;" % VHOST_DIR
-
-
 def ensure_include(nginx_conf: str = NGINX_CONF) -> bool:
-    """Idempotently add our vhost include into nginx's http{} block.
-
-    Returns True when the include is present and valid (already there or newly
-    added), False if the conf is missing or nginx -t rejects the change.
-    """
-    if not os.path.isfile(nginx_conf):
+    """True when nginx.conf loads VHOST_DIR. JavaHost no longer edits
+    nginx.conf: the panel's own nginx.conf already includes its vhost folder."""
+    try:
+        with open(nginx_conf, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
         return False
-    with open(nginx_conf, encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    if VHOST_DIR in content and "include" in content:
-        # already referenced (idempotent — tolerate trailing-slash variants)
-        if _INCLUDE_LINE in content or ("%s/*.conf" % VHOST_DIR) in content:
-            return True
-    # Locate the http{} block by a real `http {` token (not a bare substring
-    # match, which would also hit comments, "https", $http_host, etc.).
-    m = re.search(r"\bhttp\s*\{", content)
-    if not m:
-        return False
-    brace = content.index("{", m.start())
-    injected = (content[: brace + 1]
-                + "\n    " + _INCLUDE_LINE + "\n"
-                + content[brace + 1:])
-    fs.atomic_write(nginx_conf, injected, mode=0o644)
-    # Validate the rewritten config; if nginx rejects it, restore the original
-    # so we never leave nginx in a non-reloadable state.
-    if not nginx_test():
-        fs.atomic_write(nginx_conf, content, mode=0o644)
-        return False
-    return True
+    return bool(re.search(r"^\s*include\s+%s/\*\.conf\s*;" % re.escape(VHOST_DIR),
+                          content, re.M))
 
 
 def reload_nginx() -> bool:
@@ -594,9 +670,9 @@ def read_owner(app: str) -> str:
 def set_site(app: str, domain: str, port: int) -> Dict:
     """Publish <app> at <domain> -> http://127.0.0.1:<port>.
 
-    Primary path: aaPanel's native panelSite.CreateProxy() or HTTP API.
-    On ALL failure, returns an error — NO direct nginx modification.
-    Site registration goes ONLY through aaPanel's APIs.
+    publish_mode "vhost" (default): a JavaHost-owned vhost file, no API key.
+    publish_mode "panel": a panel website through aaPanel's APIs; on failure it
+    returns an error and writes no nginx config of its own.
     Fail-closed when the active webserver is not nginx.
     """
     app = validate.identifier(app, "app")
@@ -623,6 +699,9 @@ def set_site(app: str, domain: str, port: int) -> Dict:
             "error": ("WebSocket proxy prerequisite failed: aaPanel nginx.conf "
                       "is unavailable or nginx rejected the upgrade map."),
         }
+
+    if config.publish_mode() != "panel":
+        return _set_site_vhost(app, domain, port)
 
     # Changing domain: attach the NEW site first; only then drop the previous
     # aaPanel site. Delete-before-create orphans the live site when add fails.
@@ -666,6 +745,126 @@ def set_site(app: str, domain: str, port: int) -> Dict:
             "via": "aapanel", "owner": "aapanel", "aapanel": aap.get("detail", "")}
 
 
+_SERVER_NAME = re.compile(r"(?:^|[;{}])\s*server_name\s+([^;]+);", re.M)
+
+
+def _serves(name: str, domain: str) -> bool:
+    """Does an nginx server_name entry cover <domain>? Regex names are not
+    evaluated."""
+    name = name.lower().rstrip(".")
+    if name.startswith("*."):
+        return domain.endswith(name[1:])
+    if name.startswith("."):
+        return domain == name[1:] or domain.endswith(name)
+    return name == domain
+
+
+def _conf_names(path: str) -> list:
+    """Every server_name listed in an nginx file ([] when unreadable)."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            body = f.read(1 << 20)
+    except OSError:
+        return []
+    return [n for m in _SERVER_NAME.finditer(body) for n in m.group(1).split()]
+
+
+def vhost_domain(app: str) -> Optional[str]:
+    """The domain in the app's vhost file. That file is root-owned, unlike the
+    site.domain marker, which sits in a directory the app's user can write."""
+    for p in (vhost_path(app), legacy_vhost_path(app)):
+        names = _conf_names(p)
+        if names:
+            return names[0].lower()
+    return None
+
+
+def _domain_in_use(app: str, domain: str) -> Optional[str]:
+    """Why <domain> cannot get a JavaHost vhost for <app>, or None.
+
+    Reads every site file nginx loads from the panel's vhost folder, so alias
+    and wildcard names of a panel website count, not just its file name."""
+    domain = domain.lower()
+    own = (vhost_path(app), legacy_vhost_path(app))
+    for vdir, ours in ((VHOST_DIR, VHOST_PREFIX), (LEGACY_VHOST_DIR, "")):
+        try:
+            names = sorted(os.listdir(vdir))
+        except OSError:
+            continue
+        for f in names:
+            p = os.path.join(vdir, f)
+            if p in own or not f.endswith(".conf"):
+                continue
+            if not any(_serves(n, domain) for n in _conf_names(p)):
+                continue
+            if f.startswith(ours) and (ours or vdir == LEGACY_VHOST_DIR):
+                return "%s is already published by app %r" % (
+                    domain, f[len(ours):-len(".conf")])
+            return ("%s is already a website in the panel (%s). Remove it under "
+                    "Website first, or set Settings > Publish domains to "
+                    "'aaPanel website'." % (domain, f))
+    return None
+
+
+def _set_site_vhost(app: str, domain: str, port: int) -> Dict:
+    prev, prev_owner = read_domain(app), read_owner(app)
+    res = {"ok": True, "domain": domain, "url": "http://%s/" % domain,
+           "via": "vhost", "owner": "javahost"}
+    if (prev == domain and prev_owner == "aapanel"
+            and os.path.exists(os.path.join(VHOST_DIR, "%s.conf" % domain))):
+        # already live as this app's panel website; nothing to move
+        return dict(res, via="aapanel", owner="aapanel")
+    if vhost_domain(app) == domain.lower():
+        for p in (vhost_path(app), legacy_vhost_path(app)):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    live = ("proxy_pass http://127.0.0.1:%d;" % port) in f.read()
+            except OSError:
+                continue
+            if live:
+                # Same domain, same port: leave the file (and HTTPS) as it is.
+                _store_domain(app, domain)
+                _store_owner(app, "javahost")
+                return res
+    from . import ssl as sslmod
+    had_ssl = bool(sslmod.read_ssl(app))
+    try:
+        err = publish_vhost(app, domain, port)
+    except OSError as e:
+        err = "could not write %s: %s" % (vhost_path(app), e)
+    if err:
+        return {"ok": False, "error": "Could not publish %s: %s." % (domain, err.rstrip("."))}
+    try:
+        _store_domain(app, domain)
+        _store_owner(app, "javahost")
+        sslmod._mark_ssl(app, False)     # the file just written is plain HTTP
+    except Exception as e:
+        # a site JavaHost has no record of must not stay live
+        remove_vhost(app)
+        reload_nginx()
+        return {"ok": False, "error": "Could not publish %s: %s." % (domain, e)}
+    notes = []
+    if had_ssl:
+        notes.append("HTTPS was switched off by this change. Turn it on again "
+                     "for %s." % domain)
+    if prev and prev != domain and prev_owner == "aapanel":
+        # The old name comes from a file the app's own user can write. Delete
+        # the panel website only when the panel's own files say it is a
+        # JavaHost site that proxies to this app's port.
+        gone = False
+        try:
+            gone = (panel_api.site_proxies_to(prev, port)
+                    and bool(aapanel_remove_site(prev)))
+        except Exception:
+            gone = False
+        if not gone:
+            notes.append("The previous panel website %s was left in place. "
+                         "Remove it under Website if it is no longer needed." % prev)
+    if notes:
+        res["note"] = " ".join(notes)
+    return res
+
+
 def remove_site(app: str) -> Dict:
     """Remove the app's vhost + aaPanel site record.
 
@@ -679,12 +878,16 @@ def remove_site(app: str) -> Dict:
     aapanel_removed = False
     aapanel_error = None
     left_in_place = None
-    if domain and panel_api.site_ownership(domain) == "foreign":
+    # published as a JavaHost vhost: there is no panel website to remove
+    vhost_only = bool(domain) and read_owner(app) == "javahost"
+    if vhost_only:
+        aapanel_removed = True
+    elif domain and panel_api.site_ownership(domain) == "foreign":
         # The site was created by the operator (JavaHost only attached a proxy to
         # it), so it is not ours to delete, and it must not block removing the app.
         left_in_place = domain
         domain = None
-    if domain:
+    if domain and not vhost_only:
         try:
             aapanel_removed = bool(aapanel_remove_site(domain))
         except Exception as e:

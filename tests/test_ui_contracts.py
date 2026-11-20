@@ -32,7 +32,7 @@ def _real_preview(monkeypatch, tmp_path):
     monkeypatch.setattr(maintenance, "_list_installed_tomcats", lambda: ["11"])
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "shop.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_shop.conf").write_text("# Managed by JavaHost\nserver {}\n")
     monkeypatch.setattr(maintenance, "DATA_ROOT", str(tmp_path / "javahost"))
     return maintenance.wipe_preview()
 
