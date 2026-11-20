@@ -91,3 +91,14 @@ def test_deploy_dry_run_propagates_host_to_recursive_restart():
     assert "rsync " in output
     assert "root@test-host:/www/server/panel/plugin/javahost/" in output
     assert "ssh root@test-host " in output
+
+
+def test_no_tracked_file_names_the_test_server():
+    # split so this file does not match itself
+    host = "bisotech" + ".in"
+    git = shutil.which("git")
+    if not git or not (ROOT / ".git").exists():
+        return
+    res = subprocess.run([git, "grep", "-lF", host, "--", "."], cwd=str(ROOT),
+                         stdout=subprocess.PIPE, universal_newlines=True)
+    assert res.stdout.strip() == "", "test server hostname committed in: %s" % res.stdout

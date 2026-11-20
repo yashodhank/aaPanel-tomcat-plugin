@@ -99,7 +99,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ### E2E Verified
 - CreateApp → SetSite (HTTP API) → site in aaPanel DB → RemoveSite → DeleteApp
-  full flow confirmed on test VPS (Tomcat 10.1, demotest.5d.bisotech.in).
+  full flow confirmed on test VPS (Tomcat 10.1, demotest.jh.example.com).
 
 ## [0.28.0] — 2026-06-10
 
@@ -518,7 +518,7 @@ Outcome of a full 3-dimension code review (UI / backend / tests-docs).
   request scheme/host, allowlisted sysprops) after the `JAVAHOST_OK` marker.
 
 ### Changed
-- **De-hardcoded the reverse-proxy domain** (was `5d.bisotech.in` baked into shipped
+- **De-hardcoded the reverse-proxy domain** (was `jh.example.com` baked into shipped
   code): the suffix is now the `site_suffix` plugin config (empty by default;
   `GetStatus` exposes it; the UI prompts for a domain when unset). No vendor FQDN
   ships in the OSS plugin.
@@ -573,7 +573,7 @@ Outcome of a full 3-dimension code review (UI / backend / tests-docs).
 ## [0.13.0] — 2026-06-06
 
 ### Added
-- **Per-site HTTPS with a UI toggle.** Each published site (`<app>.5d.bisotech.in`)
+- **Per-site HTTPS with a UI toggle.** Each published site (`<app>.jh.example.com`)
   gets an **HTTPS on/off switch** (row + drawer Overview). `SetSiteSSL{app,enable}`
   provisions a cert and rewrites the vhost to a 443 server + 80→443 redirect (+ an
   always-present ACME challenge location for renewal); disabling reverts to HTTP and
@@ -656,7 +656,7 @@ Outcome of a full 3-dimension code review (UI / backend / tests-docs).
   view-log, auto-polled) and a **Logs** tab (unified app + task log viewer) — full
   WAI-ARIA Tabs wiring, CSP-safe.
 - **Reverse-proxy sites:** `SetSite{app,domain?}` / `RemoveSite{app}` create a
-  `<app>.5d.bisotech.in` → loopback-port site (aaPanel site API preferred, clean
+  `<app>.jh.example.com` → loopback-port site (aaPanel site API preferred, clean
   nginx-vhost fallback). `list_apps()` now returns the configured `domain`.
 - **Full Tomcat×Java×DB testbed:** `tests/e2e/matrix_full.py` (`make matrix`) —
   full cartesian sweep (Tomcat 9/10.1/11 × eligible Java × {none,PG,MySQL,MariaDB,

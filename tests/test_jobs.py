@@ -835,7 +835,7 @@ def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "ensure_include", lambda *a, **k: False)
     monkeypatch.setattr(proxy, "_store_domain", lambda app, dom: None)
 
-    res = proxy.set_site("demo", "demo.5d.bisotech.in", 8080)
+    res = proxy.set_site("demo", "demo.jh.example.com", 8080)
     assert res["ok"] is False
     assert "aaPanel site registration failed" in res["error"]
     assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
@@ -875,7 +875,7 @@ def test_store_and_read_domain_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path))
     os.makedirs(os.path.join(str(tmp_path), "demo", "bin"), exist_ok=True)
     assert proxy.read_domain("demo") is None
-    proxy._store_domain("demo", "demo.5d.bisotech.in")
-    assert proxy.read_domain("demo") == "demo.5d.bisotech.in"
+    proxy._store_domain("demo", "demo.jh.example.com")
+    assert proxy.read_domain("demo") == "demo.jh.example.com"
     proxy._clear_domain("demo")
     assert proxy.read_domain("demo") is None

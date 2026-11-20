@@ -73,7 +73,7 @@ helper) over patching one call site. Add/adjust a unit test for any security fix
 
 ## Teardown safety (cleaning the test box)
 See `javahost-teardown` for the procedure. Hard rules when tearing down: NEVER
-`certbot delete 5d.bisotech.in` (the panel's own cert) or touch the panel / other
+`certbot delete jh.example.com` (the panel's own cert) or touch the panel / other
 plugins / other sites; NEVER `docker volume prune`/`system prune` unscoped (remove
 only the named volumes of the 4 `javahost-demo-*` containers); prefer the
 marker-gated plugin Wipe (`core/maintenance.wipe`) over raw `rm -rf` of the data
