@@ -897,6 +897,26 @@ def http_enable_site_ssl(domain: str) -> bool:
     return False
 
 
+def site_proxies_to(domain: str, port: int) -> bool:
+    """True when the panel website's own (root-owned) nginx files send its
+    traffic to 127.0.0.1:<port>."""
+    pat = re.compile(r"proxy_pass\s+http://127\.0\.0\.1:%d\b" % int(port))
+    paths = [_AAPANEL_SITE_CONF % domain]
+    try:
+        pdir = _AAPANEL_PROXY_DIR % domain
+        paths += [os.path.join(pdir, f) for f in os.listdir(pdir) if f.endswith(".conf")]
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                if pat.search(f.read(1 << 20)):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
 def site_conf_serves_https(domain: str) -> bool:
     """Whether the aaPanel-owned nginx vhost for ``domain`` already has a TLS
     server (HTTPS switched on in the panel, by any means)."""

@@ -652,6 +652,13 @@ class javahost_main(object):
                 return panel.err("no domain configured for %r — create a reverse-proxy "
                                  "site first or pass domain" % app)
             domain = validate.domain(domain)
+            # The stored domain sits in a file the app's own user can write. For
+            # a JavaHost-published site the root-owned vhost file must agree.
+            if (proxy.read_domain(app) and proxy.read_owner(app) == "javahost"
+                    and proxy.vhost_domain(app) != domain.lower()):
+                return panel.err("%s is not the domain this app is published at. "
+                                 "Set up the reverse proxy again, then change HTTPS."
+                                 % domain)
             port = instance.detail(app).get("port") or instance.health(app).get("port")
             if not port:
                 return panel.err("cannot resolve port for app %r (is it created?)" % app)
