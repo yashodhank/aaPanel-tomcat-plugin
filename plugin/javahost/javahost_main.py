@@ -491,6 +491,15 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def GetUpgradeReport(self, get=None):
+        """Upgrade check: how each app's domain is served today and what an
+        upgrade may safely change. Read-only."""
+        try:
+            from core import upgrade
+            return panel.ok(upgrade.report())
+        except Exception as e:
+            return panel.err(str(e))
+
     def GetPanelApi(self, get=None):
         """Settings: whether an aaPanel interface API key is configured, and the
         effective panel port. Never returns the secret itself."""
