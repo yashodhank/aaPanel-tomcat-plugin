@@ -1615,6 +1615,16 @@
         html += '<ul class="jh-hint" style="margin:0 0 var(--s3) var(--s4);padding:0">'+
           lines.map(function(s){ return '<li>'+esc(s)+'</li>'; }).join('')+'</ul>';
       }
+      var fx = a.https_fix;
+      if(fx && fx.possible){
+        html += '<div class="jh-spread" style="margin:0 0 var(--s3) var(--s4)">'+
+          '<button class="jh-btn accent sm" type="button" data-upgfix="'+esc(a.app)+'" data-effect="'+esc(fx.effect || '')+'">'+
+          ic('globe')+'Make HTTPS reach '+esc(a.app)+'</button></div>';
+      } else if(fx && fx.applied){
+        html += '<div class="jh-spread" style="margin:0 0 var(--s3) var(--s4)">'+
+          '<button class="jh-btn ghost sm" type="button" data-upgundo="'+esc(a.app)+'">'+
+          ic('refresh')+'Undo the HTTPS repair for '+esc(a.app)+'</button></div>';
+      }
     });
     (p.server || []).forEach(function(s){
       html += '<div class="jh-hint">'+esc(s)+'</div>';
@@ -1635,6 +1645,19 @@
         '<button class="jh-btn accent sm" id="jh-upg-run" type="button">'+ic('refresh')+'Move old site files now</button></div>';
     }
     body.innerHTML = html;
+  }
+  function repairHttps(app, undo, btn){
+    var ask = undo ? 'Remove the HTTPS repair for "'+app+'"? HTTPS will show the panel placeholder page again.'
+                   : ((btn.getAttribute('data-effect') || '')+'\n\nApply this now?');
+    if(!confirm(ask)) return;
+    busy(btn, true);
+    call('RepairHttps', undo ? {app:app, undo:1} : {app:app}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r)){ toast(errText(p) || 'not applied', 'err', 'HTTPS repair'); return; }
+      toast(undo ? 'HTTPS repair removed for '+app : 'HTTPS now reaches '+app, 'ok');
+      refreshUpgradeReport();
+    });
   }
   function runUpgrade(btn){
     busy(btn, true);
@@ -5012,6 +5035,8 @@
     if(b.id === 'jh-run-wizard'){ openWizard(); return; }
     if(b.id === 'jh-upg-refresh'){ refreshUpgradeReport(b); return; }
     if(b.id === 'jh-upg-run'){ runUpgrade(b); return; }
+    if(ds.upgfix){ repairHttps(ds.upgfix, false, b); return; }
+    if(ds.upgundo){ repairHttps(ds.upgundo, true, b); return; }
     if(b.id === 'jh-panelapi-refresh'){ refreshPanelApi(b); return; }
     if(b.id === 'jh-panelapi-save'){ savePanelApi(b); return; }
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }

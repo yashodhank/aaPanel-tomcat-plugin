@@ -461,6 +461,8 @@ def http_add_site_with_proxy(domain: str, port: int) -> Optional[Dict]:
 
 _AAPANEL_SITE_CONF = "/www/server/panel/vhost/nginx/%s.conf"
 _AAPANEL_PROXY_DIR = "/www/server/panel/vhost/nginx/proxy/%s"
+# A website's URL rewrite rules: its own file, included inside its server block.
+_AAPANEL_REWRITE = "/www/server/panel/vhost/rewrite/%s.conf"
 # Panel Website → Reverse Proxy UI reads this JSON list (not nginx alone).
 _AAPANEL_PROXYFILE = "/www/server/panel/data/proxyfile.json"
 # aaPanel's global nginx.conf — WS upgrade map lives in http{} here.

@@ -506,6 +506,23 @@ class javahost_main(object):
         except Exception as e:
             return panel.err(str(e))
 
+    def RepairHttps(self, get):
+        """Point an app's panel website HTTPS at the app with one marked block
+        in the website's rewrite file, or remove that block again (undo=1).
+        Plain HTTP must answer exactly as before and HTTPS must answer what the
+        app answers, or the file is put back. The app is not restarted."""
+        try:
+            from core import upgrade
+            app = validate.identifier(panel.attr(get, "app"), "app")
+            undo = str(panel.attr(get, "undo", "")).lower() in ("1", "true", "yes", "on")
+            res = upgrade.repair_https(app, undo=undo)
+            if not res.get("ok"):
+                return panel.err(res.get("error") or "the HTTPS repair was not applied")
+            panel.log("RepairHttps", "%s %s" % (app, "undone" if undo else "applied"))
+            return panel.ok(res)
+        except Exception as e:
+            return panel.err(str(e))
+
     def RunUpgrade(self, get=None):
         """Run the safe upgrade steps again (the same ones that start by
         themselves after an update), as a background job. Moves only what can
