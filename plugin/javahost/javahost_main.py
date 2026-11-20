@@ -40,6 +40,7 @@ from core import logrotate                         # noqa: E402
 from core import updates                           # noqa: E402
 from core import dashboard                        # noqa: E402
 from core.backup import store as backupstore      # noqa: E402
+from core.backup import archive as backuparchive  # noqa: E402
 from core.backup import remote as backupremote    # noqa: E402
 from core.backup import schedule as backupschedule  # noqa: E402
 
@@ -776,6 +777,49 @@ class javahost_main(object):
             app = panel.attr(get, "app", None) if get is not None else None
             app = validate.identifier(app, "app") if app else None
             return panel.ok({"backups": backupstore.list_backups(app=app, include_remote=True)})
+        except Exception as e:
+            return panel.err(str(e))
+
+    def GetBackupLimits(self, get=None):
+        """Backup size limits in force and their defaults (files / whole GB)."""
+        try:
+            out = backuparchive.limits()
+            out["ranges"] = {k[len("backup_"):]: list(v)
+                             for k, v in config.BACKUP_LIMIT_RANGES.items()}
+            return panel.ok(out)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def SetBackupLimits(self, get):
+        """Save backup size limits. Fields: max_files, max_file_gb, max_total_gb,
+        max_archive_gb (whole numbers). `reset=1` goes back to the defaults.
+        Backup and restore both use them."""
+        try:
+            keys = sorted(config.BACKUP_LIMIT_RANGES)
+            if str(panel.attr(get, "reset", "")).lower() in ("1", "true", "yes", "on"):
+                config.set_backup_limits({k: None for k in keys})
+            else:
+                vals = {}
+                for k in keys:
+                    field = k[len("backup_"):]
+                    raw = panel.attr(get, field, None)
+                    if raw is None:
+                        continue                    # not sent: leave as it is
+                    raw = str(raw).strip()
+                    # ASCII digits only, short enough that int() cannot be abused
+                    if not (0 < len(raw) <= 9 and raw.isdigit() and raw.encode("utf-8").isdigit()):
+                        return panel.err("%s must be a whole number" % field)
+                    vals[k] = int(raw)
+                if not vals:
+                    return panel.err("no limit was given")
+                if "backup_max_total_gb" in vals or "backup_max_file_gb" in vals:
+                    cur = backuparchive.limits()
+                    if vals.get("backup_max_total_gb", cur["max_total_gb"]) < \
+                            vals.get("backup_max_file_gb", cur["max_file_gb"]):
+                        return panel.err("max_total_gb cannot be smaller than max_file_gb")
+                config.set_backup_limits(vals)
+                panel.log("SetBackupLimits", str(vals))
+            return self.GetBackupLimits()
         except Exception as e:
             return panel.err(str(e))
 

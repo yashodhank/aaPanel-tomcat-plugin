@@ -928,6 +928,39 @@ def test_backup_fails_now_when_restore_would_refuse_it_later(env, monkeypatch, l
     assert [f for f in os.listdir(broot) if f.startswith("backup-")] == []   # nothing half-written
 
 
+def test_a_raised_limit_lets_the_same_app_back_up_and_restore(env, monkeypatch, tmp_path):
+    iroot, broot = env
+    _mk_app(iroot, "big", port=8090)
+    monkeypatch.setattr(archive, "MAX_ARCHIVE_MEMBERS", 3)        # built-in default too small
+    with pytest.raises(archive.UnrestorableBackup):
+        store.backup_app("big")
+    from core import config
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.json"))
+    config._CACHE.pop("k", None)
+    config.set_backup_limits({"backup_max_files": 60000})         # operator raises it
+    try:
+        name = store.backup_app("big")["name"]
+        store.restore(os.path.join(broot, name), as_name="big2")  # restore reads the same limit
+        assert os.path.exists(os.path.join(iroot, "big2", "webapps", "ROOT", "index.jsp"))
+    finally:
+        config._CACHE.pop("k", None)
+
+
+def test_restore_names_the_size_limit_when_that_is_why_it_refuses(env, monkeypatch):
+    iroot, broot = env
+    _mk_app(iroot, "shop", port=8090)
+    path = os.path.join(broot, store.backup_app("shop")["name"])
+    if os.path.exists(path + ".json"):
+        os.unlink(path + ".json")                                 # no sidecar to fall back on
+    monkeypatch.setattr(archive, "MAX_ARCHIVE_MEMBERS", 2)        # the limit went down since
+    with pytest.raises(UnsafeArchive, match="too many members"):
+        store.restore(path, as_name="shop2")
+    monkeypatch.setattr(archive, "MAX_ARCHIVE_MEMBERS", 50000)
+    monkeypatch.setattr(archive, "MAX_COMPRESSED_ARCHIVE_BYTES", 10)
+    with pytest.raises(UnsafeArchive, match="too large"):
+        store.restore(path, as_name="shop2")
+
+
 def test_archive_is_never_readable_by_others_while_being_written(env, monkeypatch):
     iroot, _ = env
     _mk_app(iroot, "shop", port=8090)

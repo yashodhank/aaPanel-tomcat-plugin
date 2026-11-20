@@ -759,6 +759,13 @@
         </div>
         <div id="jh-logcfg-body"><div class="jh-loading">Loading…</div></div>
       </div>
+      <div class="jh-card" style="margin-bottom:var(--s4)">
+        <div class="jh-card-h">
+          <div><h3>Backup size limits</h3><p>How large an app a backup may hold. Backup and restore use the same limits, so a backup that is written can be restored here</p></div>
+          <button class="jh-btn ghost sm" id="jh-bklim-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-bklim-body"><div class="jh-loading">Loading…</div></div>
+      </div>
       <div class="jh-card">
         <div class="jh-card-h">
           <div><h3>Danger zone</h3><p>Irreversibly remove deployed apps, runtimes, and plugin data</p></div>
@@ -1693,6 +1700,70 @@
       toast('Rotated '+((p&&p.rotated)||0)+', removed '+((p&&p.removed)||0)+
         ' file(s), freed '+fmtKB((p&&p.freed_bytes)||0), 'ok');
       refreshLogConfig();
+    });
+  }
+  // ---- backup size limits -------------------------------------------------
+  var BKLIM_FIELDS = [
+    ['max_files', 'Most files in one app (files)'],
+    ['max_file_gb', 'Largest single file (GB)'],
+    ['max_total_gb', 'Most data in one app (GB)'],
+    ['max_archive_gb', 'Largest backup archive (GB)']
+  ];
+  function refreshBackupLimits(btn){
+    if(!$('jh-bklim-body')) return;
+    busy(btn, true);
+    call('GetBackupLimits', {}, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object'){
+        var b = $('jh-bklim-body');
+        if(b) b.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div>'+esc(errText(p) || 'Could not load the backup limits. Try Refresh.')+'</div></div>';
+        return;
+      }
+      renderBackupLimits(p);
+    });
+  }
+  function renderBackupLimits(p){
+    var body = $('jh-bklim-body'); if(!body) return;
+    var rg = p.ranges || {};
+    body.innerHTML = '<div class="jh-rows">'+
+      BKLIM_FIELDS.map(function(f){
+        var k = f[0], r = rg[k] || [1, ''], v = esc(String(p[k]));
+        return '<div class="jh-kv"><span><label for="bklim-'+k+'" style="margin:0">'+esc(f[1])+'</label>'+
+          '<div class="jh-hint" id="bklim-'+k+'-hint">Default '+esc(String(p['default_'+k]))+
+          ', up to '+esc(String(r[1]))+'</div></span>'+
+          '<input type="number" id="bklim-'+k+'" aria-describedby="bklim-'+k+'-hint" min="'+esc(String(r[0]))+
+          '" max="'+esc(String(r[1]))+'" step="1" value="'+v+'" data-orig="'+v+'" style="width:110px"></div>';
+      }).join('')+
+      '<div class="jh-hint">Raise a limit to back up a larger app. Larger backups take more disk and longer to restore. '+
+        'If you lower a limit again, backups taken above it cannot be restored until you raise it back.</div>'+
+      '<div class="jh-spread" style="margin-top:var(--s3);gap:var(--s2)">'+
+        '<button class="jh-btn accent sm" id="jh-bklim-save" type="button">'+ic('check')+'Save limits</button>'+
+        '<button class="jh-btn ghost sm" id="jh-bklim-reset" type="button">'+ic('refresh')+'Use defaults</button>'+
+      '</div></div>';
+  }
+  function saveBackupLimits(btn, reset){
+    var data = {}, changed = 0, blank = null;
+    if(reset){ data.reset = 1; }
+    else {
+      // send only what the operator changed, so untouched limits keep following the defaults
+      BKLIM_FIELDS.forEach(function(f){
+        var el = $('bklim-'+f[0]); if(!el) return;
+        var v = String(el.value).replace(/^\s+|\s+$/g, '');
+        if(v === '' && !blank) blank = el;
+        if(v !== el.getAttribute('data-orig')){ data[f[0]] = v; changed++; }
+      });
+      if(blank){ toast('Enter a whole number for every limit', 'err', 'Backup limits'); blank.focus(); return; }
+      if(!changed){ toast('No limit was changed', 'ok'); return; }
+    }
+    busy(btn, true);
+    call('SetBackupLimits', data, function(r){
+      busy(btn, false);
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object'){ toast(errText(p) || 'Could not save the limits', 'err', 'Backup limits'); return; }
+      toast(reset ? 'Backup limits back to defaults' : 'Backup limits saved', 'ok'); renderBackupLimits(p);
+      var again = $(reset ? 'jh-bklim-reset' : 'jh-bklim-save'); if(again) again.focus();   // the card was redrawn
     });
   }
   function previewList(items, emptyLabel){
@@ -4499,7 +4570,7 @@
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
     if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
-    if(name === 'settings'){ refreshPanelApi(); refreshLogConfig(); refreshDangerZone(); }
+    if(name === 'settings'){ refreshPanelApi(); refreshLogConfig(); refreshBackupLimits(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -4856,6 +4927,9 @@
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }
     if(b.id === 'jh-logcfg-save'){ saveLogConfig(b); return; }
     if(b.id === 'jh-logcfg-purge'){ purgeLogsNow(b); return; }
+    if(b.id === 'jh-bklim-refresh'){ refreshBackupLimits(b); return; }
+    if(b.id === 'jh-bklim-save'){ saveBackupLimits(b, false); return; }
+    if(b.id === 'jh-bklim-reset'){ saveBackupLimits(b, true); return; }
     if(b.id === 'jh-wipe-refresh'){ refreshDangerZone(b); return; }
     if(b.id === 'jh-wipe-run'){ runWipe(b); return; }
 
