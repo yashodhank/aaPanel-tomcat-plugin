@@ -138,6 +138,10 @@ class javahost_main(object):
     # ---- dashboard ----
     def GetStatus(self, get=None):
         try:
+            # First status request after a new version lands: move what older
+            # versions left behind, where that is provably safe. Never raises.
+            from core import upgrade
+            upgrade.apply_once()
             jdks = {str(k): v for k, v in java.detect().items()}
             tomcats = {}
             for major in registry.LINES:
@@ -496,7 +500,21 @@ class javahost_main(object):
         upgrade may safely change. Read-only."""
         try:
             from core import upgrade
-            return panel.ok(upgrade.report())
+            rep = upgrade.report()
+            rep["last_run"] = upgrade.last_run()
+            return panel.ok(rep)
+        except Exception as e:
+            return panel.err(str(e))
+
+    def RunUpgrade(self, get=None):
+        """Run the safe upgrade steps again (the same ones that run by
+        themselves after an update). Moves only what can be proven unchanged."""
+        try:
+            from core import upgrade
+            res = upgrade.apply()
+            panel.log("RunUpgrade", "moved=%s skipped=%s" % (
+                ",".join(res["moved"]) or "-", ",".join(sorted(res["skipped"])) or "-"))
+            return panel.ok(res)
         except Exception as e:
             return panel.err(str(e))
 
