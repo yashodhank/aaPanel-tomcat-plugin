@@ -55,32 +55,38 @@ def _unit_state(app: str, kind: str) -> Dict:
         text = _read(path)
         if text is None:
             continue
-        template = _read(os.path.join(templating._TEMPLATE_DIR, tmpl)) or ""
+        template = _read(os.path.join(templating._TEMPLATE_DIR, tmpl))
         m = re.search(r'JAVA_HOME="?([^"\n]+)"?', text)
         return {"backend": backend,
-                "matches_template": unit_matches_template(text, template),
+                "matches_template": (unit_matches_template(text, template)
+                                     if template else None),
                 "java_home": m.group(1).strip() if m else None}
     return {"backend": None, "matches_template": None, "java_home": None}
 
 
-def _files_serving(domain: str) -> List[Dict]:
-    """Every site file nginx loads that names <domain>, in nginx's load order
-    as far as this module can tell: legacy folder first when nginx.conf still
-    includes it, then the panel's vhost folder."""
+def _live(body: str) -> str:
+    """The file without its comment lines."""
+    return "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _files_serving(names: List[str], skip=()) -> List[Dict]:
+    """Every site file in the two vhost folders that names any of <names>,
+    other than the paths in <skip>."""
     out = []
-    domain = domain.lower()
+    names = [n.lower() for n in names]
     for vdir, legacy in ((proxy.LEGACY_VHOST_DIR, True), (proxy.VHOST_DIR, False)):
         try:
-            names = sorted(os.listdir(vdir))
+            files = sorted(os.listdir(vdir))
         except OSError:
             continue
-        for f in names:
+        for f in files:
             path = os.path.join(vdir, f)
-            if not f.endswith(".conf"):
+            if not f.endswith(".conf") or path in skip:
                 continue
-            body = _read(path) or ""
-            if not any(proxy._serves(n, domain) for n in proxy._conf_names(path)):
+            theirs = proxy._conf_names(path)
+            if not any(proxy._serves(t, n) for t in theirs for n in names):
                 continue
+            body = _live(_read(path) or "")
             out.append({
                 "path": path,
                 "ours": legacy or proxy._is_ours(path),
@@ -100,40 +106,99 @@ def _proxies(entry: Dict, domain: str, port: Optional[int]) -> bool:
     return (not entry["ours"]) and panel_api.site_proxies_to(domain, port)
 
 
-def app_report(app: str) -> Dict:
+def _own_file(path: str, legacy: bool) -> Optional[Dict]:
+    body = _read(path)
+    if body is None or not (legacy or proxy._is_ours(path)):
+        return None
+    live = _live(body)
+    return {"path": path, "ours": True, "legacy": legacy, "body": live,
+            "names": [n.lower() for n in proxy._conf_names(path)],
+            "https": bool(re.search(r"^\s*listen\s+[^;]*\b443\b", live, re.M))}
+
+
+def _owner_marker(app: str) -> Optional[str]:
+    """'aapanel', 'javahost' or None. The marker sits in a directory the app's
+    own user can write, so a link is not followed and nothing but the two known
+    words is ever passed on."""
+    path = proxy._owner_marker(app)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        import stat
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        word = os.read(fd, 32).decode("ascii", "replace").strip().lower()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return word if word in ("aapanel", "javahost") else None
+
+
+def app_report(app: str, legacy_include: bool = True) -> Dict:
     base = instance.base_path(app)
     kind = instance._instance_type(base)
     port = instance._read_port(base)
-    domain = proxy.read_domain(app) or proxy.vhost_domain(app)
-    owner_marker = (_read(proxy._owner_marker(app)) or "").strip() or None
+    marker_domain = proxy.read_domain(app)
+    owner_marker = _owner_marker(app)
     notes: List[str] = []
     attention: List[str] = []
     action = "none"
     state = "not-published"
 
+    # The app's own site files are root-owned; the domain marker is not. The
+    # files decide what the app serves, and a marker that disagrees is flagged.
+    old = _own_file(proxy.legacy_vhost_path(app), True)
+    cur = _own_file(proxy.vhost_path(app), False)
+    own = [f for f in (old, cur) if f]
+    names = sorted({n for f in own for n in f["names"]})
+    domain = (names[0] if names else None) or marker_domain
+    mismatch = bool(own and marker_domain and marker_domain.lower() not in names)
+    if mismatch:
+        attention.append("The stored domain (%s) is not the one in the app's site "
+                         "file (%s)." % (marker_domain, ", ".join(names) or "none"))
+
     if domain:
-        files = _files_serving(domain)
-        ours = [f for f in files if f["ours"]]
-        panel = [f for f in files if not f["ours"]]
-        legacy = [f for f in ours if f["legacy"]]
-        if legacy and panel:
-            state = "legacy-file-and-panel-website"
-            action = "keep"
+        ask = names or [domain.lower()]
+        others = _files_serving(ask, skip=[f["path"] for f in own])
+        panel = [f for f in others if not f["ours"]]
+        apps_ = [f for f in others if f["ours"]]
+        regex = any(n.startswith("~") for n in names)
+        if old and cur:
+            state, action = "old-and-current-site-file", "keep"
+            attention.append("The app has both an old and a current site file.")
+        elif old and panel:
+            state, action = "legacy-file-and-panel-website", "keep"
             attention.append(
                 "%s is served by an old JavaHost site file and by a panel website "
                 "(%s). Which one answers depends on load order, so the upgrade "
                 "leaves both as they are." % (domain, os.path.basename(panel[0]["path"])))
-        elif legacy:
+        elif old:
             state = "legacy-file"
-            action = "move"
-            notes.append("The site file moves to the panel's vhost folder; the "
-                         "site keeps answering the same way.")
-        elif ours and panel:
-            state = "site-file-and-panel-website"
-            action = "keep"
-            attention.append("%s is served by a JavaHost site file and by a panel "
-                             "website (%s)." % (domain, os.path.basename(panel[0]["path"])))
-        elif ours:
+            if apps_:
+                action = "keep"
+                attention.append("Another JavaHost site file (%s) serves the same name."
+                                 % os.path.basename(apps_[0]["path"]))
+            elif regex or not names:
+                action = "keep"
+                attention.append("The old site file's server names could not be "
+                                 "checked, so it is left where it is.")
+            elif not legacy_include:
+                action = "keep"
+                attention.append("nginx.conf does not load the old site folder, so "
+                                 "this site file is not being served.")
+            else:
+                action = "move"
+                notes.append("The site file moves to the panel's vhost folder; the "
+                             "site keeps answering the same way.")
+        elif cur and (panel or apps_):
+            state, action = "site-file-and-panel-website", "keep"
+            attention.append("%s is also served by %s." % (
+                domain, os.path.basename((panel or apps_)[0]["path"])))
+        elif cur:
             state = "site-file"
         elif panel:
             state = "panel-website"
@@ -145,13 +210,17 @@ def app_report(app: str) -> Dict:
             attention.append("%s is recorded for this app, but no nginx site "
                              "file serves it." % domain)
 
+        if mismatch and action in ("move", "mark", "none"):
+            action = "keep"
+        files = own + others
         http = [f for f in files if _proxies(f, domain, port)]
         tls = [f for f in files if f["https"]]
         if sslmod.read_ssl(app) and not any(_proxies(f, domain, port) for f in tls):
             attention.append(
                 "HTTPS is marked on, but no HTTPS site for %s sends traffic to "
                 "this app%s." % (domain, "; plain HTTP does reach it" if http else ""))
-        if owner_marker is None and state in ("legacy-file", "site-file", "panel-website"):
+        if owner_marker is None and action in ("none", "move") \
+                and state in ("legacy-file", "site-file", "panel-website"):
             notes.append("The owner marker is missing and will be written.")
             if action == "none":
                 action = "mark"
@@ -161,21 +230,25 @@ def app_report(app: str) -> Dict:
         notes.append("The service file differs from the current template (edited "
                      "by hand, or written by an older version). It is left as it "
                      "is; Repair re-creates it and restarts the app.")
-    if (unit["java_home"] or "").startswith(_PANEL_JDK):
+    jh = unit["java_home"] or ""
+    if jh == _PANEL_JDK or jh.startswith(_PANEL_JDK + "/"):
         attention.append("The app runs on the panel's shared Java (%s). Install a "
-                         "JavaHost runtime and repoint the app when convenient."
-                         % unit["java_home"])
+                         "JavaHost runtime and repoint the app when convenient." % jh)
     if unit["backend"] is None:
         attention.append("No service file was found for this app.")
 
     return {"app": app, "kind": kind, "port": port, "domain": domain,
-            "owner_marker": owner_marker, "state": state, "action": action,
+            "names": names, "owner_marker": owner_marker, "state": state,
+            "action": action,
             "service": {k: unit[k] for k in ("backend", "matches_template")},
             "notes": notes, "attention": attention}
 
 
 def report() -> Dict:
     """The whole install. Read-only."""
+    conf = _live(_read(proxy.NGINX_CONF) or "")
+    legacy_include = bool(re.search(
+        r"^\s*include\s+%s/\*\.conf\s*;" % re.escape(proxy.LEGACY_VHOST_DIR), conf, re.M))
     apps = []
     try:
         names = sorted(n for n in os.listdir(instance.INSTANCE_ROOT)
@@ -184,14 +257,10 @@ def report() -> Dict:
         names = []
     for name in names:
         try:
-            apps.append(app_report(name))
+            apps.append(app_report(name, legacy_include))
         except Exception as e:
             apps.append({"app": name, "state": "unreadable", "action": "keep",
                          "notes": [], "attention": ["could not be read: %s" % e]})
-
-    conf = _read(proxy.NGINX_CONF) or ""
-    legacy_include = bool(re.search(
-        r"^\s*include\s+%s/\*\.conf\s*;" % re.escape(proxy.LEGACY_VHOST_DIR), conf, re.M))
     try:
         legacy_files = sorted(f for f in os.listdir(proxy.LEGACY_VHOST_DIR)
                               if f.endswith(".conf"))
@@ -200,7 +269,7 @@ def report() -> Dict:
     known = {a["app"] for a in apps}
     orphans = [f for f in legacy_files if f[:-len(".conf")] not in known]
     staying = [a["app"] for a in apps
-               if a["state"] == "legacy-file-and-panel-website"]
+               if a["action"] == "keep" and ("%s.conf" % a["app"]) in legacy_files]
     server = []
     if legacy_include:
         server.append(
