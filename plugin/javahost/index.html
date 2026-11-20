@@ -747,6 +747,13 @@
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
+          <div><h3>Upgrade check</h3><p>How each app’s domain is served today, and what an upgrade may change. This only reads; it changes nothing</p></div>
+          <button class="jh-btn ghost sm" id="jh-upg-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div id="jh-upg-body"><div class="jh-loading">Loading…</div></div>
+      </div>
+      <div class="jh-card">
+        <div class="jh-card-h">
           <div><h3>aaPanel API</h3><p>How domains are published, and the panel API key the aaPanel-website option needs</p></div>
           <button class="jh-btn ghost sm" id="jh-panelapi-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
@@ -1559,6 +1566,63 @@
       renderDangerZone(p);
     });
   }
+  // --- Settings: upgrade check (read-only report) ----------------------------
+  var UPG_STATE = {
+    'not-published': 'no domain', 'site-file': 'JavaHost site file',
+    'panel-website': 'aaPanel website', 'legacy-file': 'old site file',
+    'legacy-file-and-panel-website': 'old site file + aaPanel website',
+    'site-file-and-panel-website': 'site file + aaPanel website',
+    'no-site-file': 'domain not served', 'unreadable': 'unreadable'
+  };
+  function refreshUpgradeReport(btn){
+    var body = $('jh-upg-body'); if(!body) return;
+    busy(btn, true);
+    call('GetUpgradeReport', {}, function(r){
+      busy(btn, false);
+      var b = $('jh-upg-body'); if(!b) return;
+      var p = payload(r);
+      if(failed(r) || !p || typeof p !== 'object' || !p.apps){
+        b.innerHTML = '<div class="jh-alert danger" role="alert">'+ic('warn')+
+          '<div>'+esc(errText(p) || 'The upgrade check could not run.')+'</div></div>';
+        return;
+      }
+      renderUpgradeReport(p);
+    });
+  }
+  function renderUpgradeReport(p){
+    var body = $('jh-upg-body'); if(!body) return;
+    var c = p.counts || {}, html = '';
+    if(!p.apps.length){
+      body.innerHTML = '<div class="jh-hint">No apps yet, so there is nothing to check.</div>';
+      return;
+    }
+    html += '<div class="jh-alert info" role="status">'+ic(c.attention ? 'warn' : 'info')+'<div>'+
+      (c.attention ? esc(String(c.attention))+' of '+esc(String(c.apps))+' apps need a look. They keep running as they are.'
+                   : 'All '+esc(String(c.apps))+' apps are in order.')+
+      (c.to_move ? ' '+esc(String(c.to_move))+' old site file(s) can move to the current layout.' : '')+
+      '</div></div>';
+    html += '<div class="jh-rows">';
+    p.apps.forEach(function(a){
+      var bad = a.attention && a.attention.length;
+      html += '<div class="jh-kv" style="align-items:flex-start"><span><strong>'+esc(a.app)+'</strong>'+
+        (a.domain ? '<div class="jh-hint">'+esc(a.domain)+'</div>' : '')+'</span>'+
+        '<span style="text-align:right">'+
+          pillSpan(bad ? 'danger' : 'ok', bad ? 'needs a look' : 'in order')+' '+
+          pillSpan('neutral', UPG_STATE[a.state] || a.state)+
+        '</span></div>';
+      var lines = (a.attention || []).concat(a.notes || []);
+      if(lines.length){
+        html += '<ul class="jh-hint" style="margin:0 0 var(--s3) var(--s4);padding:0">'+
+          lines.map(function(s){ return '<li>'+esc(s)+'</li>'; }).join('')+'</ul>';
+      }
+    });
+    (p.server || []).forEach(function(s){
+      html += '<div class="jh-hint">'+esc(s)+'</div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
   // --- Settings: aaPanel API key / panel port --------------------------------
   function refreshPanelApi(btn){
     var body = $('jh-panelapi-body'); if(!body) return;
@@ -4570,7 +4634,7 @@
     if(name === 'databases') renderDbPicker((STATE && STATE.apps) || []);
     if(name === 'backups') refreshBackupsTab();
     if(name === 'activity'){ refreshTasks(); startTasksPoll(); initLogsSection(); }
-    if(name === 'settings'){ refreshPanelApi(); refreshLogConfig(); refreshBackupLimits(); refreshDangerZone(); }
+    if(name === 'settings'){ refreshUpgradeReport(); refreshPanelApi(); refreshLogConfig(); refreshBackupLimits(); refreshDangerZone(); }
   }
   // pause/resume apps polling on tab visibility (cheap; tick also guards)
   document.addEventListener('visibilitychange', function(){
@@ -4922,6 +4986,7 @@
     if(ds.schedDel){ removeSchedule(ds.schedDel, b); return; }
     // settings / danger zone
     if(b.id === 'jh-run-wizard'){ openWizard(); return; }
+    if(b.id === 'jh-upg-refresh'){ refreshUpgradeReport(b); return; }
     if(b.id === 'jh-panelapi-refresh'){ refreshPanelApi(b); return; }
     if(b.id === 'jh-panelapi-save'){ savePanelApi(b); return; }
     if(b.id === 'jh-logcfg-refresh'){ refreshLogConfig(b); return; }
