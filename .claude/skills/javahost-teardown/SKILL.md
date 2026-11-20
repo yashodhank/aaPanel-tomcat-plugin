@@ -20,7 +20,7 @@ teardown (`core/maintenance.wipe`, `install.sh uninstall`) over hand-rolled `rm`
 
 ## 0. Rules (read first — these are hard constraints)
 1. **Inventory before you destroy; verify after.** Both are read-only ssh.
-2. **Preserve the panel.** NEVER `certbot delete 5d.bisotech.in` (the panel's own
+2. **Preserve the panel.** NEVER `certbot delete jh.example.com` (the panel's own
    cert), never touch the aaPanel install, other plugins, other sites, or any
    non-`javahost` container.
 3. **Scoped Docker only.** NEVER `docker volume prune` / `docker system prune`
@@ -104,9 +104,9 @@ ssh root@<box> 'rm -rf /root/btjdk.removed-* ; rm -f /etc/cron.d/javahost-backup
 `ls /www/server/javahost` → not found · `systemctl list-units 'javahost-*'` → empty ·
 `ls /www/server/panel/plugin/javahost` → not found · `grep -c javahost
 /www/server/nginx/conf/nginx.conf` → 0 · `nginx -t` OK · `docker ps -a | grep
-javahost-demo` → empty · `certbot certificates` still lists `5d.bisotech.in`
+javahost-demo` → empty · `certbot certificates` still lists `jh.example.com`
 (preserved) · panel loads · `df -h` shows the space freed.
 
 ## Out of scope
-The aaPanel panel + its `5d.bisotech.in` cert; other plugins/sites/containers; the
-external `*.5d.bisotech.in` DNS (remove at the provider); the GitHub repo/releases.
+The aaPanel panel + its `jh.example.com` cert; other plugins/sites/containers; the
+external `*.jh.example.com` DNS (remove at the provider); the GitHub repo/releases.

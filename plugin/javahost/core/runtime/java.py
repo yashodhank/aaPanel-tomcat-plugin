@@ -107,11 +107,26 @@ _ADOPTIUM_API = "https://api.adoptium.net/v3"
 _UA = "JavaHost/1.0 (+https://github.com/yashodhank/aaPanel-tomcat-plugin)"
 
 
-def _latest_asset(major: int, arch: str = "x64", os_name: str = "linux") -> Dict:
+# platform.machine() -> Adoptium "architecture". Anything else is refused up
+# front: a JDK built for another CPU downloads and verifies fine, then cannot run.
+_ADOPTIUM_ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "aarch64", "arm64": "aarch64"}
+
+
+def host_arch() -> str:
+    import platform
+    machine = platform.machine().lower()
+    try:
+        return _ADOPTIUM_ARCH[machine]
+    except KeyError:
+        raise RuntimeError("no Temurin JDK is offered for this server's CPU (%s)" % (machine or "unknown"))
+
+
+def _latest_asset(major: int, arch: Optional[str] = None, os_name: str = "linux") -> Dict:
     """Adoptium's latest Temurin JDK asset metadata for a major (dict). Raises on
     empty/HTTP error. Shared by install + update-check so they agree on 'latest'."""
     import json as _json
     import urllib.request
+    arch = arch or host_arch()
     api = ("%s/assets/latest/%d/hotspot?architecture=%s&image_type=jdk&os=%s"
            % (_ADOPTIUM_API, major, arch, os_name))
     req = urllib.request.Request(api, headers={"User-Agent": _UA})
@@ -127,7 +142,7 @@ def _asset_semver(asset: Dict) -> Optional[str]:
     return ver.get("semver") or ver.get("openjdk_version") or asset.get("release_name")
 
 
-def resolve_latest_jdk(major: int, *, arch: str = "x64", os_name: str = "linux") -> Optional[str]:
+def resolve_latest_jdk(major: int, *, arch: Optional[str] = None, os_name: str = "linux") -> Optional[str]:
     """Latest upstream Temurin semver for a major (e.g. '17.0.11+9'), or None."""
     return _asset_semver(_latest_asset(int(major), arch, os_name))
 
@@ -192,7 +207,7 @@ def _jdk_major_lock(major: int):
             os.close(fd)
 
 
-def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") -> str:
+def install_temurin(major: int, *, arch: Optional[str] = None, os_name: str = "linux") -> str:
     """Serialize a complete staged install/update for one JDK major."""
     if major not in (17, 21, 11, 8):
         raise ValueError("unsupported JDK major to install: %s" % major)
@@ -200,7 +215,7 @@ def install_temurin(major: int, *, arch: str = "x64", os_name: str = "linux") ->
         return _install_temurin_locked(major, arch=arch, os_name=os_name)
 
 
-def _install_temurin_locked(major: int, *, arch: str = "x64",
+def _install_temurin_locked(major: int, *, arch: Optional[str] = None,
                             os_name: str = "linux") -> str:
     """Download + verify + staged-extract Temurin JDK <major>. Returns JAVA_HOME.
 

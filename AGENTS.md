@@ -32,7 +32,7 @@
 - Filesystem: `fs.atomic_write` + `fs.safe_rmtree` (marker/root-gated)
 - Panel coupling: ONLY `core/compat/aapanel.py` touches aaPanel internals
 - Secrets: DB creds in `app.env` (0640) only, never in URL/logs/response
-- Never commit: `5d.bisotech.in`, VPS IPs, panel creds, aaPanel proprietary source
+- Never commit: the test VPS hostname, VPS IPs, panel creds, aaPanel proprietary source
 - Templates: `@@token@@` via `tomcat.templating`
 
 ## Project skills (in `.claude/skills/`)

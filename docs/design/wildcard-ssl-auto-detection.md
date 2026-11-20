@@ -7,14 +7,14 @@
 ## Current state
 
 JavaHost's `SetSiteSSL` issues per-site Let's Encrypt certs via HTTP-01 challenge only.
-Each site gets its own cert (e.g. `app1.5d.bisotech.in`). This works but creates:
+Each site gets its own cert (e.g. `app1.jh.example.com`). This works but creates:
 - Rate limit pressure (LE allows 50 certs per domain per week)
 - Many cert renewal hooks
 - Slow per-site issuance (~30s each)
 
 ## Proposed: Auto-use existing wildcard cert
 
-If a wildcard cert exists for `*.5d.bisotech.in` (at `/etc/letsencrypt/live/5d.bisotech.in/`),
+If a wildcard cert exists for `*.jh.example.com` (at `/etc/letsencrypt/live/jh.example.com/`),
 the plugin should auto-detect it and skip per-site cert issuance.
 
 ### Discovery

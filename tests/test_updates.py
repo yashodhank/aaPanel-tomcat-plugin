@@ -101,3 +101,34 @@ def test_invalidate_removes_cache(tmp_path, monkeypatch):
     # next non-force check must recompute (cache gone), not read stale
     res = updates.check(force=False, now=1000.0 + 1)
     assert res["cached"] is False
+
+
+# ---- JDK architecture follows the server's CPU ------------------------------- #
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("machine,want", [("x86_64", "x64"), ("AMD64", "x64"),
+                                          ("aarch64", "aarch64"), ("arm64", "aarch64")])
+def test_jdk_download_asks_for_the_servers_cpu(monkeypatch, machine, want):
+    import io
+    import platform
+    import urllib.request
+    seen = []
+
+    def fake_open(req, timeout=0):
+        seen.append(req.full_url)
+        return io.BytesIO(b'[{"version": {"semver": "17.0.11+9"}}]')
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+    assert java.resolve_latest_jdk(17) == "17.0.11+9"
+    assert "architecture=%s&" % want in seen[0]
+
+
+def test_jdk_download_refuses_a_cpu_temurin_does_not_build_for(monkeypatch):
+    import platform
+    import urllib.request
+    monkeypatch.setattr(platform, "machine", lambda: "riscv64")
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: pytest.fail("must not download"))
+    with pytest.raises(RuntimeError, match="riscv64"):
+        java.resolve_latest_jdk(17)

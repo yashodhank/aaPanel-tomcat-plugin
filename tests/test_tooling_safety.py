@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -11,7 +12,8 @@ def test_deploy_requires_explicit_host_and_has_no_public_ip_default():
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
     assert "VPS_HOST    ?=" not in makefile
-    assert "217.217.248.180" not in makefile
+    # no host address of any kind baked into the Makefile
+    assert not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", makefile)
     assert 'test -n "$(VPS_HOST)"' in makefile
 
 
@@ -89,3 +91,14 @@ def test_deploy_dry_run_propagates_host_to_recursive_restart():
     assert "rsync " in output
     assert "root@test-host:/www/server/panel/plugin/javahost/" in output
     assert "ssh root@test-host " in output
+
+
+def test_no_tracked_file_names_the_test_server():
+    # split so this file does not match itself
+    host = "bisotech" + ".in"
+    git = shutil.which("git")
+    if not git or not (ROOT / ".git").exists():
+        return
+    res = subprocess.run([git, "grep", "-lF", host, "--", "."], cwd=str(ROOT),
+                         stdout=subprocess.PIPE, universal_newlines=True)
+    assert res.stdout.strip() == "", "test server hostname committed in: %s" % res.stdout

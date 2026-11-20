@@ -212,3 +212,70 @@ def test_restore_dialogs_do_not_keep_a_stale_confirmation_or_rearm_mid_upload(ht
     assert "data-uploading" in up and "if(asNew) cf.value = '';" in up
     lst = section(html, "function openRestoreModal(name, app, locations){", "function deleteBackup(")
     assert "if(asNew) cf.value = '';" in lst
+
+
+# ---- CSRF token: the panel rejects a POST without it (INIT_CSRF_ERR) --------- #
+_TOKEN_DOC = """
+        const document={getElementById:id=>id==='request_token_head'
+          ? {getAttribute:()=>'TOK123'} : null};
+"""
+
+
+def test_every_plugin_request_carries_the_panel_token(html):
+    helper = section(html, "var LOGIN_RE", "// {status,msg}")
+    result = run_node(
+        """
+        let sent=[];
+        function sessionExpired(){} function setTimeout(){return 1;} function clearTimeout(){}
+        function $(){}
+        $.post=function(){ sent.push({via:'post'}); return {fail:function(){return this;}}; };
+        $.ajax=function(o){ sent.push({via:'ajax', type:o.type, url:o.url, headers:o.headers});
+          o.success({status:true,msg:'ok'}); return {fail:function(){return this;}}; };
+        const window={$:$};
+        """ + _TOKEN_DOC + helper + """
+        let got=[]; call('GetStatus',{},r=>got.push(r));
+        process.stdout.write(JSON.stringify({sent:sent, got:got}));
+        """
+    )
+    assert result["sent"] == [{"via": "ajax", "type": "POST",
+                               "url": "/plugin?action=a&name=javahost&s=GetStatus",
+                               "headers": {"x-http-token": "TOK123"}}]
+    assert result["got"] == [{"status": True, "msg": "ok"}]
+
+
+def test_fetch_fallback_and_uploads_carry_the_panel_token(html):
+    helper = section(html, "var LOGIN_RE", "// {status,msg}")
+    result = run_node(
+        """
+        let sent=[];
+        function sessionExpired(){} function setTimeout(){return 1;} function clearTimeout(){}
+        const window={};
+        function fetch(url,o){ sent.push(o.headers); return new Promise(()=>{}); }
+        """ + _TOKEN_DOC + helper + """
+        call('GetStatus',{},()=>{});
+        sent.push(tokenHeaders());            // what stageUpload passes to fetch
+        process.stdout.write(JSON.stringify(sent));
+        """
+    )
+    assert result[0]["x-http-token"] == "TOK123"
+    assert result[1] == {"x-http-token": "TOK123"}
+    assert "headers:tokenHeaders()" in section(html, "var UPLOAD_TIMEOUT", "MODAL: CREATE APP")
+
+
+def test_no_token_on_the_page_keeps_the_plain_request(html):
+    helper = section(html, "var LOGIN_RE", "// {status,msg}")
+    result = run_node(
+        """
+        let sent=[];
+        function sessionExpired(){} function setTimeout(){return 1;} function clearTimeout(){}
+        function $(){}
+        $.post=function(u){ sent.push(['post',u]); return {fail:function(){return this;}}; };
+        $.ajax=function(){ sent.push(['ajax']); return {fail:function(){return this;}}; };
+        const window={$:$};
+        const document={getElementById:()=>null};
+        """ + helper + """
+        call('GetStatus',{},()=>{});
+        process.stdout.write(JSON.stringify(sent));
+        """
+    )
+    assert result == [["post", "/plugin?action=a&name=javahost&s=GetStatus"]]
