@@ -823,6 +823,7 @@ def test_start_enforces_default_terminal_retention(tmp_path, monkeypatch):
 # reverse-proxy sites (no nginx, no aaPanel)
 # --------------------------------------------------------------------------- #
 def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(proxy.config, "publish_mode", lambda: "panel")
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     vdir = str(tmp_path / "vhost")
@@ -838,10 +839,11 @@ def test_set_site_errors_when_aapanel_unavailable(tmp_path, monkeypatch):
     res = proxy.set_site("demo", "demo.jh.example.com", 8080)
     assert res["ok"] is False
     assert "aaPanel site registration failed" in res["error"]
-    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert not os.path.isfile(proxy.vhost_path("demo"))
 
 
 def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(proxy.config, "publish_mode", lambda: "panel")
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     monkeypatch.setattr(proxy.panel_api, "ensure_ws_map", lambda: True)
@@ -857,7 +859,7 @@ def test_set_site_prefers_aapanel_when_available(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "reload_nginx", lambda: True)
     res = proxy.set_site("demo", "demo.example.com", 8081)
     assert res["via"] == "aapanel"
-    assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
+    assert not os.path.isfile(proxy.vhost_path("demo"))
 
 
 def test_default_domain_convention(monkeypatch):

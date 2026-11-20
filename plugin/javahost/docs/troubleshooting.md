@@ -141,16 +141,15 @@ Python modules are re-loaded on the next request — just `scp` the changed file
 
 ## "aaPanel site registration failed" on SetSite
 
-**Root cause:** JavaHost registers reverse-proxy sites through aaPanel's internal
-site management API. If that API is unreachable, site creation fails with this
-error. Prior to v0.28.0, the plugin silently fell back to writing a standalone
-nginx vhost that worked at the nginx level but never appeared in aaPanel's Sites
-panel — sites were invisible and unmanageable from aaPanel UI.
+This error only comes up when **Settings → Publish domains as** is set to
+**aaPanel website**. The default, **JavaHost site file**, does not use the
+panel's site API or an API key; switch to it if you do not need the site listed
+under **Website**.
 
-**Current behaviour (v0.28.0+):** Site registration goes through aaPanel's native
-API exclusively (3-tier fallback: class API → legacy panelSite → HTTP API). If
-all paths fail, the error is returned with diagnostics showing which paths were
-tried.
+**Root cause:** in aaPanel-website mode JavaHost registers the site through
+aaPanel's site API (HTTP API with the key first, then the class API and the
+legacy panelSite module). If every path fails, the error lists which paths were
+tried, and no nginx file is written as a silent substitute.
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|

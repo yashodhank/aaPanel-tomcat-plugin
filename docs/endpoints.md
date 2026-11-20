@@ -82,7 +82,7 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 | `MarkWizardDone` | — | Persist `wizard_done` so the wizard does not auto-open again. |
 | `SetSiteSuffix` | `suffix` | Set or clear the default `<app>.<suffix>` domain suffix (empty clears). |
 | `GetPanelApi` | — | `{aapanel_api_key_set, aapanel_port}` — never returns the secret key. |
-| `SetPanelApi` | `api_key?`, `port?` | Persist aaPanel interface API key and/or panel port. |
+| `SetPanelApi` | `api_key?`, `port?`, `publish_mode?` | Persist aaPanel interface API key, panel port and/or how domains are published: `vhost` (default, a JavaHost nginx site file, no key) or `panel` (an aaPanel website; refused without a key). Clearing the key switches back to `vhost`. |
 | `GetLogConfig` | — | Rotation/purge settings + live/rotated log disk usage. |
 | `SetLogConfig` | `enabled?`, `when?`, `keep?`, `max_mb?`, `purge_days?` | Update logrotate settings and regenerate managed cron. |
 | `PurgeLogsNow` | `all?` | Rotate now, then purge rotated artifacts (or all when `all=1`). |
@@ -99,7 +99,7 @@ does not reuse aaPanel's `/usr/local/btjdk`. See
 
 | Method | Params | Returns / notes |
 |--------|--------|-----------------|
-| `SetSite` | `app`, `domain?` | Publish `<app>` reverse-proxied to its loopback port. Domain = `?domain=` or the `<app>.<site_suffix>` convention; with neither, errors (no FQDN guessed). aaPanel site API preferred, nginx-vhost fallback → `{domain, url, via}`. |
+| `SetSite` | `app`, `domain?` | Publish `<app>` reverse-proxied to its loopback port. Domain = `?domain=` or the `<app>.<site_suffix>` convention; with neither, errors (no FQDN guessed). Published per `publish_mode`: `vhost` writes `javahost_<app>.conf` in the panel vhost folder (kept only if `nginx -t` passes; a domain already served by a panel website or another app is refused); `panel` registers an aaPanel website → `{domain, url, via, owner, note?}`. |
 | `RemoveSite` | `app` | Remove that site. |
 | `SetSiteSSL` | `app`, `enable`, `domain?`, `email?` | `enable` truthy → issue LE cert + switch the vhost to HTTPS (**aaPanel-native ACME first, certbot `--webroot` fallback**); falsy → revert to HTTP (cert kept). Requires a real domain. → `{app, domain, ssl, url, via?}`. |
 | `GetSiteStatus` | `app`, `probe_site?` (default on) | On-demand site/cert status: configured domain, cert presence/validity/expiry, HTTP→HTTPS redirect, HTTPS reachability. Powers the drawer's **Site & SSL** block. |

@@ -389,21 +389,31 @@ user, driver, and whether a password is set — or "No database env configured".
 Open the **Help** tab. The **Reverse-proxy hint** card (`GetProxyHint`) shows an
 Nginx vhost **include snippet** that the plugin manages automatically.
 
-JavaHost creates and manages reverse-proxy sites for you with
-**`SetSite{app, domain?}`** (remove with **`RemoveSite{app}`**). The site is
-registered through aaPanel's native site management API — it appears in aaPanel's
-**Sites** panel just like any manually-created site. The backend proxies to the
-app's loopback port (`127.0.0.1:<port>`).
+JavaHost publishes an app at a domain with **`SetSite{app, domain?}`** (remove
+with **`RemoveSite{app}`**). The domain is proxied to the app's loopback port
+(`127.0.0.1:<port>`). **Settings → Publish domains as** picks how:
+
+- **JavaHost site file** (default). JavaHost writes one nginx file,
+  `javahost_<app>.conf`, into the panel's vhost folder
+  (`/www/server/panel/vhost/nginx/`). The panel's `nginx.conf` already loads
+  that folder, so `nginx.conf` is not edited and no API key is needed. The file
+  is kept only if `nginx -t` accepts it. The site is not listed under
+  **Website**. A domain that a panel website or another app already uses is
+  refused.
+- **aaPanel website**. The site is registered in the panel and listed under
+  **Website**. This needs the panel API key (below).
+
+Changing the setting affects domains published afterwards; sites already
+published stay as they are.
 
 With no `domain`, JavaHost uses the `<app>.<suffix>` convention, where the suffix
 is the plugin config key **`site_suffix`** (in `/www/server/javahost/config.json`).
 `site_suffix` is **empty by default** — so unless you set one, you supply an
 explicit domain and no FQDN is ever guessed.
 
-> **Requires `aapanel_api_key`.** If aaPanel's internal Python API is unavailable
-> (rare), site registration falls back to aaPanel's HTTP API which needs the
-> interface API key. Set it in **Settings → API Key** (find `api_sk` in
-> aaPanel → Settings → API Interface). See
+> **The aaPanel website option needs `aapanel_api_key`.** Set it in
+> **Settings → aaPanel API** (find `api_sk` in aaPanel → Settings → API
+> Interface). See
 > [troubleshooting](troubleshooting.md#aapanel-site-registration-failed-on-setsite)
 > for diagnostics.
 

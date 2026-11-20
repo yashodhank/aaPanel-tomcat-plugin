@@ -1331,7 +1331,8 @@ def test_remove_site_clears_marker_on_success(tmp_path, monkeypatch):
 
 
 def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
-    """When all aaPanel API paths fail, set_site returns error — no nginx fallback."""
+    """In panel mode, when all aaPanel API paths fail, set_site returns error — no nginx fallback."""
+    monkeypatch.setattr(proxy.config, "publish_mode", lambda: "panel")
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
     vdir = str(tmp_path / "vhost")
@@ -1348,10 +1349,11 @@ def test_set_site_errors_when_aapanel_api_fails(tmp_path, monkeypatch):
     res = proxy.set_site("demo", "demo.example.com", 8080)
     assert res["ok"] is False
     assert "aaPanel site registration failed" in res["error"]
-    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert not os.path.isfile(proxy.vhost_path("demo"))
 
 
 def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(proxy.config, "publish_mode", lambda: "panel")
     from core.tomcat import instance as inst
     from core.compat import aapanel as panel_api
     monkeypatch.setattr(panel_api, "detect_webserver", lambda: "nginx")
@@ -1368,7 +1370,7 @@ def test_set_site_aapanel_true_status_succeeds(tmp_path, monkeypatch):
     assert res["via"] == "aapanel"
     assert res.get("owner") == "aapanel"
     assert "warning" not in res
-    assert not os.path.isfile(os.path.join(str(tmp_path / "vhost"), "demo.conf"))
+    assert not os.path.isfile(proxy.vhost_path("demo"))
 
 
 # ---- ssl.disable reverts to HTTP and clears the marker ----------------------
@@ -2310,7 +2312,7 @@ def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     # sites under VHOST_DIR
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "site.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_site.conf").write_text("# Managed by JavaHost\nserver {}\n")
     monkeypatch.setattr(maintenance, "DATA_ROOT", str(tmp_path / "javahost"))
 
     res = maintenance.wipe_preview()
@@ -2322,7 +2324,7 @@ def test_wipe_preview_shape_lists_plugin_jdks_not_panel(monkeypatch, tmp_path):
     assert res["jdks"]["items"] == ["jdk-17", "jdk-8"]
     assert "/usr/local/btjdk" not in str(res["jdks"])
     assert res["tomcats"]["items"] == ["11"]
-    assert res["sites"]["items"] == ["site.conf"]
+    assert res["sites"]["items"] == ["javahost_site.conf"]
     assert res["data_root"]["path"].endswith("/javahost")
 
 
@@ -2356,8 +2358,8 @@ def test_wipe_sites_calls_remove_site(monkeypatch, tmp_path):
     from core import maintenance
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "demo.conf").write_text("server {}\n")
-    (tmp_path / "vhost" / "shop.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_demo.conf").write_text("# Managed by JavaHost\nserver {}\n")
+    (tmp_path / "vhost" / "javahost_shop.conf").write_text("# Managed by JavaHost\nserver {}\n")
     calls = []
     monkeypatch.setattr(maintenance.proxy, "remove_site",
                         lambda app: calls.append(app) or {"app": app, "removed": True})
@@ -2471,14 +2473,14 @@ def test_remove_site_aapanel_not_found_keeps_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy, "aapanel_remove_site", lambda d: False)
 
     os.makedirs(vdir, exist_ok=True)
-    open(os.path.join(vdir, "demo.conf"), "w").write("server {}\n")
+    open(proxy.vhost_path("demo"), "w").write("# Managed by JavaHost\nserver {}\n")
 
     res = proxy.remove_site("demo")
     assert res["removed"] is False
     assert res["aapanel_cleaned"] is False
     assert proxy.read_domain("demo") == "demo.example.com"
     # Plugin vhost is still cleaned up.
-    assert not os.path.isfile(os.path.join(vdir, "demo.conf"))
+    assert not os.path.isfile(proxy.vhost_path("demo"))
 
 
 # ---- DeleteApp calls remove_site ---------------------------------------------

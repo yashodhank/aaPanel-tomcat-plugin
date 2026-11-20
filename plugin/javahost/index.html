@@ -747,7 +747,7 @@
     <section class="jh-page" id="page-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
       <div class="jh-card">
         <div class="jh-card-h">
-          <div><h3>aaPanel API</h3><p>Interface API key used for reverse-proxy site registration and native ACME</p></div>
+          <div><h3>aaPanel API</h3><p>How domains are published, and the panel API key the aaPanel-website option needs</p></div>
           <button class="jh-btn ghost sm" id="jh-panelapi-refresh" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
         <div id="jh-panelapi-body"><div class="jh-loading">Loading…</div></div>
@@ -1579,11 +1579,18 @@
     var body = $('jh-panelapi-body'); if(!body) return;
     var set = !!(p && p.aapanel_api_key_set);
     var port = (p && p.aapanel_port != null) ? p.aapanel_port : '';
+    var mode = (p && p.publish_mode === 'panel') ? 'panel' : 'vhost';
     body.innerHTML =
       '<div class="jh-rows">'+
+        '<div class="jh-field wide"><label for="panelapi-mode">Publish domains as</label>'+
+          '<select id="panelapi-mode" data-cur="'+mode+'" aria-describedby="panelapi-mode-hint">'+
+            '<option value="vhost"'+(mode==='vhost'?' selected':'')+'>JavaHost site file (default, no API key)</option>'+
+            '<option value="panel"'+(mode==='panel'?' selected':'')+'>aaPanel website (needs the API key)</option>'+
+          '</select></div>'+
+        '<div class="jh-hint" id="panelapi-mode-hint">JavaHost site file: one nginx file per app in the panel’s vhost folder. It works without a key; the site is not listed under Website. aaPanel website: the site is listed under Website and the panel manages it. Changing this affects domains you publish from now on.</div>'+
         '<div class="jh-kv"><span>API key status</span>'+
           (set ? pillSpan('ok', 'configured', 'Interface API key is stored in plugin config')
-               : pillSpan('warn', 'not set', 'SetSite HTTP fallback and native ACME need api_sk'))+'</div>'+
+               : pillSpan('neutral', 'not set', 'Only needed to publish domains as aaPanel websites'))+'</div>'+
         '<div class="jh-field wide"><label for="panelapi-key">Interface API key (api_sk)</label>'+
           '<input id="panelapi-key" type="password" autocomplete="off" placeholder="'+(set?'•••••••• (leave blank to keep)':'Paste from aaPanel → Settings → API')+'"></div>'+
         '<div class="jh-field" style="max-width:12rem"><label for="panelapi-port">Panel port</label>'+
@@ -1605,7 +1612,9 @@
     if(clear){ data.api_key = ''; }
     else if(keyEl && String(keyEl.value || '').trim()){ data.api_key = String(keyEl.value).trim(); }
     if(portEl){ data.port = String(portEl.value || '').trim(); }
-    if(data.api_key === undefined && data.port === undefined){
+    var modeEl = $('panelapi-mode');
+    if(modeEl && modeEl.value !== modeEl.getAttribute('data-cur')){ data.publish_mode = modeEl.value; }
+    if(data.api_key === undefined && data.port === undefined && data.publish_mode === undefined){
       busy(btn, false); toast('Nothing to save', 'err'); return;
     }
     call('SetPanelApi', data, function(r){
@@ -2836,6 +2845,7 @@
       var dom = (p && (p.domain || p.url)) || domain;
       if(APPS_BY_NAME[app]){ APPS_BY_NAME[app].domain = (p && p.domain) || dom.replace(/^https?:\/\//,'').replace(/\/+$/,''); }
       toast('Reverse proxy ready: '+((p&&p.domain)||dom), 'ok');
+      if(p && p.note){ toast(p.note); }
       refreshOpen(app);
       if(DRAWER.app === app) drawerOverview();   // rebuild the drawer Open row
       refresh();                                  // pick up the new domain server-side

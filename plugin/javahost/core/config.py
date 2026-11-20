@@ -183,6 +183,12 @@ def aapanel_api_key():
     return str(val) if val else None
 
 
+def publish_mode() -> str:
+    """How SetSite publishes a domain: "vhost" (default; a JavaHost-owned nginx
+    site file, no API key) or "panel" (a panel website, needs the API key)."""
+    return "panel" if get("publish_mode", None) == "panel" else "vhost"
+
+
 def aapanel_port(default: int = 37778):
     """Local aaPanel panel port for loopback API calls.
 

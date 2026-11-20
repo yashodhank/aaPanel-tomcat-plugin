@@ -323,11 +323,11 @@ def test_sites_scope_covers_sites_registered_in_aapanel(tmp_path, monkeypatch):
     monkeypatch.setattr(instance, "INSTANCE_ROOT", str(tmp_path / "instances"))
     monkeypatch.setattr(maintenance.proxy, "VHOST_DIR", str(tmp_path / "vhost"))
     (tmp_path / "vhost").mkdir()
-    (tmp_path / "vhost" / "legacy.conf").write_text("server {}\n")
+    (tmp_path / "vhost" / "javahost_legacy.conf").write_text("# Managed by JavaHost\nserver {}\n")
     for app in ("legacy", "shop", "nosite"):
         (tmp_path / "instances" / app / "bin").mkdir(parents=True)
     proxy._store_domain("shop", "shop.example.com")      # aaPanel-owned: no vhost file
-    assert maintenance._list_sites() == ["legacy.conf", "shop.example.com (app shop)"]
+    assert maintenance._list_sites() == ["javahost_legacy.conf", "shop.example.com (app shop)"]
 
     monkeypatch.setattr(maintenance.proxy, "remove_site", lambda app: (
         {"app": app, "removed": True} if app == "legacy" else
