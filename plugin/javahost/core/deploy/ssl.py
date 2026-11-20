@@ -39,7 +39,10 @@ SSL_MARKER_NAME = "site.ssl"
 RENEWAL_HOOK = "/etc/letsencrypt/renewal-hooks/deploy/javahost-nginx.sh"
 _RENEWAL_HOOK_BODY = """#!/bin/sh
 # Managed by JavaHost. Reload nginx after LE renewal and refresh SSL markers.
-nginx -s reload
+# The panel's nginx, not a distro package that may sit earlier on PATH.
+N=/www/server/nginx/sbin/nginx
+[ -x "$N" ] || N=nginx
+"$N" -t && "$N" -s reload
 python3 - <<'PY'
 try:
     from core.deploy import ssl as jh_ssl

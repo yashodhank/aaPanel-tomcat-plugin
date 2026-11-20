@@ -33,6 +33,7 @@ VHOST_DIR = "/www/server/panel/vhost/nginx"
 LEGACY_VHOST_DIR = "/www/server/javahost/vhost/nginx"
 VHOST_PREFIX = "javahost_"
 NGINX_CONF = "/www/server/nginx/conf/nginx.conf"
+PANEL_NGINX = "/www/server/nginx/sbin/nginx"
 # Shared ACME webroot for HTTP-01 challenge files (issuance + renewal). Both the
 # native (aaPanel) and certbot paths serve challenges from here, so the port-80
 # server ALWAYS exposes /.well-known/acme-challenge/ pointing at it.
@@ -106,9 +107,17 @@ server {
 }
 """
 
+def _nginx() -> str:
+    """The panel's own nginx binary. A distro nginx package can sit earlier on
+    PATH with a config and pid file of its own, so PATH is only the fallback."""
+    if os.path.isfile(PANEL_NGINX):
+        return PANEL_NGINX
+    return shell.which("nginx") or PANEL_NGINX
+
+
 def _nginx_supports_http2_on() -> bool:
     """True when `nginx -V` reports a version that accepts standalone `http2 on;`."""
-    nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
+    nginx = _nginx()
     try:
         rc, out, err = shell.run([nginx, "-V"], check=False)
     except Exception:
@@ -268,7 +277,7 @@ def publish_vhost(app: str, domain: str, port: int, **kw) -> Optional[str]:
 
 
 def nginx_test() -> bool:
-    nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
+    nginx = _nginx()
     rc, _, _ = shell.run([nginx, "-t"], check=False)
     return rc == 0
 
@@ -306,7 +315,7 @@ def reload_nginx() -> bool:
 
     Returns True on a successful test+reload, False otherwise. Never raises so a
     site write can report partial success rather than 500."""
-    nginx = shell.which("nginx") or "/www/server/nginx/sbin/nginx"
+    nginx = _nginx()
     rc, _, _ = shell.run([nginx, "-t"], check=False)
     if rc != 0:
         return False

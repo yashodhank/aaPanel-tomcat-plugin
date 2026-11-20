@@ -259,3 +259,26 @@ def test_https_endpoint_refuses_a_marker_the_vhost_does_not_back(box, monkeypatc
     monkeypatch.setattr(sslmod, "enable", lambda *a, **k: pytest.fail("must not reach ssl.enable"))
     r = javahost_main.javahost_main().SetSiteSSL(SimpleNamespace(app="shop", enable="1"))
     assert r["status"] is False and "not the domain this app is published at" in r["msg"]
+
+
+def test_panel_nginx_wins_over_one_on_path(monkeypatch):
+    """A distro nginx earlier on PATH has its own config and pid file: testing
+    or reloading it says nothing about the nginx that serves the sites."""
+    calls = []
+    monkeypatch.setattr(proxy.shell, "which", lambda name: "/usr/sbin/nginx")
+    monkeypatch.setattr(proxy.shell, "run",
+                        lambda cmd, **kw: (calls.append(cmd) or (0, "", "")))
+    monkeypatch.setattr(proxy.os.path, "isfile", lambda p: p == proxy.PANEL_NGINX)
+    assert proxy.nginx_test() and proxy.reload_nginx()
+    proxy._nginx_supports_http2_on()
+    assert calls and all(c[0] == proxy.PANEL_NGINX for c in calls)
+    monkeypatch.setattr(proxy.os.path, "isfile", lambda p: False)
+    assert proxy._nginx() == "/usr/sbin/nginx"
+
+
+def test_renewal_hook_reloads_the_panel_nginx():
+    from core.deploy import ssl as sslmod
+    body = sslmod._RENEWAL_HOOK_BODY
+    assert "N=%s\n" % proxy.PANEL_NGINX in body
+    assert '"$N" -t && "$N" -s reload' in body
+    assert "\nnginx -s reload" not in body
