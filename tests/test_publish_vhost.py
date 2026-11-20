@@ -274,3 +274,11 @@ def test_panel_nginx_wins_over_one_on_path(monkeypatch):
     assert calls and all(c[0] == proxy.PANEL_NGINX for c in calls)
     monkeypatch.setattr(proxy.os.path, "isfile", lambda p: False)
     assert proxy._nginx() == "/usr/sbin/nginx"
+
+
+def test_renewal_hook_reloads_the_panel_nginx():
+    from core.deploy import ssl as sslmod
+    body = sslmod._RENEWAL_HOOK_BODY
+    assert "N=%s\n" % proxy.PANEL_NGINX in body
+    assert '"$N" -t && "$N" -s reload' in body
+    assert "\nnginx -s reload" not in body
