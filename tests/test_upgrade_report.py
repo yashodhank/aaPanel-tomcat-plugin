@@ -104,7 +104,7 @@ def test_the_production_layout_is_reported_and_nothing_is_written(box):
     assert any("differs from the current template" in n for n in p["notes"])
 
     assert rep["legacy_include"] is True and rep["legacy_files"] == ["Portal.conf"]
-    assert "stays while old site files remain (Portal)" in rep["server"][0]
+    assert "Old site files are still served from it (Portal)" in rep["server"][0]
     assert rep["counts"] == {"apps": 2, "to_move": 0, "attention": 1}
     assert dict(box.snapshot()) == before            # read-only, byte for byte
 
@@ -116,7 +116,7 @@ def test_old_site_file_alone_is_marked_to_move(box):
     proxy._store_owner("shop", "javahost")
     a = _by_app(upgrade.report())["shop"]
     assert a["state"] == "legacy-file" and a["action"] == "move" and not a["attention"]
-    assert "removed once the old site files have moved" in upgrade.report()["server"][0]
+    assert "harmless once that folder is empty" in upgrade.report()["server"][0]
 
 
 def test_panel_website_is_checked_for_a_real_proxy(box):
