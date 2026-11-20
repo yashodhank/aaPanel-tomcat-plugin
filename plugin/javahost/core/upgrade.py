@@ -191,9 +191,14 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
                 attention.append("nginx.conf does not load the old site folder, so "
                                  "this site file is not being served.")
             else:
-                action = "move"
-                notes.append("The site file moves to the panel's vhost folder; the "
-                             "site keeps answering the same way.")
+                stays = _stays_put(proxy.legacy_vhost_path(app))
+                if stays:
+                    action = "keep"
+                    notes.append("The old site file stays where it is: %s." % stays)
+                else:
+                    action = "move"
+                    notes.append("The site file moves to the panel's vhost folder; "
+                                 "the site keeps answering the same way.")
         elif cur and (panel or apps_):
             state, action = "site-file-and-panel-website", "keep"
             attention.append("%s is also served by %s." % (
@@ -324,6 +329,41 @@ class _Undo(Exception):
 def _plain_listens(body: str) -> bool:
     listens = re.findall(r"^\s*listen\s+([^;]+);", _live(body), re.M)
     return bool(listens) and all(_PLAIN_LISTEN.match(" ".join(l.split())) for l in listens)
+
+
+def _is_default_site(old: str) -> bool:
+    """Is this old site file the one nginx falls back to for names no site
+    serves? The old folder is loaded first, so its first file is, unless some
+    file names a default_server outright. Two apps can answer an unknown name
+    identically, so this is decided from the files and not from a probe."""
+    try:
+        first = sorted(f for f in os.listdir(proxy.LEGACY_VHOST_DIR) if f.endswith(".conf"))[0]
+    except (OSError, IndexError):
+        return False
+    if os.path.basename(old) != first:
+        return False
+    for vdir in (proxy.LEGACY_VHOST_DIR, proxy.VHOST_DIR):
+        try:
+            names = os.listdir(vdir)
+        except OSError:
+            continue
+        for f in names:
+            if f.endswith(".conf") and re.search(
+                    r"^\s*listen\s+[^;]*\bdefault_server\b", _live(_read(os.path.join(vdir, f)) or ""), re.M):
+                return False
+    return True
+
+
+def _stays_put(old: str) -> Optional[str]:
+    """Why an old site file is not moved even though nothing shares its names,
+    or None. Decided from the files alone, so the report can say it up front."""
+    if not _plain_listens(_read(old) or ""):
+        return ("it listens on a specific address or port, or sets default_server, "
+                "so a move cannot be checked from this server")
+    if _is_default_site(old):
+        return ("it is the site this server falls back to for unknown names and "
+                "for its bare IP address; moving it would hand those to another site")
+    return None
 
 
 def _probe(host: str, https: bool, body: bool = False) -> Optional[tuple]:
@@ -465,9 +505,9 @@ def _move_site(app: str, names: List[str], copy: str) -> Optional[str]:
         return "the old site file names no domain"
     if os.path.exists(new):
         return "%s already exists" % new
-    if not _plain_listens(text):
-        return ("the old site file listens on a specific address or port, or sets "
-                "default_server, so a move cannot be checked from this server")
+    stays = _stays_put(old)
+    if stays:
+        return stays
     if not proxy.ensure_include():
         return "nginx.conf does not load %s" % proxy.VHOST_DIR
     for n in names:
