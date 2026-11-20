@@ -138,10 +138,10 @@ class javahost_main(object):
     # ---- dashboard ----
     def GetStatus(self, get=None):
         try:
-            # First status request after a new version lands: move what older
-            # versions left behind, where that is provably safe. Never raises.
+            # First status request after a new version lands: start the upgrade
+            # step (a background job) if older versions left anything to move.
             from core import upgrade
-            upgrade.apply_once()
+            upgrade.start_if_needed()
             jdks = {str(k): v for k, v in java.detect().items()}
             tomcats = {}
             for major in registry.LINES:

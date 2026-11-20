@@ -289,11 +289,11 @@ def default_domain(app: str) -> Optional[str]:
     return validate.domain("%s.%s" % (app, suffix))
 
 
-def ensure_include(nginx_conf: str = NGINX_CONF) -> bool:
+def ensure_include(nginx_conf: Optional[str] = None) -> bool:
     """True when nginx.conf loads VHOST_DIR. JavaHost no longer edits
     nginx.conf: the panel's own nginx.conf already includes its vhost folder."""
     try:
-        with open(nginx_conf, encoding="utf-8", errors="replace") as f:
+        with open(nginx_conf or NGINX_CONF, encoding="utf-8", errors="replace") as f:
             content = f.read()
     except OSError:
         return False

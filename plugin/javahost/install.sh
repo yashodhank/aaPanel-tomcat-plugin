@@ -40,9 +40,6 @@ install_javahost() {
         || command -v python3 2>/dev/null || true)"
     plugin_dir="$(cd "$(dirname "$0")" && pwd)"
     [ -n "$pybin" ] && "$pybin" -c "import sys;sys.path.insert(0,'${plugin_dir}');from core import logrotate;logrotate.apply_schedule()" >/dev/null 2>&1 || true
-    # After an update: move what older versions left behind, where that is
-    # provably safe (best-effort; the first status request retries it).
-    [ -n "$pybin" ] && "$pybin" -c "import sys;sys.path.insert(0,'${plugin_dir}');from core import upgrade;upgrade.apply_once()" >/dev/null 2>&1 || true
     echo "JavaHost installed. Data root: ${DATA_ROOT}"
 }
 

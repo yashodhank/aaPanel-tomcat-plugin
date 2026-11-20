@@ -1624,8 +1624,8 @@
       var sk = lr.skipped || {}, skn = [];
       for(var k in sk){ if(Object.prototype.hasOwnProperty.call(sk, k)) skn.push(k+': '+sk[k]); }
       html += '<div class="jh-hint">Last upgrade run '+esc(lr.ran_at)+': '+
+        (lr.pending ? 'still running (see Activity). ' : '')+
         ((lr.moved||[]).length ? 'moved '+esc(lr.moved.join(', ')) : 'nothing to move')+
-        (lr.include_removed ? '; old nginx.conf line removed' : '')+
         (lr.backup ? '; copies kept in '+esc(lr.backup) : '')+'.'+
         (skn.length ? ' Left alone: '+esc(skn.join('; '))+'.' : '')+'</div>';
     }
