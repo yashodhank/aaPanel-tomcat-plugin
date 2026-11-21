@@ -36,7 +36,20 @@ def test_a_fresh_unit_gets_the_template_value(unitdir):
     assert "NoNewPrivileges=true" in open(_install()).read()
 
 
-@pytest.mark.parametrize("line,off", [("NoNewPrivileges=false", True), ("NoNewPrivileges=no", True),
-                                      ("NoNewPrivileges=true", False), ("#NoNewPrivileges=false", False)])
+@pytest.mark.parametrize("line,off", [
+    ("NoNewPrivileges=false", True), ("NoNewPrivileges=no", True), ("NoNewPrivileges = f", True),
+    ("  NoNewPrivileges=n", True), ("NoNewPrivileges=true", False), ("#NoNewPrivileges=false", False),
+    ("nonewprivileges=false", False),                       # systemd keys are case-sensitive
+    ("NoNewPrivileges=false\nNoNewPrivileges=true", False),  # the last one wins
+])
 def test_nnp_off(line, off):
     assert service.nnp_off("[Service]\n%s\n" % line) is off
+
+
+def test_only_the_setting_line_is_changed(unitdir):
+    path = service.install_jar_unit("Shop", "/opt/jdk", "/srv/Shop", 8002, java_opts="-Dx=NoNewPrivileges=true")
+    text = open(path).read()
+    open(path, "w").write(text.replace("\nNoNewPrivileges=true", "\nNoNewPrivileges=false"))
+    text = open(service.install_jar_unit("Shop", "/opt/jdk", "/srv/Shop", 8002,
+                                         java_opts="-Dx=NoNewPrivileges=true")).read()
+    assert "-Dx=NoNewPrivileges=true" in text and "\nNoNewPrivileges=false\n" in text

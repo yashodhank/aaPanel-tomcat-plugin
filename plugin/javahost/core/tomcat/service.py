@@ -82,11 +82,17 @@ def _can_write(d: str) -> bool:
 NNP_OFF = "NoNewPrivileges=false"
 
 
+_NNP_LINE = r"^[ \t]*NoNewPrivileges[ \t]*=[ \t]*(\S*)[ \t]*$"
+
+
 def nnp_off(text: str) -> bool:
     """Does this unit switch NoNewPrivileges off? An app that runs sudo (for
-    example to create SFTP users) needs it off; the templates turn it on."""
+    example to create SFTP users) needs it off; the templates turn it on.
+    Read the way systemd does: the key is case-sensitive and the last
+    setting wins."""
     import re
-    return bool(re.search(r"^NoNewPrivileges=(false|no|0|off)\s*$", text or "", re.M | re.I))
+    vals = re.findall(_NNP_LINE, text or "", re.M)
+    return bool(vals) and vals[-1].lower() in ("false", "no", "0", "off", "f", "n")
 
 
 def _systemd_unit(path: str, rendered: str) -> str:
@@ -98,7 +104,8 @@ def _systemd_unit(path: str, rendered: str) -> str:
     except OSError:
         return rendered
     if nnp_off(old):
-        return rendered.replace("NoNewPrivileges=true", NNP_OFF)
+        import re
+        return re.sub(r"^NoNewPrivileges=true$", NNP_OFF, rendered, count=1, flags=re.M)
     return rendered
 
 

@@ -59,8 +59,7 @@ def _unit_state(app: str, kind: str) -> Dict:
         m = re.search(r'JAVA_HOME="?([^"\n]+)"?', text)
         nnp = backend == "systemd" and service.nnp_off(text)
         if nnp:                         # kept by Repair, so not a difference
-            text = re.sub(r"^NoNewPrivileges=\S+\s*$", "NoNewPrivileges=true", text,
-                          count=1, flags=re.M | re.I)
+            text = re.sub(service._NNP_LINE, "NoNewPrivileges=true", text, flags=re.M)
         return {"backend": backend,
                 "matches_template": (unit_matches_template(text, template)
                                      if template else None),
