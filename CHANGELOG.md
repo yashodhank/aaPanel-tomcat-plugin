@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.30.1] — 2026-11-21
+
+### Fixed
+- The upgrade check no longer refuses every change on a server whose fallback
+  site is an app with a timestamp in its error page. It now compares that page
+  with its digits left out, so "Make HTTPS reach <app>" and the old-site-file
+  move work there, and a different page or app answering is still caught (#51).
+
 ## [0.30.0] — 2026-11-21
 
 ### Added
