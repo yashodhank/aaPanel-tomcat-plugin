@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.30.3] — 2026-11-21
+
+### Fixed
+- Undo for the HTTPS repair stays available after the app's own site file is
+  removed. The repair block is found by the app name it carries, in the panel's
+  URL rewrite folder, and Undo no longer needs the app's port (#55).
+
+### Changed
+- Repair says in its result whether the service runs with `NoNewPrivileges`
+  off (`no_new_privileges_off`) (#55).
+
+### Security
+- A backup archive does not carry `NoNewPrivileges=false`, so restoring into a
+  new app name gives a hardened service. Switch it off again by hand if that
+  app needs `sudo`. Overwrite restores keep the existing unit's setting.
+
 ## [0.30.2] — 2026-11-21
 
 ### Fixed
