@@ -95,6 +95,15 @@ def nnp_off(text: str) -> bool:
     return bool(vals) and vals[-1].lower() in ("false", "no", "0", "off", "f", "n")
 
 
+def unit_nnp_off(app: str) -> bool:
+    """Does the app's systemd unit have NoNewPrivileges off right now?"""
+    try:
+        with open(_unit_path(app), encoding="utf-8", errors="replace") as f:
+            return nnp_off(f.read(1 << 16))
+    except OSError:
+        return False
+
+
 def _systemd_unit(path: str, rendered: str) -> str:
     """The rendered unit, keeping NoNewPrivileges off if the unit it replaces
     had it off, so a re-create never breaks an app that relies on that."""

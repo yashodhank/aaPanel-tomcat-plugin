@@ -902,7 +902,7 @@ def repair(app: str) -> Dict:
         else:
             service.enable_start(app)
         return {"app": app, "type": "jar", "status": service.status(app),
-                "repaired": True}
+                "repaired": True, "no_new_privileges_off": service.unit_nnp_off(app)}
 
     env = _read_setenv(base)
     java_home = env.get("JAVA_HOME", "")
@@ -922,7 +922,8 @@ def repair(app: str) -> Dict:
             pass
     service.install_unit(app, java_home, home, base)
     service.action(app, "restart") if service.status(app) == "active" else service.enable_start(app)
-    return {"app": app, "type": itype, "status": service.status(app), "repaired": True}
+    return {"app": app, "type": itype, "status": service.status(app), "repaired": True,
+            "no_new_privileges_off": service.unit_nnp_off(app)}
 
 
 def detail(app: str) -> Dict:

@@ -213,3 +213,33 @@ def test_body_digest_ignores_digits_but_not_the_page():
         d(b'{"timestamp":"2026-11-21T06:47:48.001","status":404}')
     assert d(b'{"status":404,"error":"Not Found"}') != d(b'{"status":404,"message":"No route"}')
     assert d(b"<html>placeholder</html>") != d(b'{"status":404}')
+
+
+def test_undo_still_works_after_the_apps_own_site_file_is_gone(portal):
+    assert upgrade.repair_https("Portal")["ok"] is True
+    (portal.legacy / "Portal.conf").unlink()                     # retired by hand
+    a = _by_app(upgrade.report())["Portal"]
+    assert a["https_fix"] == {"possible": False, "applied": True, "effect": None}
+    res = upgrade.repair_https("Portal", undo=True)
+    assert res["ok"] is True and res["undone"] and portal.rewrite.read_text() == ""
+
+
+def test_a_block_for_another_app_or_a_link_is_not_taken_as_ours(portal):
+    assert upgrade.repair_https("Portal")["ok"] is True
+    (portal.legacy / "Portal.conf").unlink()
+    assert upgrade._applied_elsewhere("Other") == (None, None, None)
+    link = portal.rewrite.parent / "linked.example.com.conf"
+    link.symlink_to(portal.rewrite)
+    assert upgrade._applied_elsewhere("Portal")[0] == "portal.example.com"   # the real file, not the link
+    portal.rewrite.rename(portal.rewrite.parent / "moved.txt")
+    assert upgrade._applied_elsewhere("Portal") == (None, None, None)
+
+
+def test_undo_is_offered_without_the_domain_marker_and_without_a_port(portal, monkeypatch):
+    assert upgrade.repair_https("Portal")["ok"] is True
+    (portal.legacy / "Portal.conf").unlink()
+    monkeypatch.setattr(proxy, "read_domain", lambda app: None)          # marker gone too
+    assert _by_app(upgrade.report())["Portal"]["https_fix"]["applied"] is True
+    monkeypatch.setattr(upgrade.instance, "_read_port", lambda base: None)
+    plan = upgrade.https_repair_plan("Portal")
+    assert plan["applied"] is True and not plan.get("stale")

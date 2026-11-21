@@ -53,3 +53,12 @@ def test_only_the_setting_line_is_changed(unitdir):
     text = open(service.install_jar_unit("Shop", "/opt/jdk", "/srv/Shop", 8002,
                                          java_opts="-Dx=NoNewPrivileges=true")).read()
     assert "-Dx=NoNewPrivileges=true" in text and "\nNoNewPrivileges=false\n" in text
+
+
+def test_unit_nnp_off_reports_the_installed_unit(unitdir):
+    path = _install()
+    assert service.unit_nnp_off("Shop") is False
+    text = open(path).read()
+    open(path, "w").write(text.replace("NoNewPrivileges=true", "NoNewPrivileges=false"))
+    assert service.unit_nnp_off("Shop") is True
+    assert service.unit_nnp_off("Missing") is False
