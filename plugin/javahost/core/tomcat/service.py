@@ -79,6 +79,29 @@ def _can_write(d: str) -> bool:
         return False
 
 
+NNP_OFF = "NoNewPrivileges=false"
+
+
+def nnp_off(text: str) -> bool:
+    """Does this unit switch NoNewPrivileges off? An app that runs sudo (for
+    example to create SFTP users) needs it off; the templates turn it on."""
+    import re
+    return bool(re.search(r"^NoNewPrivileges=(false|no|0|off)\s*$", text or "", re.M | re.I))
+
+
+def _systemd_unit(path: str, rendered: str) -> str:
+    """The rendered unit, keeping NoNewPrivileges off if the unit it replaces
+    had it off, so a re-create never breaks an app that relies on that."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            old = f.read(1 << 16)
+    except OSError:
+        return rendered
+    if nnp_off(old):
+        return rendered.replace("NoNewPrivileges=true", NNP_OFF)
+    return rendered
+
+
 def _write_unit_file(path: str, content: str, mode: int) -> None:
     """Write a service unit, transparently handling an immutable (hardened) target.
 
@@ -143,7 +166,7 @@ def install_unit(app: str, java_home: str, catalina_home: str, catalina_base: st
     ctx = _ctx(app, java_home, catalina_home, catalina_base, user)
     if have_systemd() and can_manage(SYSTEMD_DIR):
         path = _unit_path(app)
-        _write_unit_file(path, templating.render_file("systemd.service.tmpl", ctx), 0o644)
+        _write_unit_file(path, _systemd_unit(path, templating.render_file("systemd.service.tmpl", ctx)), 0o644)
         shell.run(["systemctl", "daemon-reload"])
         return path
     if can_manage(INITD_DIR):
@@ -167,7 +190,7 @@ def install_jar_unit(app: str, java_home: str, app_dir: str, port: int,
            "app_dir": app_dir, "port": str(port), "java_opts": java_opts}
     if have_systemd() and can_manage(SYSTEMD_DIR):
         path = _unit_path(app)
-        _write_unit_file(path, templating.render_file("systemd-jar.service.tmpl", ctx), 0o644)
+        _write_unit_file(path, _systemd_unit(path, templating.render_file("systemd-jar.service.tmpl", ctx)), 0o644)
         shell.run(["systemctl", "daemon-reload"])
         return path
     if can_manage(INITD_DIR):
