@@ -57,11 +57,15 @@ def _unit_state(app: str, kind: str) -> Dict:
             continue
         template = _read(os.path.join(templating._TEMPLATE_DIR, tmpl))
         m = re.search(r'JAVA_HOME="?([^"\n]+)"?', text)
+        nnp = backend == "systemd" and service.nnp_off(text)
+        if nnp:                         # kept by Repair, so not a difference
+            text = re.sub(r"^NoNewPrivileges=\S+\s*$", "NoNewPrivileges=true", text,
+                          count=1, flags=re.M | re.I)
         return {"backend": backend,
                 "matches_template": (unit_matches_template(text, template)
                                      if template else None),
-                "java_home": m.group(1).strip() if m else None}
-    return {"backend": None, "matches_template": None, "java_home": None}
+                "java_home": m.group(1).strip() if m else None, "nnp_off": nnp}
+    return {"backend": None, "matches_template": None, "java_home": None, "nnp_off": False}
 
 
 def _live(body: str) -> str:
@@ -144,6 +148,14 @@ def _owner_marker(app: str) -> Optional[str]:
     return word if word in ("aapanel", "javahost") else None
 
 
+def _old_folder_first() -> bool:
+    """Does nginx.conf load the old site folder before the panel's?"""
+    conf = _live(_read(proxy.NGINX_CONF) or "")
+    first = conf.find("%s/*.conf" % proxy.LEGACY_VHOST_DIR)
+    panel = conf.find("%s/*.conf" % proxy.VHOST_DIR)
+    return 0 <= first < panel
+
+
 def app_report(app: str, legacy_include: bool = True) -> Dict:
     base = instance.base_path(app)
     kind = instance._instance_type(base)
@@ -180,8 +192,12 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
             state, action = "legacy-file-and-panel-website", "keep"
             attention.append(
                 "%s is served by an old JavaHost site file and by a panel website "
-                "(%s). Which one answers depends on load order, so the upgrade "
-                "leaves both as they are." % (domain, os.path.basename(panel[0]["path"])))
+                "(%s). %s The upgrade leaves both as they are." % (
+                    domain, os.path.basename(panel[0]["path"]),
+                    "nginx loads the old folder first, so the old file answers "
+                    "plain HTTP; the panel website answers only what the old file "
+                    "does not listen on, such as HTTPS." if _old_folder_first() else
+                    "Which one answers depends on load order."))
         elif old:
             state = "legacy-file"
             if apps_:
@@ -241,6 +257,9 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
         notes.append("The service file differs from the current template (edited "
                      "by hand, or written by an older version). It is left as it "
                      "is; Repair re-creates it and restarts the app.")
+    if unit["nnp_off"]:
+        notes.append("The service runs with NoNewPrivileges switched off (set by "
+                     "hand, usually so the app can use sudo). Repair keeps it off.")
     jh = unit["java_home"] or ""
     if jh == _PANEL_JDK or jh.startswith(_PANEL_JDK + "/"):
         attention.append("The app runs on the panel's shared Java (%s). Install a "
