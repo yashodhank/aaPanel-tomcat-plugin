@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from typing import Dict, List, Optional
 
 from . import config
@@ -850,7 +851,11 @@ def _repair_target(app: str):
     names = sorted({n for f in (_own_file(proxy.legacy_vhost_path(app), True),
                                 _own_file(proxy.vhost_path(app), False)) if f
                     for n in f["names"]})
-    if not names or names[0].startswith(("~", "*", ".")):
+    if not names:
+        # The app's own site file may be gone (retired by hand). Its repair
+        # block still names the app, so Undo can find it.
+        return _applied_elsewhere(app)
+    if names[0].startswith(("~", "*", ".")):
         return None, None, None
     domain = names[0]
     rewrite = panel_api._AAPANEL_REWRITE % domain
@@ -861,6 +866,35 @@ def _repair_target(app: str):
         m = re.search(r"proxy_pass\s+http://127\.0\.0\.1:(\d+)", text[a:b])
         applied = int(m.group(1)) if m else 0
     return domain, rewrite, applied
+
+
+def _applied_elsewhere(app: str):
+    """(domain, rewrite path, port) of this app's repair block when the app has
+    no site file of its own, else (None, None, None). Only a regular file owned
+    by the user the plugin runs as (root on a panel), in the panel's rewrite folder, whose name is a plain domain."""
+    folder, pattern = os.path.split(panel_api._AAPANEL_REWRITE)
+    suffix = pattern.replace("%s", "")
+    try:
+        files = sorted(os.listdir(folder))
+    except OSError:
+        return None, None, None
+    for f in files:
+        domain = f[:-len(suffix)] if f.endswith(suffix) else ""
+        path = os.path.join(folder, f)
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", domain):
+            continue
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            continue
+        text = _read(path) or ""
+        a, b = text.find(_FIX_BEGIN % app), text.find(_FIX_END)
+        if 0 <= a < b:
+            m = re.search(r"proxy_pass\s+http://127\.0\.0\.1:(\d+)", text[a:b])
+            return domain, path, int(m.group(1)) if m else 0
+    return None, None, None
 
 
 def https_repair_plan(app: str) -> Dict:
