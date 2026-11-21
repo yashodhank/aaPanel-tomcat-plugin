@@ -425,6 +425,14 @@ def _stays_put(old: str) -> Optional[str]:
     return None
 
 
+def _body_digest(data: bytes) -> str:
+    """Digest of a response body with its digits left out. An app's error
+    page that carries a timestamp or request id then reads the same on every
+    request, while a different page, or a different app answering, does not."""
+    import hashlib
+    return hashlib.sha256(re.sub(rb"[0-9]+", b"", data)).hexdigest()
+
+
 def _probe(host: str, https: bool, body: bool = False) -> Optional[tuple]:
     """What nginx on this server answers for <host>: per probe path the status,
     Location and content type (plus a digest of the body when asked), and for
@@ -454,7 +462,7 @@ def _probe(host: str, https: bool, body: bool = False) -> Optional[tuple]:
             data = r.read(4096)
             out.append((r.status, r.getheader("Location"),
                         (r.getheader("Content-Type") or "").split(";")[0].strip(),
-                        hashlib.sha256(data).hexdigest() if body else None, cert))
+                        _body_digest(data) if body else None, cert))
             conn.close()
         except Exception:
             return None
@@ -956,7 +964,7 @@ def repair_https(app: str, undo: bool = False) -> Dict:
                         tuple((r[0], r[2]) for r in tls) != app_says:
                     raise _Undo("HTTPS still does not answer what the app answers")
                 if tls_before is not None and \
-                        [r[3] for r in tls] == [r[3] for r in tls_before]:
+                        [(r[0], r[2], r[3]) for r in tls] == [(r[0], r[2], r[3]) for r in tls_before]:
                     raise _Undo("HTTPS answers exactly what it did before, so the "
                                 "change cannot be confirmed")
         except BaseException as e:

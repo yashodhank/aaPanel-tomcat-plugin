@@ -59,8 +59,9 @@ def portal(box, monkeypatch):
         if not https:
             return ((301, None, "text/html", None, None),) * 2 if (fixed and state["http_breaks"]) else APP
         if fixed and not state["https_wrong"]:
-            digest = "placeholder-page" if state.get("same_body") else "app-page"
-            return tuple((r[0], r[1], r[2], digest if body else None, "cert") for r in APP)
+            if state.get("same_body"):          # the app answers just like the placeholder
+                return tuple((r[0], r[1], r[2], r[3] if body else None, r[4]) for r in PLACEHOLDER)
+            return tuple((r[0], r[1], r[2], "app-page" if body else None, "cert") for r in APP)
         return tuple((r[0], r[1], r[2], r[3] if body else None, r[4]) for r in PLACEHOLDER)
     monkeypatch.setattr(upgrade, "_probe", probe)
     monkeypatch.setattr(upgrade, "_direct", lambda port, host: tuple((r[0], r[2]) for r in APP))
@@ -138,9 +139,10 @@ def test_only_the_apps_own_site_file_decides_which_website_is_touched(portal, mo
     assert _by_app(upgrade.report())["Other"]["https_fix"] is None
 
 
-def test_same_looking_answer_is_not_taken_as_success(portal):
+def test_same_looking_answer_is_not_taken_as_success(portal, monkeypatch):
     # an app and a placeholder can share status and content type
     portal.state["same_body"] = True
+    monkeypatch.setattr(upgrade, "_direct", lambda port, host: tuple((r[0], r[2]) for r in PLACEHOLDER))
     res = upgrade.repair_https("Portal")
     assert res["ok"] is False and "cannot be confirmed" in res["error"] and "put back" in res["error"]
     assert portal.rewrite.read_text() == ""
@@ -186,3 +188,28 @@ def test_app_down_is_said_plainly(portal, monkeypatch):
     res = upgrade.repair_https("Portal")
     assert res["ok"] is False and "not answering on port 8001" in res["error"]
     assert portal.rewrite.read_text() == "" and portal.state["reloads"] == 0
+
+
+
+def test_default_site_with_a_timestamped_error_page_does_not_block_the_repair(portal, monkeypatch):
+    """Seen on a real server: the default site is an app whose JSON 404 carries a
+    timestamp, so its raw body differs on every request."""
+    real, n = upgrade._probe, {"i": 0}
+
+    def probe(host, https, body=False):
+        r = real(host, https, body)
+        if host == upgrade._UNKNOWN_HOST and not https and r and body:
+            n["i"] += 1
+            page = b'{"timestamp":"2026-11-21T01:20:%02d.%03d+00:00","status":404}' % (n["i"] % 60, n["i"])
+            return tuple(x[:3] + (upgrade._body_digest(page),) + x[4:] for x in r)
+        return r
+    monkeypatch.setattr(upgrade, "_probe", probe)
+    assert upgrade.repair_https("Portal")["ok"] is True and n["i"] >= 4
+
+
+def test_body_digest_ignores_digits_but_not_the_page():
+    d = upgrade._body_digest
+    assert d(b'{"timestamp":"2026-11-21T01:20:12.875","status":404}') == \
+        d(b'{"timestamp":"2026-11-21T06:47:48.001","status":404}')
+    assert d(b'{"status":404,"error":"Not Found"}') != d(b'{"status":404,"message":"No route"}')
+    assert d(b"<html>placeholder</html>") != d(b'{"status":404}')
