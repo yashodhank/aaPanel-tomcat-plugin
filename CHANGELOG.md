@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
+## [0.30.2] — 2026-11-21
+
+### Fixed
+- Repair and restore keep `NoNewPrivileges=false` when a service had it off. An
+  app that runs `sudo` (for example to create SFTP users) stops working with it
+  on, and the re-created unit used to switch it back on without a word (#53).
+
+### Changed
+- The upgrade check names that setting instead of listing it as an unexplained
+  difference from the template, and says which site file answers plain HTTP
+  when `nginx.conf` makes that certain, instead of "depends on load order" (#53).
+
 ## [0.30.1] — 2026-11-21
 
 ### Fixed
