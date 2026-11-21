@@ -268,7 +268,8 @@ def app_report(app: str, legacy_include: bool = True) -> Dict:
         attention.append("No service file was found for this app.")
 
     https_fix = None
-    if domain and state in ("legacy-file-and-panel-website", "panel-website"):
+    # with no site file of its own, an applied repair is still offered for Undo
+    if (domain and state in ("legacy-file-and-panel-website", "panel-website")) or not own:
         try:
             plan = https_repair_plan(app)
             if plan.get("possible") or plan.get("applied"):
@@ -907,11 +908,11 @@ def https_repair_plan(app: str) -> Dict:
         return dict({"possible": False, "app": app, "domain": domain, "reason": reason}, **extra)
     if not domain:
         return no("the app has no site file of its own that names a plain domain")
+    if applied is not None:             # Undo needs no port
+        return no("the repair is already in place", applied=True,
+                  stale=bool(port) and applied != port, rewrite=rewrite)
     if not port:
         return no("the app has no port")
-    if applied is not None:
-        return no("the repair is already in place", applied=True,
-                  stale=(applied != port), rewrite=rewrite)
     site = os.path.join(proxy.VHOST_DIR, "%s.conf" % domain)
     body = _read(site)
     if body is None or proxy._is_ours(site):
