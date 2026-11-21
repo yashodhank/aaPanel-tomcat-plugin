@@ -59,8 +59,9 @@ def portal(box, monkeypatch):
         if not https:
             return ((301, None, "text/html", None, None),) * 2 if (fixed and state["http_breaks"]) else APP
         if fixed and not state["https_wrong"]:
-            digest = "placeholder-page" if state.get("same_body") else "app-page"
-            return tuple((r[0], r[1], r[2], digest if body else None, "cert") for r in APP)
+            if state.get("same_body"):          # the app answers just like the placeholder
+                return tuple((r[0], r[1], r[2], r[3] if body else None, r[4]) for r in PLACEHOLDER)
+            return tuple((r[0], r[1], r[2], "app-page" if body else None, "cert") for r in APP)
         return tuple((r[0], r[1], r[2], r[3] if body else None, r[4]) for r in PLACEHOLDER)
     monkeypatch.setattr(upgrade, "_probe", probe)
     monkeypatch.setattr(upgrade, "_direct", lambda port, host: tuple((r[0], r[2]) for r in APP))
@@ -138,9 +139,10 @@ def test_only_the_apps_own_site_file_decides_which_website_is_touched(portal, mo
     assert _by_app(upgrade.report())["Other"]["https_fix"] is None
 
 
-def test_same_looking_answer_is_not_taken_as_success(portal):
+def test_same_looking_answer_is_not_taken_as_success(portal, monkeypatch):
     # an app and a placeholder can share status and content type
     portal.state["same_body"] = True
+    monkeypatch.setattr(upgrade, "_direct", lambda port, host: tuple((r[0], r[2]) for r in PLACEHOLDER))
     res = upgrade.repair_https("Portal")
     assert res["ok"] is False and "cannot be confirmed" in res["error"] and "put back" in res["error"]
     assert portal.rewrite.read_text() == ""
