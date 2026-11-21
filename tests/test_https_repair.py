@@ -188,26 +188,26 @@ def test_app_down_is_said_plainly(portal, monkeypatch):
     assert portal.rewrite.read_text() == "" and portal.state["reloads"] == 0
 
 
+
 def test_default_site_with_a_timestamped_error_page_does_not_block_the_repair(portal, monkeypatch):
     """Seen on a real server: the default site is an app whose JSON 404 carries a
-    timestamp, so its body differs on every request. Status and type still decide."""
+    timestamp, so its raw body differs on every request."""
     real, n = upgrade._probe, {"i": 0}
 
     def probe(host, https, body=False):
         r = real(host, https, body)
-        if host == upgrade._UNKNOWN_HOST and not https and r:
+        if host == upgrade._UNKNOWN_HOST and not https and r and body:
             n["i"] += 1
-            return tuple(x[:3] + ("ts-%d" % n["i"],) + x[4:] for x in r)
+            page = b'{"timestamp":"2026-11-21T01:20:%02d.%03d+00:00","status":404}' % (n["i"] % 60, n["i"])
+            return tuple(x[:3] + (upgrade._body_digest(page),) + x[4:] for x in r)
         return r
     monkeypatch.setattr(upgrade, "_probe", probe)
-    assert upgrade.repair_https("Portal")["ok"] is True
+    assert upgrade.repair_https("Portal")["ok"] is True and n["i"] >= 4
 
 
-def test_changing_bodies_are_dropped_but_any_other_change_still_counts():
-    a = {"h": (((404, None, "application/json", "one", None),), None)}
-    b = {"h": (((404, None, "application/json", "two", None),), None)}
-    assert upgrade._without_changing_bodies(a, b) == {"h": (((404, None, "application/json", None, None),), None)}
-    c = {"h": (((500, None, "application/json", "two", None),), None)}
-    assert upgrade._without_changing_bodies(a, c) is None
-    d = {"h": (((404, None, "application/json", "two", "other-cert"),), None)}
-    assert upgrade._without_changing_bodies(a, d) is None
+def test_body_digest_ignores_digits_but_not_the_page():
+    d = upgrade._body_digest
+    assert d(b'{"timestamp":"2026-11-21T01:20:12.875","status":404}') == \
+        d(b'{"timestamp":"2026-11-21T06:47:48.001","status":404}')
+    assert d(b'{"status":404,"error":"Not Found"}') != d(b'{"status":404,"message":"No route"}')
+    assert d(b"<html>placeholder</html>") != d(b'{"status":404}')
