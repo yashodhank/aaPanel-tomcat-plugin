@@ -483,7 +483,33 @@ def _stable_answers(names: List[str], wait) -> Optional[Dict]:
     first = _answers(names)
     time.sleep(wait[1])
     second = _answers(names)
-    return second if (first is not None and first == second) else None
+    if first is None or second is None:
+        return None
+    return second if first == second else _without_changing_bodies(first, second)
+
+
+def _without_changing_bodies(first: Dict, second: Dict) -> Optional[Dict]:
+    """<second> with the body digests that changed between the samples left
+    out, when nothing else changed. An app's error page that carries a
+    timestamp is still compared by status, Location, type and certificate.
+    Anything else that changed means None."""
+    def entry(a, b):
+        if a == b:
+            return b
+        if a is None or b is None or len(a) != len(b):
+            raise ValueError
+        out = []
+        for x, y in zip(a, b):
+            if x[:3] != y[:3] or x[4:] != y[4:]:
+                raise ValueError
+            out.append(y if x == y else y[:3] + (None,) + y[4:])
+        return tuple(out)
+    try:
+        if set(first) != set(second):
+            return None
+        return {n: tuple(entry(a, b) for a, b in zip(first[n], second[n])) for n in second}
+    except ValueError:
+        return None
 
 
 def _write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
