@@ -98,10 +98,12 @@ def test_the_production_layout_is_reported_and_nothing_is_written(box):
     assert p["state"] == "legacy-file-and-panel-website" and p["action"] == "keep"
     assert p["port"] == 8001 and p["domain"] == "portal.example.com"
     text = " ".join(p["attention"])
-    assert "leaves both as they are" in text
+    assert "leaves both as they are" in text and "old file answers plain HTTP" in text
     assert "HTTPS is marked on, but no HTTPS site" in text and "plain HTTP does reach it" in text
-    assert p["service"]["matches_template"] is False
-    assert any("differs from the current template" in n for n in p["notes"])
+    # NoNewPrivileges=false is kept by Repair, so it is named, not counted as a difference
+    assert p["service"]["matches_template"] is True
+    assert any("NoNewPrivileges switched off" in n for n in p["notes"])
+    assert not any("differs from the current template" in n for n in p["notes"])
 
     assert rep["legacy_include"] is True and rep["legacy_files"] == ["Portal.conf"]
     assert "Old site files are still served from it (Portal)" in rep["server"][0]
@@ -217,3 +219,10 @@ def test_fallback_site_and_odd_listens_are_reported_as_staying(box):
         (LEGACY % dict(app="shop", domain="shop.example.com", port=8080)).replace("listen 80;", "listen 8088;"))
     a = _by_app(upgrade.report())["shop"]
     assert a["action"] == "keep" and "cannot be checked" in a["notes"][0]
+
+
+def test_other_hand_edits_still_count_with_nonewprivileges_off(box):
+    box.app("Shop", 8002, edit=("NoNewPrivileges=true", "NoNewPrivileges=false\nLimitNPROC=50"))
+    a = {x["app"]: x for x in upgrade.report()["apps"]}["Shop"]
+    assert a["service"]["matches_template"] is False
+    assert any("differs from the current template" in n for n in a["notes"])
