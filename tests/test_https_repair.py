@@ -186,3 +186,28 @@ def test_app_down_is_said_plainly(portal, monkeypatch):
     res = upgrade.repair_https("Portal")
     assert res["ok"] is False and "not answering on port 8001" in res["error"]
     assert portal.rewrite.read_text() == "" and portal.state["reloads"] == 0
+
+
+def test_default_site_with_a_timestamped_error_page_does_not_block_the_repair(portal, monkeypatch):
+    """Seen on a real server: the default site is an app whose JSON 404 carries a
+    timestamp, so its body differs on every request. Status and type still decide."""
+    real, n = upgrade._probe, {"i": 0}
+
+    def probe(host, https, body=False):
+        r = real(host, https, body)
+        if host == upgrade._UNKNOWN_HOST and not https and r:
+            n["i"] += 1
+            return tuple(x[:3] + ("ts-%d" % n["i"],) + x[4:] for x in r)
+        return r
+    monkeypatch.setattr(upgrade, "_probe", probe)
+    assert upgrade.repair_https("Portal")["ok"] is True
+
+
+def test_changing_bodies_are_dropped_but_any_other_change_still_counts():
+    a = {"h": (((404, None, "application/json", "one", None),), None)}
+    b = {"h": (((404, None, "application/json", "two", None),), None)}
+    assert upgrade._without_changing_bodies(a, b) == {"h": (((404, None, "application/json", None, None),), None)}
+    c = {"h": (((500, None, "application/json", "two", None),), None)}
+    assert upgrade._without_changing_bodies(a, c) is None
+    d = {"h": (((404, None, "application/json", "two", "other-cert"),), None)}
+    assert upgrade._without_changing_bodies(a, d) is None
