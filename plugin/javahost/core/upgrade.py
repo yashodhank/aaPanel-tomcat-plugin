@@ -964,7 +964,7 @@ def repair_https(app: str, undo: bool = False) -> Dict:
                         tuple((r[0], r[2]) for r in tls) != app_says:
                     raise _Undo("HTTPS still does not answer what the app answers")
                 if tls_before is not None and \
-                        [r[3] for r in tls] == [r[3] for r in tls_before]:
+                        [(r[0], r[2], r[3]) for r in tls] == [(r[0], r[2], r[3]) for r in tls_before]:
                     raise _Undo("HTTPS answers exactly what it did before, so the "
                                 "change cannot be confirmed")
         except BaseException as e:
